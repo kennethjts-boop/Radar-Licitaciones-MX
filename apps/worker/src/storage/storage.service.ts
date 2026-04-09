@@ -1,5 +1,6 @@
 import { createReadStream, existsSync, statSync, unlinkSync } from "fs";
 import { basename } from "path";
+import { createHash } from "crypto";
 import { createModuleLogger } from "../core/logger";
 import { getSupabaseClient } from "./client";
 
@@ -8,6 +9,17 @@ const log = createModuleLogger("storage-service");
 export interface UploadedAttachment {
   storagePath: string;
   fileSizeBytes: number;
+  fileHash: string;
+}
+
+async function calculateFileHash(tempFilePath: string): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(tempFilePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("end", () => resolve(hash.digest("hex")));
+    stream.on("error", reject);
+  });
 }
 
 /**
@@ -37,12 +49,19 @@ export async function uploadAttachment(
     }
 
     const fileSizeBytes = statSync(tempFilePath).size;
+    const fileHash = await calculateFileHash(tempFilePath);
     log.info(
-      { procurementId, fileName: safeFileName, storagePath, fileSizeBytes },
+      {
+        procurementId,
+        fileName: safeFileName,
+        storagePath,
+        fileSizeBytes,
+        fileHash,
+      },
       "Adjunto subido a Storage",
     );
 
-    return { storagePath, fileSizeBytes };
+    return { storagePath, fileSizeBytes, fileHash };
   } catch (err) {
     log.error(
       { err, procurementId, fileName: safeFileName, tempFilePath },

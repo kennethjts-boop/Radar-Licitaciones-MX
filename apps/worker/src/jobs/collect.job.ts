@@ -16,6 +16,7 @@ import { withLock } from "../core/lock";
 import { withTimeout } from "../core/errors";
 import { nowISO, formatDuration } from "../core/time";
 import { healthTracker } from "../core/healthcheck";
+import { existsSync, unlinkSync } from "fs";
 import {
   collectComprasMx,
   recheckComprasMx,
@@ -34,6 +35,11 @@ import { evaluateAllRadars } from "../matchers/matcher";
 import { enrichMatch } from "../enrichers/match.enricher";
 import { sendMatchAlert } from "../alerts/telegram.alerts";
 import type { ProcurementStatus } from "../types/procurement";
+import { getSupabaseClient } from "../storage/client";
+import { BrowserManager } from "../collectors/comprasmx/browser.manager";
+import { ComprasMxNavigator } from "../collectors/comprasmx/comprasmx.navigator";
+import { downloadAttachmentsFromDetail } from "../collectors/comprasmx/comprasmx.downloader";
+import { uploadAttachment } from "../storage/storage.service";
 
 const log = createModuleLogger("collect-job");
 
@@ -45,6 +51,80 @@ export function setComprasMxSourceId(id: string | null): void {
 }
 
 const COLLECT_TIMEOUT_MS = 25 * 60 * 1000; // 25 minutos
+
+async function processAttachmentsForProcurement(
+  procurementId: string,
+  sourceUrl: string,
+): Promise<void> {
+  const db = getSupabaseClient();
+  const { data: existingRows, error: existingErr } = await db
+    .from("attachments")
+    .select("file_name")
+    .eq("procurement_id", procurementId);
+
+  if (existingErr) {
+    throw new Error(
+      `No se pudieron consultar adjuntos existentes: ${existingErr.message}`,
+    );
+  }
+
+  const existingFileNames = new Set((existingRows ?? []).map((r) => r.file_name));
+
+  await BrowserManager.withContext(async (page, context) => {
+    const navigator = new ComprasMxNavigator();
+    const detail = await navigator.extractDetail(context, sourceUrl, page);
+    if (!detail) {
+      log.warn({ procurementId, sourceUrl }, "No se pudo abrir detalle para adjuntos");
+      return;
+    }
+
+    const downloads = await downloadAttachmentsFromDetail(page, {
+      timeoutMs: 45_000,
+    });
+
+    for (const file of downloads) {
+      if (existingFileNames.has(file.fileName)) {
+        log.info(
+          { procurementId, fileName: file.fileName },
+          "Archivo ya existe, omitiendo...",
+        );
+        if (existsSync(file.tempFilePath)) {
+          unlinkSync(file.tempFilePath);
+        }
+        continue;
+      }
+
+      try {
+        const uploaded = await uploadAttachment(
+          procurementId,
+          file.fileName,
+          file.tempFilePath,
+        );
+
+        const { error: insertErr } = await db.from("attachments").insert({
+          procurement_id: procurementId,
+          file_name: file.fileName,
+          storage_path: uploaded.storagePath,
+          file_size_bytes: uploaded.fileSizeBytes,
+          file_hash: uploaded.fileHash,
+          file_url: uploaded.storagePath,
+          source_url: sourceUrl,
+        });
+
+        if (insertErr) {
+          throw new Error(insertErr.message);
+        }
+
+        existingFileNames.add(file.fileName);
+      } catch (err) {
+        log.warn(
+          { err, procurementId, fileName: file.fileName },
+          "Error procesando adjunto; continuando con el siguiente",
+        );
+      }
+    }
+  });
+}
 
 export async function runCollectJob(): Promise<void> {
   log.info(
@@ -91,6 +171,18 @@ export async function runCollectJob(): Promise<void> {
 
           // Solo evaluar matches si es nuevo o cambió
           if (!upsertResult.isNew && !upsertResult.isUpdated) continue;
+
+          try {
+            await processAttachmentsForProcurement(
+              upsertResult.procurementId,
+              item.sourceUrl,
+            );
+          } catch (attErr) {
+            log.warn(
+              { err: attErr, externalId: item.externalId },
+              "Fallo en pipeline de adjuntos; se continúa con match/alertas",
+            );
+          }
 
           // Determinar estatus anterior para detectar cambio
           const previousStatus =
