@@ -47,6 +47,12 @@ export interface AiVipAlertPayload {
   deadline: string;
   risks: string[];
   opportunities: string[];
+  opportunityEngine: {
+    winProbability: number;
+    competitorThreatLevel: "LOW" | "MEDIUM" | "HIGH";
+    implementationComplexity: "LOW" | "MEDIUM" | "HIGH";
+    redFlags: string[];
+  };
   link: string;
 }
 
@@ -65,9 +71,16 @@ export function formatAiVipAlertMessage(payload: AiVipAlertPayload): string | nu
   const riskPrincipal = payload.risks[0]?.trim() || "Sin riesgo principal detectado";
   const opportunityPrincipal =
     payload.opportunities[0]?.trim() || "Sin oportunidad principal detectada";
+  const redFlagPrincipal =
+    payload.opportunityEngine.redFlags[0]?.trim() ||
+    "Sin candados relevantes detectados";
 
   const lines = [
     `${icon} <b>SCORE: ${payload.score.total}/100</b>`,
+    `🎯 <b>Probabilidad de Ganar:</b> ${payload.opportunityEngine.winProbability}%`,
+    `🥷 <b>Amenaza de Competencia:</b> ${payload.opportunityEngine.competitorThreatLevel}`,
+    `⚙️ <b>Complejidad:</b> ${payload.opportunityEngine.implementationComplexity}`,
+    `🛑 <b>Red Flags (Candados):</b> ${escapeHtml(redFlagPrincipal)}`,
     `📄 <b>Ref:</b> ${escapeHtml(payload.licitacionRef)}`,
     `💰 <b>Tipo:</b> ${escapeHtml(payload.contractType)}`,
     `⏳ <b>Cierre:</b> ${escapeHtml(payload.deadline)}`,

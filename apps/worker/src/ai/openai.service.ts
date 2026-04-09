@@ -22,12 +22,29 @@ export interface TenderDocumentAnalysis {
   summary: string;
   opportunities: string[];
   risks: string[];
+  opportunity_engine: {
+    win_probability: number;
+    competitor_threat_level: "LOW" | "MEDIUM" | "HIGH";
+    implementation_complexity: "LOW" | "MEDIUM" | "HIGH";
+    red_flags: string[];
+  };
 }
 
-const systemPrompt = `Eres un analista experto en licitaciones de gobierno en México.
-Tu objetivo es detectar oportunidades reales de negocio y riesgos para un proveedor privado.
+const systemPrompt = `Actúas como Director de Ventas a Gobierno (C-Level) para un proveedor privado en México.
+Tu objetivo es detectar oportunidades reales de negocio, riesgos y probabilidad de ganar.
 
 Analiza señales como: "adjudicación directa", "segunda convocatoria", "urgente", ampliaciones de plazo, requisitos técnicos, garantías, penalizaciones, cumplimiento legal y viabilidad operativa.
+
+Debes detectar posibles "licitaciones dirigidas" (incumbent threat) buscando candados como:
+- Certificaciones o acreditaciones inusuales, demasiado específicas o poco comunes en el mercado.
+- Tiempos de entrega o implementación imposibles/no realistas para un competidor nuevo.
+- Especificaciones de marca/modelo disfrazadas (equivalencias restrictivas, compatibilidades cerradas, requisitos calcados).
+- Requisitos comerciales/legales limitantes que favorezcan claramente a un proveedor incumbente.
+
+Si detectas estos candados:
+- Sube competitor_threat_level.
+- Reduce win_probability de forma consistente con la evidencia.
+- Registra los candados concretos en red_flags.
 
 Debes responder EXCLUSIVAMENTE en JSON válido con este formato exacto:
 {
@@ -45,7 +62,13 @@ Debes responder EXCLUSIVAMENTE en JSON válido con este formato exacto:
   },
   "summary": string (máximo 15 palabras),
   "opportunities": string[] (máximo 3, bullets cortos),
-  "risks": string[] (máximo 3, bullets cortos)
+  "risks": string[] (máximo 3, bullets cortos),
+  "opportunity_engine": {
+    "win_probability": number (0-100),
+    "competitor_threat_level": "LOW" | "MEDIUM" | "HIGH",
+    "implementation_complexity": "LOW" | "MEDIUM" | "HIGH",
+    "red_flags": string[] (máximo 5, candados o requisitos limitantes)
+  }
 }
 
 Reglas:
@@ -54,7 +77,10 @@ Reglas:
 - summary debe ser directo y corto (estilo titular, sin narrativa).
 - opportunities y risks deben ser balazos accionables, concretos y no vacíos.
 - Si falta dato en key_data usa "No especificado".
-- scores.total=0 mala oportunidad / scores.total=100 oportunidad alta con riesgo controlado.`;
+- scores.total=0 mala oportunidad / scores.total=100 oportunidad alta con riesgo controlado.
+- win_probability=0 casi imposible de ganar / win_probability=100 muy alta probabilidad real de adjudicación.
+- competitor_threat_level: LOW (abierto), MEDIUM (hay señales mixtas), HIGH (múltiples candados claros o fuerte sesgo a incumbente).
+- implementation_complexity evalúa dificultad real de ejecución para cumplir alcance, tiempos y requisitos.`;
 
 function ensureApiKey(): string {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -94,6 +120,22 @@ function normalizeResult(payload: unknown): TenderDocumentAnalysis {
   const risks = Array.isArray(obj.risks)
     ? obj.risks.map((item) => String(item).trim()).filter(Boolean).slice(0, 3)
     : [];
+  const opportunityEngineObj = (obj.opportunity_engine ?? {}) as Record<string, unknown>;
+  const normalizeThreatLevel = (
+    value: unknown,
+  ): "LOW" | "MEDIUM" | "HIGH" => {
+    const normalized = typeof value === "string" ? value.trim().toUpperCase() : "";
+    if (normalized === "LOW" || normalized === "MEDIUM" || normalized === "HIGH") {
+      return normalized;
+    }
+    return "MEDIUM";
+  };
+  const redFlags = Array.isArray(opportunityEngineObj.red_flags)
+    ? opportunityEngineObj.red_flags
+        .map((item) => String(item).trim())
+        .filter(Boolean)
+        .slice(0, 5)
+    : [];
 
   return {
     scores: {
@@ -111,6 +153,16 @@ function normalizeResult(payload: unknown): TenderDocumentAnalysis {
     summary,
     opportunities,
     risks,
+    opportunity_engine: {
+      win_probability: normalizeScore(opportunityEngineObj.win_probability),
+      competitor_threat_level: normalizeThreatLevel(
+        opportunityEngineObj.competitor_threat_level,
+      ),
+      implementation_complexity: normalizeThreatLevel(
+        opportunityEngineObj.implementation_complexity,
+      ),
+      red_flags: redFlags,
+    },
   };
 }
 
@@ -151,7 +203,14 @@ export async function analyzeTenderDocument(
           schema: {
             type: "object",
             additionalProperties: false,
-            required: ["scores", "key_data", "summary", "opportunities", "risks"],
+            required: [
+              "scores",
+              "key_data",
+              "summary",
+              "opportunities",
+              "risks",
+              "opportunity_engine",
+            ],
             properties: {
               scores: {
                 type: "object",
@@ -191,6 +250,32 @@ export async function analyzeTenderDocument(
                 type: "array",
                 maxItems: 3,
                 items: { type: "string" },
+              },
+              opportunity_engine: {
+                type: "object",
+                additionalProperties: false,
+                required: [
+                  "win_probability",
+                  "competitor_threat_level",
+                  "implementation_complexity",
+                  "red_flags",
+                ],
+                properties: {
+                  win_probability: { type: "integer", minimum: 0, maximum: 100 },
+                  competitor_threat_level: {
+                    type: "string",
+                    enum: ["LOW", "MEDIUM", "HIGH"],
+                  },
+                  implementation_complexity: {
+                    type: "string",
+                    enum: ["LOW", "MEDIUM", "HIGH"],
+                  },
+                  red_flags: {
+                    type: "array",
+                    maxItems: 5,
+                    items: { type: "string" },
+                  },
+                },
               },
             },
           },
