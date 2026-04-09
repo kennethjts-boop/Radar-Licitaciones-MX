@@ -47,3 +47,133 @@ export async function extractTextFromPdf(
     throw new Error(`No se pudo extraer texto del PDF: ${message}`);
   }
 }
+
+function estimateTokenCount(text: string): number {
+  const clean = text.trim();
+  if (!clean) {
+    return 0;
+  }
+
+  // Heurística simple para español/inglés: ~4 caracteres por token.
+  return Math.ceil(clean.length / 4);
+}
+
+function splitIntoSemanticBlocks(text: string): string[] {
+  // Prioridad: párrafos (doble salto de línea) para evitar cortar ideas.
+  const paragraphs = text
+    .split(/\n\s*\n+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (paragraphs.length > 1) {
+    return paragraphs;
+  }
+
+  // Fallback: líneas individuales.
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length > 1) {
+    return lines;
+  }
+
+  return [text.trim()].filter(Boolean);
+}
+
+function splitOversizedBlock(block: string, maxTokens: number): string[] {
+  if (estimateTokenCount(block) <= maxTokens) {
+    return [block];
+  }
+
+  const words = block.split(/\s+/).filter(Boolean);
+  const chunks: string[] = [];
+  let currentWords: string[] = [];
+
+  for (const word of words) {
+    const nextCandidate = [...currentWords, word].join(" ");
+    if (
+      currentWords.length > 0 &&
+      estimateTokenCount(nextCandidate) > maxTokens
+    ) {
+      chunks.push(currentWords.join(" "));
+      currentWords = [word];
+      continue;
+    }
+    currentWords.push(word);
+  }
+
+  if (currentWords.length > 0) {
+    chunks.push(currentWords.join(" "));
+  }
+
+  return chunks;
+}
+
+export function chunkText(
+  text: string,
+  maxTokens = 800,
+  overlap = 150,
+): string[] {
+  const cleanText = text.trim();
+  if (!cleanText) {
+    return [];
+  }
+
+  const safeMaxTokens = Math.max(1, maxTokens);
+  const safeOverlap = Math.max(0, Math.min(overlap, safeMaxTokens - 1));
+
+  const semanticBlocks = splitIntoSemanticBlocks(cleanText).flatMap((block) =>
+    splitOversizedBlock(block, safeMaxTokens),
+  );
+
+  if (semanticBlocks.length === 0) {
+    return [];
+  }
+
+  const output: string[] = [];
+  let currentChunk = "";
+
+  for (const block of semanticBlocks) {
+    const separator = currentChunk ? "\n\n" : "";
+    const candidate = `${currentChunk}${separator}${block}`;
+
+    if (
+      currentChunk &&
+      estimateTokenCount(candidate) > safeMaxTokens
+    ) {
+      output.push(currentChunk);
+
+      if (safeOverlap > 0) {
+        const tailWords = currentChunk.split(/\s+/).filter(Boolean);
+        const overlapWords: string[] = [];
+
+        for (let i = tailWords.length - 1; i >= 0; i--) {
+          const nextWords = [tailWords[i], ...overlapWords];
+          if (estimateTokenCount(nextWords.join(" ")) > safeOverlap) {
+            break;
+          }
+          overlapWords.unshift(tailWords[i]);
+        }
+
+        currentChunk = overlapWords.join(" ");
+        currentChunk = currentChunk
+          ? `${currentChunk}\n\n${block}`.trim()
+          : block;
+      } else {
+        currentChunk = block;
+      }
+
+      continue;
+    }
+
+    currentChunk = candidate;
+  }
+
+  if (currentChunk) {
+    output.push(currentChunk);
+  }
+
+  return output;
+}

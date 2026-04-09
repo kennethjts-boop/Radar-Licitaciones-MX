@@ -44,11 +44,13 @@ import { BrowserManager } from "../collectors/comprasmx/browser.manager";
 import { ComprasMxNavigator } from "../collectors/comprasmx/comprasmx.navigator";
 import { downloadAttachmentsFromDetail } from "../collectors/comprasmx/comprasmx.downloader";
 import { uploadAttachment } from "../storage/storage.service";
-import { extractTextFromPdf } from "../utils/pdf.util";
-import { analyzeTenderDocument } from "../ai/openai.service";
+import { extractTextFromPdf, chunkText } from "../utils/pdf.util";
+import { analyzeTenderDocument, generateEmbedding } from "../ai/openai.service";
 
 const log = createModuleLogger("collect-job");
 const AI_VIP_ALERT_SCORE_THRESHOLD = 70;
+const RAG_MATCH_THRESHOLD = 0.7;
+const RAG_MATCH_COUNT = 3;
 
 // Source ID para comprasmx — resuelto en bootstrap y propagado aquí
 let _comprasMxSourceId: string | null = null;
@@ -155,7 +157,56 @@ async function processAttachmentsForProcurement(
               "PDF sin texto legible, requiere OCR (Omitiendo IA)",
             );
           } else {
-            const analysis = await analyzeTenderDocument(extractedText);
+            const documentChunks = chunkText(extractedText);
+            const chunksForMemory =
+              documentChunks.length > 0 ? documentChunks : [extractedText];
+            const firstChunk = chunksForMemory[0];
+
+            let historicalContext = "";
+
+            try {
+              const queryEmbedding = await generateEmbedding(firstChunk);
+              const { data: ragMatches, error: ragErr } = await db.rpc(
+                "match_procurement_embeddings",
+                {
+                  query_embedding: queryEmbedding,
+                  match_threshold: RAG_MATCH_THRESHOLD,
+                  match_count: RAG_MATCH_COUNT,
+                },
+              );
+
+              if (ragErr) {
+                throw new Error(ragErr.message);
+              }
+
+              historicalContext = Array.isArray(ragMatches)
+                ? ragMatches
+                    .map((row) => {
+                      const contentChunk =
+                        typeof row?.content_chunk === "string"
+                          ? row.content_chunk.trim()
+                          : "";
+                      return contentChunk;
+                    })
+                    .filter(Boolean)
+                    .join("\n\n---\n\n")
+                : "";
+            } catch (ragErr) {
+              log.warn(
+                {
+                  event: "RAG_RETRIEVAL_FAILED",
+                  err: ragErr,
+                  procurementId,
+                  fileName: file.fileName,
+                },
+                "Falló retrieval RAG; continuando con análisis sin contexto histórico",
+              );
+            }
+
+            const analysis = await analyzeTenderDocument(
+              extractedText,
+              historicalContext,
+            );
 
             const { data: analysisRow, error: analysisUpsertErr } = await db
               .from("document_analysis")
@@ -236,9 +287,51 @@ async function processAttachmentsForProcurement(
                 score: analysis.scores.total,
                 procurementId,
                 fileName: file.fileName,
+                ragContextUsed: Boolean(historicalContext),
               },
               "Análisis de IA completado para adjunto",
             );
+
+            Promise.all(
+              chunksForMemory.map(async (chunk, chunkIndex) => {
+                const embedding = await generateEmbedding(chunk);
+                const { error: insertEmbeddingErr } = await db
+                  .from("procurement_embeddings")
+                  .insert({
+                    attachment_id: insertedAttachment.id,
+                    chunk_index: chunkIndex,
+                    content_chunk: chunk,
+                    embedding,
+                  });
+
+                if (insertEmbeddingErr) {
+                  throw new Error(insertEmbeddingErr.message);
+                }
+              }),
+            )
+              .then(() => {
+                log.info(
+                  {
+                    event: "RAG_MEMORY_STORED",
+                    procurementId,
+                    fileName: file.fileName,
+                    chunksStored: chunksForMemory.length,
+                  },
+                  "Embeddings del documento guardados en memoria vectorial",
+                );
+              })
+              .catch((memoryErr) => {
+                log.warn(
+                  {
+                    event: "RAG_MEMORY_STORE_FAILED",
+                    err: memoryErr,
+                    procurementId,
+                    fileName: file.fileName,
+                    chunksAttempted: chunksForMemory.length,
+                  },
+                  "No se pudo guardar memoria vectorial del documento",
+                );
+              });
           }
         } catch (aiErr) {
           log.warn(

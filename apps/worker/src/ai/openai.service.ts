@@ -4,6 +4,7 @@ import { createModuleLogger } from "../core/logger";
 const log = createModuleLogger("openai-service");
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
+const OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
 
 export interface TenderDocumentAnalysis {
   scores: {
@@ -115,6 +116,7 @@ function normalizeResult(payload: unknown): TenderDocumentAnalysis {
 
 export async function analyzeTenderDocument(
   text: string,
+  historicalContext?: string,
 ): Promise<TenderDocumentAnalysis> {
   if (!text.trim()) {
     throw new Error("Texto vacío: no se puede analizar el documento");
@@ -123,6 +125,23 @@ export async function analyzeTenderDocument(
   const client = new OpenAI({ apiKey: ensureApiKey() });
 
   try {
+    const normalizedHistoricalContext = historicalContext?.trim() ?? "";
+    const userPrompt = normalizedHistoricalContext
+      ? [
+          "Analiza el siguiente documento de licitación y devuelve el JSON solicitado.",
+          "",
+          "Antecedentes históricos relevantes (RAG):",
+          normalizedHistoricalContext,
+          "",
+          "Usa estos antecedentes reales para identificar si la licitación es recurrente,",
+          "si hay patrones de riesgo (por ejemplo proveedor único histórico) y reflejarlo",
+          "en summary y opportunities cuando aplique.",
+          "",
+          "Documento de licitación actual:",
+          text,
+        ].join("\n")
+      : `Analiza el siguiente documento de licitación y devuelve el JSON solicitado:\n\n${text}`;
+
     const completion = await client.chat.completions.create({
       model: OPENAI_MODEL,
       response_format: {
@@ -182,11 +201,14 @@ export async function analyzeTenderDocument(
       messages: [
         {
           role: "system",
-          content: systemPrompt,
+          content: `${systemPrompt}
+- Si te proporcionan antecedentes históricos reales (RAG), utilízalos para detectar recurrencia y patrones de riesgo/oportunidad.
+- No trates esos antecedentes como hechos del documento actual; úsalo como contexto comparativo.
+- Integra esos hallazgos en summary y opportunities solo cuando haya evidencia.`,
         },
         {
           role: "user",
-          content: `Analiza el siguiente documento de licitación y devuelve el JSON solicitado:\n\n${text}`,
+          content: userPrompt,
         },
       ],
     });
@@ -202,5 +224,32 @@ export async function analyzeTenderDocument(
     const message = err instanceof Error ? err.message : String(err);
     log.error({ err: message }, "Fallo en analyzeTenderDocument");
     throw new Error(`Error analizando documento con OpenAI: ${message}`);
+  }
+}
+
+export async function generateEmbedding(text: string): Promise<number[]> {
+  const input = text.trim();
+  if (!input) {
+    throw new Error("Texto vacío: no se puede generar embedding");
+  }
+
+  const client = new OpenAI({ apiKey: ensureApiKey() });
+
+  try {
+    const response = await client.embeddings.create({
+      model: OPENAI_EMBEDDING_MODEL,
+      input,
+    });
+
+    const embedding = response.data[0]?.embedding;
+    if (!embedding || !Array.isArray(embedding) || embedding.length === 0) {
+      throw new Error("OpenAI devolvió embedding vacío");
+    }
+
+    return embedding;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error({ err: message }, "Fallo en generateEmbedding");
+    throw new Error(`Error generando embedding con OpenAI: ${message}`);
   }
 }
