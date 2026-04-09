@@ -40,6 +40,9 @@ COPY apps/worker/package*.json ./
 # 2. Instalar exclusivamente dependencias de producción
 RUN npm ci --only=production
 
+# 2.1 Asegurar instalación de navegadores Playwright en deploy (Railway)
+RUN npx playwright install --with-deps chromium
+
 # 3. Traer el compilado desde la etapa "builder" (¡Ya no requiere apps/worker/dist pre-existente!)
 COPY --from=builder /build/dist ./dist
 
