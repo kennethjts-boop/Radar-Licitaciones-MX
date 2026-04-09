@@ -33,7 +33,11 @@ import {
 import { getActiveRadars } from "../radars/index";
 import { evaluateAllRadars } from "../matchers/matcher";
 import { enrichMatch } from "../enrichers/match.enricher";
-import { sendMatchAlert } from "../alerts/telegram.alerts";
+import {
+  sendMatchAlert,
+  sendTelegramMessage,
+  formatAiVipAlertMessage,
+} from "../alerts/telegram.alerts";
 import type { ProcurementStatus } from "../types/procurement";
 import { getSupabaseClient } from "../storage/client";
 import { BrowserManager } from "../collectors/comprasmx/browser.manager";
@@ -42,59 +46,9 @@ import { downloadAttachmentsFromDetail } from "../collectors/comprasmx/comprasmx
 import { uploadAttachment } from "../storage/storage.service";
 import { extractTextFromPdf } from "../utils/pdf.util";
 import { analyzeTenderDocument } from "../ai/openai.service";
-import { sendTelegramMessage } from "../alerts/telegram.alerts";
-import { truncateForTelegram } from "../core/text";
 
 const log = createModuleLogger("collect-job");
 const AI_VIP_ALERT_SCORE_THRESHOLD = 70;
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function formatAiVipAlertMessage(params: {
-  score: number;
-  procurementTitle: string;
-  procurementRef: string;
-  fileName: string;
-  summary: string;
-  opportunities: string[];
-  risks: string[];
-  link: string;
-}): string {
-  const opportunities =
-    params.opportunities.length > 0
-      ? params.opportunities.slice(0, 3).map((item) => `• ${escapeHtml(item)}`)
-      : ["• Sin oportunidades explícitas detectadas."];
-  const risks =
-    params.risks.length > 0
-      ? params.risks.slice(0, 3).map((item) => `• ${escapeHtml(item)}`)
-      : ["• Sin riesgos explícitos detectados."];
-
-  const lines: string[] = [
-    `🚨 <b>ALERTA DE OPORTUNIDAD: ${params.score}/100</b> 🚨`,
-    `📄 <b>Licitación:</b> ${escapeHtml(params.procurementTitle)}`,
-    `🆔 <b>Referencia:</b> ${escapeHtml(params.procurementRef)}`,
-    `📁 <b>Archivo:</b> ${escapeHtml(params.fileName)}`,
-    "",
-    `📝 <b>Resumen:</b> ${escapeHtml(params.summary || "Sin resumen disponible.")}`,
-    "",
-    "✅ <b>Oportunidades:</b>",
-    ...opportunities,
-    "",
-    "⚠️ <b>Riesgos:</b>",
-    ...risks,
-    "",
-    `🔗 <b>Link:</b> ${escapeHtml(params.link)}`,
-  ];
-
-  return truncateForTelegram(lines.join("\n"));
-}
 
 // Source ID para comprasmx — resuelto en bootstrap y propagado aquí
 let _comprasMxSourceId: string | null = null;
@@ -112,7 +66,7 @@ async function processAttachmentsForProcurement(
   const db = getSupabaseClient();
   const { data: procurementRow, error: procurementErr } = await db
     .from("procurements")
-    .select("title, licitation_number, source_url")
+    .select("licitation_number, source_url")
     .eq("id", procurementId)
     .maybeSingle();
 
@@ -123,7 +77,6 @@ async function processAttachmentsForProcurement(
     );
   }
 
-  const procurementTitle = procurementRow?.title ?? `Procurement ${procurementId}`;
   const procurementRef = procurementRow?.licitation_number ?? procurementId;
   const procurementLink = procurementRow?.source_url ?? sourceUrl;
 
@@ -204,49 +157,83 @@ async function processAttachmentsForProcurement(
           } else {
             const analysis = await analyzeTenderDocument(extractedText);
 
-            const { error: analysisInsertErr } = await db
+            const { data: analysisRow, error: analysisUpsertErr } = await db
               .from("document_analysis")
-              .insert({
+              .upsert({
                 attachment_id: insertedAttachment.id,
-                score: analysis.score,
+                score_total: analysis.scores.total,
+                score_tech: analysis.scores.technical,
+                score_commercial: analysis.scores.commercial,
+                score_urgency: analysis.scores.urgency,
+                score_viability: analysis.scores.viability,
+                contract_type: analysis.key_data.contract_type,
+                deadline: analysis.key_data.deadline,
+                guarantees: analysis.key_data.guarantees,
                 summary: analysis.summary,
                 opportunities: analysis.opportunities,
                 risks: analysis.risks,
-              });
+              }, { onConflict: "attachment_id" })
+              .select("id, alert_sent")
+              .single();
 
-            if (analysisInsertErr) {
-              throw new Error(analysisInsertErr.message);
+            if (analysisUpsertErr) {
+              throw new Error(analysisUpsertErr.message);
             }
 
-            if (analysis.score >= AI_VIP_ALERT_SCORE_THRESHOLD) {
+            const alreadySent = analysisRow?.alert_sent === true;
+            const shouldSendVip = analysis.scores.total >= AI_VIP_ALERT_SCORE_THRESHOLD;
+
+            if (shouldSendVip && !alreadySent) {
               const vipMessage = formatAiVipAlertMessage({
-                score: analysis.score,
-                procurementTitle,
-                procurementRef,
-                fileName: file.fileName,
-                summary: analysis.summary,
+                score: analysis.scores,
+                licitacionRef: procurementRef,
+                contractType: analysis.key_data.contract_type,
+                deadline: analysis.key_data.deadline,
                 opportunities: analysis.opportunities,
                 risks: analysis.risks,
                 link: procurementLink,
               });
 
-              await sendTelegramMessage(vipMessage, "HTML");
+              if (vipMessage) {
+                await sendTelegramMessage(vipMessage, "HTML");
+
+                const { error: markSentErr } = await db
+                  .from("document_analysis")
+                  .update({ alert_sent: true })
+                  .eq("attachment_id", insertedAttachment.id);
+
+                if (markSentErr) {
+                  throw new Error(
+                    `No se pudo marcar alert_sent para attachment ${insertedAttachment.id}: ${markSentErr.message}`,
+                  );
+                }
+
+                log.info(
+                  {
+                    event: "AI_VIP_ALERT_SENT",
+                    score: analysis.scores.total,
+                    threshold: AI_VIP_ALERT_SCORE_THRESHOLD,
+                    procurementId,
+                    fileName: file.fileName,
+                  },
+                  "Alerta VIP de IA enviada a Telegram",
+                );
+              }
+            } else if (alreadySent) {
               log.info(
                 {
-                  event: "AI_VIP_ALERT_SENT",
-                  score: analysis.score,
-                  threshold: AI_VIP_ALERT_SCORE_THRESHOLD,
+                  event: "AI_VIP_ALERT_SKIPPED_DUPLICATE",
                   procurementId,
                   fileName: file.fileName,
                 },
-                "Alerta VIP de IA enviada a Telegram",
+                "Alerta VIP omitida: ya fue enviada para este attachment_id",
               );
             }
 
             log.info(
               {
                 event: "AI_ANALYSIS_COMPLETED",
-                score: analysis.score,
+                score: analysis.scores.total,
                 procurementId,
                 fileName: file.fileName,
               },
