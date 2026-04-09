@@ -76,7 +76,7 @@ async function connectSupabase(): Promise<{
       return { ok: false, sourceId: null };
     }
 
-    log.info('✅ Supabase connection OK');
+    log.info('✅ Supabase connected');
 
     // Intentar leer source ID de comprasmx para el heartbeat job
     const { data, error: srcErr } = await db
@@ -141,7 +141,7 @@ async function checkTelegram(
   try {
     const bot = new TelegramBot(token, { polling: false });
     const me = await bot.getMe();
-    log.info({ username: me.username, id: me.id }, '✅ Telegram bot verified');
+    log.info({ username: me.username, id: me.id }, '✅ Telegram connected');
     return { ok: true, username: me.username ?? null };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -214,6 +214,10 @@ export async function bootstrap(): Promise<BootstrapResult> {
     '🔧 Starting bootstrap sequence...'
   );
 
+  log.info('Env validated');
+  log.info('Runtime DB mode: Supabase REST');
+  log.info('SUPABASE_DB_URL not required for runtime');
+
   // ── Paso 1: Conectar Supabase ────────────────────────────────────────────────
   const { ok: supabaseOk, sourceId } = await connectSupabase();
 
@@ -272,7 +276,16 @@ export async function bootstrap(): Promise<BootstrapResult> {
 
   // ── Paso 4: Registrar en system_state ────────────────────────────────────────
   await recordWorkerBoot('0.1.0');
-  await recordHealthcheck(supabaseOk && schemaValid && telegramOk);
+  
+  const allGood = supabaseOk && schemaValid && telegramOk;
+  await recordHealthcheck({
+    healthy: allGood,
+    worker_status: allGood ? 'ok' : 'degraded',
+    db_connected: supabaseOk,
+    db_schema_valid: schemaValid,
+    telegram_connected: telegramOk,
+    runtime_db_mode: 'supabase-rest',
+  });
 
   // ── Paso 5: Enviar mensaje de boot ───────────────────────────────────────────
   if (telegramOk) {
@@ -282,7 +295,6 @@ export async function bootstrap(): Promise<BootstrapResult> {
   }
 
   // ── Paso 6: Log resumen ──────────────────────────────────────────────────────
-  const allGood = supabaseOk && schemaValid && telegramOk;
 
   log.info(
     {

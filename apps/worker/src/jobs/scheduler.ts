@@ -52,6 +52,6 @@ export function startScheduler(): void {
 
   log.info(
     { collectCron, summaryCron },
-    `✅ Scheduler activo — ciclo cada ${interval} min, resumen a las ${summaryHour}:00 MX`
+    `Scheduler started (${interval} min)`
   );
 }

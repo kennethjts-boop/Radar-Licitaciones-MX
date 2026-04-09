@@ -23,6 +23,8 @@ async function main(): Promise<void> {
   const config = getConfig();         // crash aquí si falta variable de entorno
   const log = getLogger();
 
+  log.info('Worker booting...');
+
   log.info(
     {
       env: config.NODE_ENV,

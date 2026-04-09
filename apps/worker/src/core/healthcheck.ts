@@ -34,6 +34,7 @@ export interface HealthStatus {
   lastCycleDurationMs: number | null;
   lastCycleMatches: number | null;
   uptimeMs: number;
+  runtimeDbMode: 'supabase-rest';
 }
 
 // ─── Tracker singleton ────────────────────────────────────────────────────────
@@ -142,6 +143,7 @@ class HealthTracker {
       lastCycleDurationMs: this.lastCycleDurationMs,
       lastCycleMatches: this.lastCycleMatches,
       uptimeMs: Date.now() - this.startedAt,
+      runtimeDbMode: 'supabase-rest',
     };
   }
 }

@@ -2,6 +2,7 @@
  * CONFIG — Variables de entorno validadas con Zod.
  * Si falta alguna variable crítica, el proceso falla al arrancar.
  */
+import 'dotenv/config';
 import { z } from 'zod';
 
 const envSchema = z.object({

@@ -30,7 +30,7 @@ export function setComprasMxSourceId(id: string | null): void {
 }
 
 export async function runHeartbeatJob(): Promise<void> {
-  log.info('🔄 Iniciando ciclo base (heartbeat)');
+  log.info('🔄 Cycle started (heartbeat)');
   const cycleStart = Date.now();
 
   await withLock('heartbeat-job', 'main-heartbeat', async () => {
@@ -89,9 +89,20 @@ export async function runHeartbeatJob(): Promise<void> {
       // Actualizar healthcheck en memoria
       healthTracker.recordCycle(durationMs, 0);
 
-      // Registrar en system_state
+      // Registrar en system_state y collect_runs real
       if (dbReachable) {
-        await recordHealthcheck(true);
+        const hs = healthTracker.getStatus();
+        await recordHealthcheck({
+          healthy: hs.overall === 'ok',
+          worker_status: hs.overall,
+          db_connected: hs.dbConnected,
+          db_schema_valid: hs.dbSchemaValid,
+          telegram_connected: hs.services.telegram === 'ok',
+          runtime_db_mode: 'supabase-rest',
+        });
+        const db = getSupabaseClient();
+        
+        // Registrar system_state
         await setState(STATE_KEYS.LAST_COLLECT_RUN, {
           collectorKey: 'heartbeat',
           startedAt,
@@ -101,6 +112,21 @@ export async function runHeartbeatJob(): Promise<void> {
           itemsSeen: 0,
           itemsCreated: 0,
         });
+
+        // Registrar en collect_runs (Log del ciclo)
+        if (_comprasMxSourceId) {
+          await db.from('collect_runs').insert({
+            source_id: _comprasMxSourceId,
+            collector_key: 'heartbeat_phase_1',
+            started_at: startedAt,
+            finished_at: finishedAt,
+            status: errorMessage ? 'error' : 'success',
+            items_seen: 0,
+            items_created: 0,
+            items_updated: 0,
+            error_message: errorMessage
+          });
+        }
       }
 
       log.info(
@@ -108,7 +134,7 @@ export async function runHeartbeatJob(): Promise<void> {
           duration: formatDuration(durationMs),
           status: errorMessage ? 'error' : 'success',
         },
-        '🏁 Heartbeat job terminado'
+        '🏁 Cycle finished'
       );
     }
   });

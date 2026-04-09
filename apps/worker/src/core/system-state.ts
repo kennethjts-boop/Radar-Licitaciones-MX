@@ -102,9 +102,16 @@ export async function recordSchedulerStarted(
   });
 }
 
-export async function recordHealthcheck(healthy: boolean): Promise<void> {
+export async function recordHealthcheck(status: {
+  healthy: boolean;
+  worker_status: string;
+  db_connected: boolean;
+  db_schema_valid: boolean;
+  telegram_connected: boolean;
+  runtime_db_mode: string;
+}): Promise<void> {
   await setState(STATE_KEYS.LAST_HEALTHCHECK_AT, {
     checkedAt: nowISO(),
-    healthy,
+    ...status,
   });
 }
