@@ -25,6 +25,64 @@ function getBot(): TelegramBot {
   return _bot;
 }
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+export interface AiVipAlertPayload {
+  score: {
+    total: number;
+    technical: number;
+    commercial: number;
+    urgency: number;
+    viability: number;
+  };
+  licitacionRef: string;
+  contractType: string;
+  deadline: string;
+  risks: string[];
+  opportunities: string[];
+  link: string;
+}
+
+function getAiVipIcon(totalScore: number): "🔥" | "🟡" | null {
+  if (totalScore >= 85) return "🔥";
+  if (totalScore >= 70) return "🟡";
+  return null;
+}
+
+export function formatAiVipAlertMessage(payload: AiVipAlertPayload): string | null {
+  const icon = getAiVipIcon(payload.score.total);
+  if (!icon) {
+    return null;
+  }
+
+  const riskPrincipal = payload.risks[0]?.trim() || "Sin riesgo principal detectado";
+  const opportunityPrincipal =
+    payload.opportunities[0]?.trim() || "Sin oportunidad principal detectada";
+
+  const lines = [
+    `${icon} <b>SCORE: ${payload.score.total}/100</b>`,
+    `📄 <b>Ref:</b> ${escapeHtml(payload.licitacionRef)}`,
+    `💰 <b>Tipo:</b> ${escapeHtml(payload.contractType)}`,
+    `⏳ <b>Cierre:</b> ${escapeHtml(payload.deadline)}`,
+    "",
+    `📊 <b>Desglose:</b> Tec:${payload.score.technical} | Com:${payload.score.commercial} | Urg:${payload.score.urgency} | Via:${payload.score.viability}`,
+    "",
+    `⚠️ <b>Riesgo Principal:</b> ${escapeHtml(riskPrincipal)}`,
+    `✅ <b>Oportunidad:</b> ${escapeHtml(opportunityPrincipal)}`,
+    "",
+    `🔗 <a href="${escapeHtml(payload.link)}">Ver Documento</a>`,
+  ];
+
+  return truncateForTelegram(lines.join("\n"));
+}
+
 // ─── Envío base ──────────────────────────────────────────────────────────────
 
 export async function sendTelegramMessage(

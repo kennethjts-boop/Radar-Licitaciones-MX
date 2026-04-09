@@ -6,7 +6,18 @@ const log = createModuleLogger("openai-service");
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
 
 export interface TenderDocumentAnalysis {
-  score: number;
+  scores: {
+    total: number;
+    technical: number;
+    commercial: number;
+    urgency: number;
+    viability: number;
+  };
+  key_data: {
+    contract_type: string;
+    deadline: string;
+    guarantees: string;
+  };
   summary: string;
   opportunities: string[];
   risks: string[];
@@ -19,17 +30,30 @@ Analiza señales como: "adjudicación directa", "segunda convocatoria", "urgente
 
 Debes responder EXCLUSIVAMENTE en JSON válido con este formato exacto:
 {
-  "score": number (0-100),
-  "summary": string,
-  "opportunities": string[],
-  "risks": string[]
+  "scores": {
+    "total": number (0-100),
+    "technical": number (0-100),
+    "commercial": number (0-100),
+    "urgency": number (0-100),
+    "viability": number (0-100)
+  },
+  "key_data": {
+    "contract_type": string,
+    "deadline": string,
+    "guarantees": string
+  },
+  "summary": string (máximo 15 palabras),
+  "opportunities": string[] (máximo 3, bullets cortos),
+  "risks": string[] (máximo 3, bullets cortos)
 }
 
 Reglas:
 - No inventes información que no esté en el documento.
-- Si hay poca evidencia, reduce score y explica incertidumbre en summary.
-- opportunities y risks deben ser bullets concretos, accionables y no vacíos.
-- score=0 muy mala oportunidad / score=100 oportunidad muy alta con riesgo controlado.`;
+- Si hay poca evidencia, reduce scores y expresa incertidumbre.
+- summary debe ser directo y corto (estilo titular, sin narrativa).
+- opportunities y risks deben ser balazos accionables, concretos y no vacíos.
+- Si falta dato en key_data usa "No especificado".
+- scores.total=0 mala oportunidad / scores.total=100 oportunidad alta con riesgo controlado.`;
 
 function ensureApiKey(): string {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -42,21 +66,47 @@ function ensureApiKey(): string {
 function normalizeResult(payload: unknown): TenderDocumentAnalysis {
   const obj = (payload ?? {}) as Record<string, unknown>;
 
-  const scoreRaw = Number(obj.score);
-  const score = Number.isFinite(scoreRaw)
-    ? Math.max(0, Math.min(100, Math.round(scoreRaw)))
-    : 0;
+  const scoreObj = (obj.scores ?? {}) as Record<string, unknown>;
+  const keyDataObj = (obj.key_data ?? {}) as Record<string, unknown>;
 
-  const summary = typeof obj.summary === "string" ? obj.summary.trim() : "";
+  const normalizeScore = (value: unknown): number => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric)
+      ? Math.max(0, Math.min(100, Math.round(numeric)))
+      : 0;
+  };
+
+  const ensureString = (value: unknown, fallback = "No especificado"): string => {
+    const normalized = typeof value === "string" ? value.trim() : "";
+    return normalized || fallback;
+  };
+
+  const summaryRaw = typeof obj.summary === "string" ? obj.summary.trim() : "";
+  const summaryWords = summaryRaw.split(/\s+/).filter(Boolean).slice(0, 15);
+  const summary = summaryWords.join(" ");
   const opportunities = Array.isArray(obj.opportunities)
-    ? obj.opportunities.map((item) => String(item).trim()).filter(Boolean)
+    ? obj.opportunities
+        .map((item) => String(item).trim())
+        .filter(Boolean)
+        .slice(0, 3)
     : [];
   const risks = Array.isArray(obj.risks)
-    ? obj.risks.map((item) => String(item).trim()).filter(Boolean)
+    ? obj.risks.map((item) => String(item).trim()).filter(Boolean).slice(0, 3)
     : [];
 
   return {
-    score,
+    scores: {
+      total: normalizeScore(scoreObj.total),
+      technical: normalizeScore(scoreObj.technical),
+      commercial: normalizeScore(scoreObj.commercial),
+      urgency: normalizeScore(scoreObj.urgency),
+      viability: normalizeScore(scoreObj.viability),
+    },
+    key_data: {
+      contract_type: ensureString(keyDataObj.contract_type),
+      deadline: ensureString(keyDataObj.deadline),
+      guarantees: ensureString(keyDataObj.guarantees),
+    },
     summary,
     opportunities,
     risks,
@@ -75,7 +125,59 @@ export async function analyzeTenderDocument(
   try {
     const completion = await client.chat.completions.create({
       model: OPENAI_MODEL,
-      response_format: { type: "json_object" },
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "tender_document_analysis",
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["scores", "key_data", "summary", "opportunities", "risks"],
+            properties: {
+              scores: {
+                type: "object",
+                additionalProperties: false,
+                required: [
+                  "total",
+                  "technical",
+                  "commercial",
+                  "urgency",
+                  "viability",
+                ],
+                properties: {
+                  total: { type: "integer", minimum: 0, maximum: 100 },
+                  technical: { type: "integer", minimum: 0, maximum: 100 },
+                  commercial: { type: "integer", minimum: 0, maximum: 100 },
+                  urgency: { type: "integer", minimum: 0, maximum: 100 },
+                  viability: { type: "integer", minimum: 0, maximum: 100 },
+                },
+              },
+              key_data: {
+                type: "object",
+                additionalProperties: false,
+                required: ["contract_type", "deadline", "guarantees"],
+                properties: {
+                  contract_type: { type: "string" },
+                  deadline: { type: "string" },
+                  guarantees: { type: "string" },
+                },
+              },
+              summary: { type: "string", maxLength: 200 },
+              opportunities: {
+                type: "array",
+                maxItems: 3,
+                items: { type: "string" },
+              },
+              risks: {
+                type: "array",
+                maxItems: 3,
+                items: { type: "string" },
+              },
+            },
+          },
+          strict: true,
+        },
+      },
       temperature: 0.2,
       messages: [
         {
