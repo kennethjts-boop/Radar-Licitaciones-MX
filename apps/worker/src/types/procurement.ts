@@ -7,33 +7,33 @@
 // ─── Enumeraciones base ──────────────────────────────────────────────────────
 
 export type ProcedureType =
-  | 'licitacion_publica'
-  | 'invitacion_tres'
-  | 'adjudicacion_directa'
-  | 'concurso'
-  | 'subasta'
-  | 'unknown';
+  | "licitacion_publica"
+  | "invitacion_tres"
+  | "adjudicacion_directa"
+  | "concurso"
+  | "subasta"
+  | "unknown";
 
 export type ProcurementStatus =
-  | 'publicada'
-  | 'activa'
-  | 'en_proceso'
-  | 'desierta'
-  | 'cancelada'
-  | 'adjudicada'
-  | 'cerrada'
-  | 'unknown';
+  | "publicada"
+  | "activa"
+  | "en_proceso"
+  | "desierta"
+  | "cancelada"
+  | "adjudicada"
+  | "cerrada"
+  | "unknown";
 
 export type AlertType =
-  | 'new_match'
-  | 'status_change'
-  | 'new_document'
-  | 'daily_summary'
-  | 'system';
+  | "new_match"
+  | "status_change"
+  | "new_document"
+  | "daily_summary"
+  | "system";
 
-export type MatchLevel = 'high' | 'medium' | 'low';
+export type MatchLevel = "high" | "medium" | "low";
 
-export type CollectorStatus = 'running' | 'success' | 'error' | 'timeout';
+export type CollectorStatus = "running" | "success" | "error" | "timeout";
 
 // ─── Attachment ──────────────────────────────────────────────────────────────
 
@@ -50,22 +50,22 @@ export interface ProcurementAttachment {
 
 export interface NormalizedProcurement {
   // Identificación de fuente
-  source: string;                    // 'comprasmx' | 'dof' | 'institutional' | 'fallback'
-  sourceUrl: string;                 // URL directa al expediente (siempre obligatorio)
-  externalId: string;                // ID único en la fuente original
+  source: string; // 'comprasmx' | 'dof' | 'institutional' | 'fallback'
+  sourceUrl: string; // URL directa al expediente (siempre obligatorio)
+  externalId: string; // ID único en la fuente original
 
   // Identificadores del expediente
-  expedienteId: string | null;       // Código/número de expediente (e.g. EA-009000002-E1-2024)
-  licitationNumber: string | null;   // Número de licitación oficial si existe
-  procedureNumber: string | null;    // Número de procedimiento si es diferente
+  expedienteId: string | null; // Código/número de expediente (e.g. EA-009000002-E1-2024)
+  licitationNumber: string | null; // Número de licitación oficial si existe
+  procedureNumber: string | null; // Número de procedimiento si es diferente
 
   // Descripción
-  title: string;                     // Título del procedimiento
-  description: string | null;        // Descripción detallada
+  title: string; // Título del procedimiento
+  description: string | null; // Descripción detallada
 
   // Entidades
-  dependencyName: string | null;     // Dependencia convocante
-  buyingUnit: string | null;         // Unidad compradora
+  dependencyName: string | null; // Dependencia convocante
+  buyingUnit: string | null; // Unidad compradora
 
   // Clasificación
   procedureType: ProcedureType;
@@ -82,34 +82,34 @@ export interface NormalizedProcurement {
 
   // Económico
   amount: number | null;
-  currency: 'MXN' | 'USD' | null;
+  currency: "MXN" | "USD" | null;
 
   // Adjuntos
   attachments: ProcurementAttachment[];
 
   // Texto canónico para fingerprint y matching
-  canonicalText: string;             // título + descripción + dependencia + unidad + términos adjuntos
-  canonicalFingerprint: string;      // SHA-256 hex del canonicalText
+  canonicalText: string; // título + descripción + dependencia + unidad + términos adjuntos
+  canonicalFingerprint: string; // SHA-256 hex del canonicalText
   lightweightFingerprint: string | null;
 
   // Raw original (preservar siempre)
   rawJson: Record<string, unknown>;
 
   // Timestamps de colección
-  fetchedAt: string;                 // ISO-8601
+  fetchedAt: string; // ISO-8601
 }
 
 // ─── Resultado de matching ───────────────────────────────────────────────────
 
 export interface MatchResult {
   radarKey: string;
-  procurementId: string;             // external_id o id interno
-  matchScore: number;                // 0.0 – 1.0
+  procurementId: string; // external_id o id interno
+  matchScore: number; // 0.0 – 1.0
   matchLevel: MatchLevel;
   matchedTerms: string[];
   excludedTerms: string[];
   explanation: string;
-  isNew: boolean;                    // true si el expediente no existía antes
+  isNew: boolean; // true si el expediente no existía antes
   isStatusChange: boolean;
   previousStatus: ProcurementStatus | null;
 }
@@ -142,14 +142,14 @@ export interface EnrichedAlert {
   explanation: string;
   hasHistory: boolean;
   historyCount: number;
-  detectedAt: string;                // ISO-8601
-  telegramMessage: string;           // Mensaje ya formateado para Telegram
+  detectedAt: string; // ISO-8601
+  telegramMessage: string; // Mensaje ya formateado para Telegram
 }
 
 // ─── Resumen diario ──────────────────────────────────────────────────────────
 
 export interface DailySummary {
-  summaryDate: string;               // YYYY-MM-DD
+  summaryDate: string; // YYYY-MM-DD
   totalSeen: number;
   totalNew: number;
   totalUpdated: number;
@@ -164,11 +164,11 @@ export interface DailySummary {
 // ─── Configuración de radar ──────────────────────────────────────────────────
 
 export interface RadarRule {
-  ruleType: 'keyword' | 'entity' | 'geo' | 'status' | 'dependency';
+  ruleType: "keyword" | "entity" | "geo" | "status" | "dependency";
   fieldName: string;
-  operator: 'contains' | 'exact' | 'any_of' | 'none_of' | 'regex';
+  operator: "contains" | "exact" | "any_of" | "none_of" | "regex";
   value: string | string[];
-  weight: number;                    // 0.0 – 1.0
+  weight: number; // 0.0 – 1.0
   isRequired: boolean;
 }
 
@@ -177,12 +177,12 @@ export interface RadarConfig {
   name: string;
   description: string;
   isActive: boolean;
-  priority: number;                  // 1 (alta) – 5 (baja)
+  priority: number; // 1 (alta) – 5 (baja)
   scheduleMinutes: number;
   includeTerms: string[];
   excludeTerms: string[];
   geoTerms: string[];
   entityTerms: string[];
   rules: RadarRule[];
-  minScore: number;                  // 0.0 – 1.0, umbral para disparar alerta
+  minScore: number; // 0.0 – 1.0, umbral para disparar alerta
 }

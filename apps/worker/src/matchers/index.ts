@@ -1,4 +1,4 @@
 /**
  * MATCHERS — Barrel exports
  */
-export * from './matcher';
+export * from "./matcher";

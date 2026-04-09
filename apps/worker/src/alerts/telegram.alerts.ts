@@ -2,15 +2,19 @@
  * TELEGRAM ALERTS — Formateador de mensajes y enviador.
  * Formato MarkdownV2 optimizado para legibilidad en Telegram.
  */
-import TelegramBot from 'node-telegram-bot-api';
-import { getConfig } from '../config/env';
-import { createModuleLogger } from '../core/logger';
-import { truncateForTelegram, formatCurrency } from '../core/text';
-import { formatMexicoDate } from '../core/time';
-import { TelegramError } from '../core/errors';
-import type { EnrichedAlert, DailySummary, MatchLevel } from '../types/procurement';
+import TelegramBot from "node-telegram-bot-api";
+import { getConfig } from "../config/env";
+import { createModuleLogger } from "../core/logger";
+import { truncateForTelegram, formatCurrency } from "../core/text";
+import { formatMexicoDate } from "../core/time";
+import { TelegramError } from "../core/errors";
+import type {
+  EnrichedAlert,
+  DailySummary,
+  MatchLevel,
+} from "../types/procurement";
 
-const log = createModuleLogger('telegram-alerts');
+const log = createModuleLogger("telegram-alerts");
 
 let _bot: TelegramBot | null = null;
 
@@ -25,7 +29,7 @@ function getBot(): TelegramBot {
 
 export async function sendTelegramMessage(
   text: string,
-  parseMode: 'Markdown' | 'HTML' = 'HTML'
+  parseMode: "Markdown" | "HTML" = "HTML",
 ): Promise<number | null> {
   const config = getConfig();
   const bot = getBot();
@@ -38,7 +42,7 @@ export async function sendTelegramMessage(
     return msg.message_id;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error({ error: msg }, 'Error enviando mensaje Telegram');
+    log.error({ error: msg }, "Error enviando mensaje Telegram");
     throw new TelegramError(`Error enviando a Telegram: ${msg}`);
   }
 }
@@ -46,7 +50,7 @@ export async function sendTelegramMessage(
 // ─── Formato de alerta de match ──────────────────────────────────────────────
 
 function matchLevelEmoji(level: MatchLevel): string {
-  return level === 'high' ? '🔴' : level === 'medium' ? '🟡' : '🟢';
+  return level === "high" ? "🔴" : level === "medium" ? "🟡" : "🟢";
 }
 
 /**
@@ -60,39 +64,41 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
   const lines: string[] = [
     `${emoji} <b>NUEVO MATCH — ${alert.radarName}</b>`,
     `Nivel: <b>${alert.matchLevel.toUpperCase()}</b> | Score: ${score}%`,
-    '',
-    `📋 <b>Expediente:</b> ${p.expedienteId ?? 'N/D'}`,
-    `🔢 <b>Licitación:</b> ${p.licitationNumber ?? 'No especificado'}`,
-    `📝 <b>Proc. #:</b> ${p.procedureNumber ?? 'N/D'}`,
-    '',
+    "",
+    `📋 <b>Expediente:</b> ${p.expedienteId ?? "N/D"}`,
+    `🔢 <b>Licitación:</b> ${p.licitationNumber ?? "No especificado"}`,
+    `📝 <b>Proc. #:</b> ${p.procedureNumber ?? "N/D"}`,
+    "",
     `📌 <b>${p.title}</b>`,
-    '',
-    `🏛 <b>Dependencia:</b> ${p.dependencyName ?? 'N/D'}`,
-    `🏢 <b>Unidad compradora:</b> ${p.buyingUnit ?? 'N/D'}`,
-    p.state ? `📍 <b>Ubicación:</b> ${p.municipality ? `${p.municipality}, ` : ''}${p.state}` : '',
-    '',
-    `📅 <b>Publicación:</b> ${p.publicationDate ? formatMexicoDate(p.publicationDate, 'dd/MM/yyyy') : 'N/D'}`,
+    "",
+    `🏛 <b>Dependencia:</b> ${p.dependencyName ?? "N/D"}`,
+    `🏢 <b>Unidad compradora:</b> ${p.buyingUnit ?? "N/D"}`,
+    p.state
+      ? `📍 <b>Ubicación:</b> ${p.municipality ? `${p.municipality}, ` : ""}${p.state}`
+      : "",
+    "",
+    `📅 <b>Publicación:</b> ${p.publicationDate ? formatMexicoDate(p.publicationDate, "dd/MM/yyyy") : "N/D"}`,
     `📊 <b>Estatus:</b> ${p.status}`,
-    p.amount ? `💰 <b>Monto:</b> ${formatCurrency(p.amount, p.currency)}` : '',
-    '',
+    p.amount ? `💰 <b>Monto:</b> ${formatCurrency(p.amount, p.currency)}` : "",
+    "",
     `🎯 <b>Razón del match:</b>`,
     alert.explanation,
-    '',
-    `🔍 <b>Términos detectados:</b> ${alert.matchedTerms.slice(0, 8).join(' · ')}`,
+    "",
+    `🔍 <b>Términos detectados:</b> ${alert.matchedTerms.slice(0, 8).join(" · ")}`,
     alert.procurement.attachments.length > 0
       ? `📎 <b>Adjuntos:</b> ${alert.procurement.attachments.length} archivo(s)`
-      : '',
+      : "",
     alert.hasHistory
       ? `🔁 <b>Antecedentes:</b> ${alert.historyCount} versión(es) previa(s)`
-      : '',
-    '',
+      : "",
+    "",
     `🔗 <b>Ver expediente:</b>`,
     p.sourceUrl,
-    '',
+    "",
     `⏱ Detectado: ${formatMexicoDate(alert.detectedAt)}`,
   ];
 
-  return truncateForTelegram(lines.filter(Boolean).join('\n'));
+  return truncateForTelegram(lines.filter(Boolean).join("\n"));
 }
 
 /**
@@ -100,26 +106,26 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
  */
 export function formatStatusChangeAlert(
   alert: EnrichedAlert,
-  previousStatus: string
+  previousStatus: string,
 ): string {
   const p = alert.procurement;
 
   const lines: string[] = [
     `🔄 <b>CAMBIO DE ESTATUS — ${alert.radarName}</b>`,
-    '',
-    `📋 <b>Expediente:</b> ${p.expedienteId ?? 'N/D'}`,
+    "",
+    `📋 <b>Expediente:</b> ${p.expedienteId ?? "N/D"}`,
     `📌 <b>${p.title}</b>`,
-    '',
-    `🏛 <b>Dependencia:</b> ${p.dependencyName ?? 'N/D'}`,
-    '',
+    "",
+    `🏛 <b>Dependencia:</b> ${p.dependencyName ?? "N/D"}`,
+    "",
     `📊 <b>Estatus anterior:</b> ${previousStatus}`,
     `📊 <b>Estatus nuevo:</b> <b>${p.status}</b>`,
-    '',
+    "",
     `🔗 ${p.sourceUrl}`,
     `⏱ ${formatMexicoDate(alert.detectedAt)}`,
   ];
 
-  return truncateForTelegram(lines.join('\n'));
+  return truncateForTelegram(lines.join("\n"));
 }
 
 /**
@@ -129,52 +135,57 @@ export function formatDailySummaryMessage(summary: DailySummary): string {
   const lines: string[] = [
     `📊 <b>RESUMEN DIARIO — ${summary.summaryDate}</b>`,
     `<i>Radar Licitaciones MX</i>`,
-    '',
+    "",
     `👁 <b>Total revisado:</b> ${summary.totalSeen}`,
     `🆕 <b>Nuevos expedientes:</b> ${summary.totalNew}`,
     `🔄 <b>Actualizados:</b> ${summary.totalUpdated}`,
     `🎯 <b>Matches encontrados:</b> ${summary.totalMatches}`,
     `📨 <b>Alertas enviadas:</b> ${summary.totalAlerts}`,
-    '',
+    "",
     `<b>📡 Matches por radar:</b>`,
     ...Object.entries(summary.matchesByRadar).map(
-      ([key, count]) => `  • ${key}: ${count}`
+      ([key, count]) => `  • ${key}: ${count}`,
     ),
-    '',
+    "",
   ];
 
   if (summary.topDependencies.length > 0) {
-    lines.push('<b>🏛 Dependencias más activas:</b>');
+    lines.push("<b>🏛 Dependencias más activas:</b>");
     summary.topDependencies.slice(0, 5).forEach((d, i) => {
       lines.push(`  ${i + 1}. ${d.name} (${d.count})`);
     });
-    lines.push('');
+    lines.push("");
   }
 
   if (summary.technicalIncidents.length > 0) {
-    lines.push('<b>⚠️ Incidencias técnicas:</b>');
+    lines.push("<b>⚠️ Incidencias técnicas:</b>");
     summary.technicalIncidents.forEach((inc) => lines.push(`  • ${inc}`));
-    lines.push('');
+    lines.push("");
   }
 
-  return truncateForTelegram(lines.join('\n'));
+  return truncateForTelegram(lines.join("\n"));
 }
 
 // ─── Envíos de alto nivel ─────────────────────────────────────────────────────
 
-export async function sendMatchAlert(alert: EnrichedAlert): Promise<number | null> {
-  const message = alert.alertType === 'status_change'
-    ? formatStatusChangeAlert(alert, alert.procurement.status)
-    : formatMatchAlert(alert);
+export async function sendMatchAlert(
+  alert: EnrichedAlert,
+): Promise<number | null> {
+  const message =
+    alert.alertType === "status_change"
+      ? formatStatusChangeAlert(alert, alert.procurement.status)
+      : formatMatchAlert(alert);
 
-  return sendTelegramMessage(message, 'HTML');
+  return sendTelegramMessage(message, "HTML");
 }
 
-export async function sendDailySummary(summary: DailySummary): Promise<number | null> {
+export async function sendDailySummary(
+  summary: DailySummary,
+): Promise<number | null> {
   const message = formatDailySummaryMessage(summary);
-  return sendTelegramMessage(message, 'HTML');
+  return sendTelegramMessage(message, "HTML");
 }
 
 export async function sendSystemMessage(text: string): Promise<number | null> {
-  return sendTelegramMessage(text, 'HTML');
+  return sendTelegramMessage(text, "HTML");
 }

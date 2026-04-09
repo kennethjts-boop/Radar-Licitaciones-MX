@@ -1,4 +1,4 @@
 /**
  * NORMALIZERS — Barrel exports
  */
-export * from './procurement.normalizer';
+export * from "./procurement.normalizer";

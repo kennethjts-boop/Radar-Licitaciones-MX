@@ -2,19 +2,24 @@
  * MATCHER — Evalúa expedientes contra radares.
  * Score entre 0.0 y 1.0 con explicabilidad completa.
  */
-import { createModuleLogger } from '../core/logger';
-import { findMatchingTerms, findExcludedTerms } from '../core/text';
-import type { NormalizedProcurement, MatchResult, RadarConfig, MatchLevel } from '../types/procurement';
+import { createModuleLogger } from "../core/logger";
+import { findMatchingTerms, findExcludedTerms } from "../core/text";
+import type {
+  NormalizedProcurement,
+  MatchResult,
+  RadarConfig,
+  MatchLevel,
+} from "../types/procurement";
 
-const log = createModuleLogger('matcher');
+const log = createModuleLogger("matcher");
 
 /**
  * Convierte score numérico a nivel de match.
  */
 function scoreToLevel(score: number): MatchLevel {
-  if (score >= 0.7) return 'high';
-  if (score >= 0.4) return 'medium';
-  return 'low';
+  if (score >= 0.7) return "high";
+  if (score >= 0.4) return "medium";
+  return "low";
 }
 
 /**
@@ -25,7 +30,7 @@ export function evaluateProcurementAgainstRadar(
   procurement: NormalizedProcurement,
   radar: RadarConfig,
   isNew: boolean,
-  previousStatus: NormalizedProcurement['status'] | null = null
+  previousStatus: NormalizedProcurement["status"] | null = null,
 ): MatchResult | null {
   const canonical = procurement.canonicalText;
 
@@ -40,8 +45,12 @@ export function evaluateProcurementAgainstRadar(
   for (const rule of requiredRules) {
     if (!evaluateRule(procurement, rule)) {
       log.trace(
-        { radarKey: radar.key, externalId: procurement.externalId, rule: rule.fieldName },
-        'Regla obligatoria no cumplida — descartando'
+        {
+          radarKey: radar.key,
+          externalId: procurement.externalId,
+          rule: rule.fieldName,
+        },
+        "Regla obligatoria no cumplida — descartando",
       );
       return null;
     }
@@ -58,7 +67,10 @@ export function evaluateProcurementAgainstRadar(
 
   // Contribución de términos incluidos
   if (radar.includeTerms.length > 0) {
-    const termRatio = Math.min(matchedTerms.length / Math.max(radar.includeTerms.length * 0.1, 1), 1);
+    const termRatio = Math.min(
+      matchedTerms.length / Math.max(radar.includeTerms.length * 0.1, 1),
+      1,
+    );
     score += termRatio * 0.5;
     totalWeight += 0.5;
   }
@@ -78,9 +90,10 @@ export function evaluateProcurementAgainstRadar(
   const finalScore = totalWeight > 0 ? Math.min(score / totalWeight, 1.0) : 0;
 
   // Penalizar por términos excluidos encontrados
-  const penalizedScore = excludedFound.length > 0
-    ? finalScore * (1 - 0.3 * Math.min(excludedFound.length, 3) / 3)
-    : finalScore;
+  const penalizedScore =
+    excludedFound.length > 0
+      ? finalScore * (1 - (0.3 * Math.min(excludedFound.length, 3)) / 3)
+      : finalScore;
 
   if (penalizedScore < radar.minScore) {
     return null;
@@ -96,7 +109,8 @@ export function evaluateProcurementAgainstRadar(
     matchLevel,
     score: penalizedScore,
     isNew,
-    isStatusChange: previousStatus !== null && previousStatus !== procurement.status,
+    isStatusChange:
+      previousStatus !== null && previousStatus !== procurement.status,
   });
 
   return {
@@ -108,7 +122,8 @@ export function evaluateProcurementAgainstRadar(
     excludedTerms: excludedFound,
     explanation,
     isNew,
-    isStatusChange: previousStatus !== null && previousStatus !== procurement.status,
+    isStatusChange:
+      previousStatus !== null && previousStatus !== procurement.status,
     previousStatus,
   };
 }
@@ -116,7 +131,10 @@ export function evaluateProcurementAgainstRadar(
 /**
  * Evalúa una regla individual contra el expediente.
  */
-function evaluateRule(procurement: NormalizedProcurement, rule: RadarConfig['rules'][0]): boolean {
+function evaluateRule(
+  procurement: NormalizedProcurement,
+  rule: RadarConfig["rules"][0],
+): boolean {
   const fieldValue = getFieldValue(procurement, rule.fieldName);
   if (fieldValue === null) return false;
 
@@ -124,29 +142,29 @@ function evaluateRule(procurement: NormalizedProcurement, rule: RadarConfig['rul
   const ruleValue = rule.value;
 
   switch (rule.operator) {
-    case 'contains':
-      return typeof ruleValue === 'string'
+    case "contains":
+      return typeof ruleValue === "string"
         ? normalizedField.includes(ruleValue.toLowerCase())
         : false;
 
-    case 'exact':
-      return typeof ruleValue === 'string'
+    case "exact":
+      return typeof ruleValue === "string"
         ? normalizedField === ruleValue.toLowerCase()
         : false;
 
-    case 'any_of':
+    case "any_of":
       return Array.isArray(ruleValue)
         ? ruleValue.some((v) => normalizedField.includes(v.toLowerCase()))
         : normalizedField.includes((ruleValue as string).toLowerCase());
 
-    case 'none_of':
+    case "none_of":
       return Array.isArray(ruleValue)
         ? !ruleValue.some((v) => normalizedField.includes(v.toLowerCase()))
         : !normalizedField.includes((ruleValue as string).toLowerCase());
 
-    case 'regex':
+    case "regex":
       try {
-        return new RegExp(ruleValue as string, 'i').test(fieldValue);
+        return new RegExp(ruleValue as string, "i").test(fieldValue);
       } catch {
         return false;
       }
@@ -161,7 +179,7 @@ function evaluateRule(procurement: NormalizedProcurement, rule: RadarConfig['rul
  */
 function getFieldValue(
   procurement: NormalizedProcurement,
-  fieldName: string
+  fieldName: string,
 ): string | null {
   const map: Record<string, string | null> = {
     canonical_text: procurement.canonicalText,
@@ -190,25 +208,31 @@ function buildExplanation(params: {
 }): string {
   const parts: string[] = [];
 
-  parts.push(`Match ${params.matchLevel.toUpperCase()} (score: ${(params.score * 100).toFixed(0)}%) en radar "${params.radarKey}".`);
+  parts.push(
+    `Match ${params.matchLevel.toUpperCase()} (score: ${(params.score * 100).toFixed(0)}%) en radar "${params.radarKey}".`,
+  );
 
   if (params.matchedTerms.length > 0) {
-    parts.push(`Términos coincidentes: ${params.matchedTerms.slice(0, 5).join(', ')}.`);
+    parts.push(
+      `Términos coincidentes: ${params.matchedTerms.slice(0, 5).join(", ")}.`,
+    );
   }
 
   if (params.excludedFound.length > 0) {
-    parts.push(`⚠️ Términos excluidos detectados: ${params.excludedFound.join(', ')}.`);
+    parts.push(
+      `⚠️ Términos excluidos detectados: ${params.excludedFound.join(", ")}.`,
+    );
   }
 
   if (params.isNew) {
-    parts.push('Expediente nuevo — primera vez detectado.');
+    parts.push("Expediente nuevo — primera vez detectado.");
   }
 
   if (params.isStatusChange) {
-    parts.push('Cambio de estatus detectado.');
+    parts.push("Cambio de estatus detectado.");
   }
 
-  return parts.join(' ');
+  return parts.join(" ");
 }
 
 /**
@@ -219,18 +243,27 @@ export function evaluateAllRadars(
   procurement: NormalizedProcurement,
   radars: RadarConfig[],
   isNew: boolean,
-  previousStatus: NormalizedProcurement['status'] | null = null
+  previousStatus: NormalizedProcurement["status"] | null = null,
 ): MatchResult[] {
   const results: MatchResult[] = [];
 
   for (const radar of radars) {
     if (!radar.isActive) continue;
-    const result = evaluateProcurementAgainstRadar(procurement, radar, isNew, previousStatus);
+    const result = evaluateProcurementAgainstRadar(
+      procurement,
+      radar,
+      isNew,
+      previousStatus,
+    );
     if (result) {
       results.push(result);
       log.debug(
-        { radarKey: radar.key, score: result.matchScore, level: result.matchLevel },
-        'Match encontrado'
+        {
+          radarKey: radar.key,
+          score: result.matchScore,
+          level: result.matchLevel,
+        },
+        "Match encontrado",
       );
     }
   }

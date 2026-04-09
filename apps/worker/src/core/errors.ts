@@ -6,9 +6,13 @@ export class RadarError extends Error {
   public readonly code: string;
   public readonly context: Record<string, unknown>;
 
-  constructor(message: string, code: string, context: Record<string, unknown> = {}) {
+  constructor(
+    message: string,
+    code: string,
+    context: Record<string, unknown> = {},
+  ) {
     super(message);
-    this.name = 'RadarError';
+    this.name = "RadarError";
     this.code = code;
     this.context = context;
     Error.captureStackTrace(this, this.constructor);
@@ -16,40 +20,52 @@ export class RadarError extends Error {
 }
 
 export class CollectorError extends RadarError {
-  constructor(message: string, collectorKey: string, context: Record<string, unknown> = {}) {
-    super(message, 'COLLECTOR_ERROR', { collectorKey, ...context });
-    this.name = 'CollectorError';
+  constructor(
+    message: string,
+    collectorKey: string,
+    context: Record<string, unknown> = {},
+  ) {
+    super(message, "COLLECTOR_ERROR", { collectorKey, ...context });
+    this.name = "CollectorError";
   }
 }
 
 export class StorageError extends RadarError {
-  constructor(message: string, operation: string, context: Record<string, unknown> = {}) {
-    super(message, 'STORAGE_ERROR', { operation, ...context });
-    this.name = 'StorageError';
+  constructor(
+    message: string,
+    operation: string,
+    context: Record<string, unknown> = {},
+  ) {
+    super(message, "STORAGE_ERROR", { operation, ...context });
+    this.name = "StorageError";
   }
 }
 
 export class TelegramError extends RadarError {
   constructor(message: string, context: Record<string, unknown> = {}) {
-    super(message, 'TELEGRAM_ERROR', context);
-    this.name = 'TelegramError';
+    super(message, "TELEGRAM_ERROR", context);
+    this.name = "TelegramError";
   }
 }
 
 export class MatcherError extends RadarError {
-  constructor(message: string, radarKey: string, context: Record<string, unknown> = {}) {
-    super(message, 'MATCHER_ERROR', { radarKey, ...context });
-    this.name = 'MatcherError';
+  constructor(
+    message: string,
+    radarKey: string,
+    context: Record<string, unknown> = {},
+  ) {
+    super(message, "MATCHER_ERROR", { radarKey, ...context });
+    this.name = "MatcherError";
   }
 }
 
 export class TimeoutError extends RadarError {
   constructor(operation: string, timeoutMs: number) {
-    super(`Timeout en operación: ${operation} (${timeoutMs}ms)`, 'TIMEOUT', {
+    super(`Timeout en operación: ${operation} (${timeoutMs}ms)`, "TIMEOUT", {
       operation,
       timeoutMs,
     });
-    this.name = 'TimeoutError';
+    this.name = "TimeoutError";
   }
 }
 
@@ -59,7 +75,7 @@ export class TimeoutError extends RadarError {
 export async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
-  operation: string
+  operation: string,
 ): Promise<T> {
   let timer: NodeJS.Timeout;
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -85,9 +101,9 @@ export async function withRetry<T>(
   fn: () => Promise<T>,
   maxAttempts: number,
   baseDelayMs: number,
-  operationName: string
+  operationName: string,
 ): Promise<T> {
-  let lastError: Error = new Error('Unknown');
+  let lastError: Error = new Error("Unknown");
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -103,7 +119,7 @@ export async function withRetry<T>(
 
   throw new RadarError(
     `Operación "${operationName}" falló después de ${maxAttempts} intentos: ${lastError.message}`,
-    'MAX_RETRIES_EXCEEDED',
-    { lastError: lastError.message, maxAttempts }
+    "MAX_RETRIES_EXCEEDED",
+    { lastError: lastError.message, maxAttempts },
   );
 }

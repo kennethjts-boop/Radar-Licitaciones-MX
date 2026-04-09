@@ -1,18 +1,18 @@
 /**
  * DAILY SUMMARY JOB — Genera y envía el resumen de las últimas 24 horas.
  */
-import { v4 as uuidv4 } from 'uuid';
-import { createModuleLogger } from '../core/logger';
-import { todayMexicoStr, nowISO } from '../core/time';
-import { getSupabaseClient } from '../storage/client';
-import { sendDailySummary } from '../alerts/telegram.alerts';
-import { healthTracker } from '../core/healthcheck';
-import type { DailySummary } from '../types/procurement';
+import { v4 as uuidv4 } from "uuid";
+import { createModuleLogger } from "../core/logger";
+import { todayMexicoStr, nowISO } from "../core/time";
+import { getSupabaseClient } from "../storage/client";
+import { sendDailySummary } from "../alerts/telegram.alerts";
+import { healthTracker } from "../core/healthcheck";
+import type { DailySummary } from "../types/procurement";
 
-const log = createModuleLogger('daily-summary-job');
+const log = createModuleLogger("daily-summary-job");
 
 export async function runDailySummaryJob(): Promise<void> {
-  log.info('Generando resumen diario');
+  log.info("Generando resumen diario");
 
   const db = getSupabaseClient();
   const today = todayMexicoStr();
@@ -23,38 +23,38 @@ export async function runDailySummaryJob(): Promise<void> {
   try {
     // Contar expedientes vistos en las últimas 24h (por last_seen_at)
     const { count: totalSeen } = await db
-      .from('procurements')
-      .select('*', { count: 'exact', head: true })
-      .gte('last_seen_at', since);
+      .from("procurements")
+      .select("*", { count: "exact", head: true })
+      .gte("last_seen_at", since);
 
     const { count: totalNew } = await db
-      .from('procurements')
-      .select('*', { count: 'exact', head: true })
-      .gte('created_at', since);
+      .from("procurements")
+      .select("*", { count: "exact", head: true })
+      .gte("created_at", since);
 
     // Expedientes cuyo updated_at > created_at (es decir, tuvieron al menos 1 actualización)
     const { count: totalUpdated } = await db
-      .from('procurement_versions')
-      .select('*', { count: 'exact', head: true })
-      .gte('created_at', since)
-      .gt('version_number', 1);
+      .from("procurement_versions")
+      .select("*", { count: "exact", head: true })
+      .gte("created_at", since)
+      .gt("version_number", 1);
 
     const { count: totalMatches } = await db
-      .from('matches')
-      .select('*', { count: 'exact', head: true })
-      .gte('created_at', since);
+      .from("matches")
+      .select("*", { count: "exact", head: true })
+      .gte("created_at", since);
 
     const { count: totalAlerts } = await db
-      .from('alerts')
-      .select('*', { count: 'exact', head: true })
-      .gte('created_at', since)
-      .eq('telegram_status', 'sent');
+      .from("alerts")
+      .select("*", { count: "exact", head: true })
+      .gte("created_at", since)
+      .eq("telegram_status", "sent");
 
     // Matches por radar
     const { data: matchData } = await db
-      .from('matches')
-      .select('radar_id')
-      .gte('created_at', since);
+      .from("matches")
+      .select("radar_id")
+      .gte("created_at", since);
 
     const matchesByRadar: Record<string, number> = {};
     (matchData ?? []).forEach((m) => {
@@ -63,10 +63,10 @@ export async function runDailySummaryJob(): Promise<void> {
 
     // Top dependencias
     const { data: depsData } = await db
-      .from('procurements')
-      .select('dependency_name')
-      .gte('last_seen_at', since)
-      .not('dependency_name', 'is', null);
+      .from("procurements")
+      .select("dependency_name")
+      .gte("last_seen_at", since)
+      .not("dependency_name", "is", null);
 
     const depCounts: Record<string, number> = {};
     (depsData ?? []).forEach((d) => {
@@ -84,10 +84,14 @@ export async function runDailySummaryJob(): Promise<void> {
     // En Fase 1 no hay scraping — incluir nota técnica en el resumen
     const technicalIncidents: string[] = [];
     if (totalSeen === 0) {
-      technicalIncidents.push('Fase 1 activa: sin scraping todavía (Compras MX pendiente Fase 2)');
+      technicalIncidents.push(
+        "Fase 1 activa: sin scraping todavía (Compras MX pendiente Fase 2)",
+      );
     }
-    if (healthStatus.services.database !== 'ok') {
-      technicalIncidents.push('DB con problemas de conectividad en algún ciclo');
+    if (healthStatus.services.database !== "ok") {
+      technicalIncidents.push(
+        "DB con problemas de conectividad en algún ciclo",
+      );
     }
 
     const summary: DailySummary = {
@@ -100,11 +104,11 @@ export async function runDailySummaryJob(): Promise<void> {
       matchesByRadar,
       topDependencies,
       technicalIncidents,
-      telegramMessage: '',
+      telegramMessage: "",
     };
 
     // Guardar en DB
-    await db.from('daily_summaries').insert({
+    await db.from("daily_summaries").insert({
       id: uuidv4(),
       summary_date: today,
       total_seen: summary.totalSeen,
@@ -119,8 +123,11 @@ export async function runDailySummaryJob(): Promise<void> {
     // Enviar a Telegram
     await sendDailySummary(summary);
 
-    log.info({ today, totalSeen, totalNew, totalMatches }, 'Resumen diario enviado');
+    log.info(
+      { today, totalSeen, totalNew, totalMatches },
+      "Resumen diario enviado",
+    );
   } catch (err) {
-    log.error({ err }, 'Error generando resumen diario');
+    log.error({ err }, "Error generando resumen diario");
   }
 }

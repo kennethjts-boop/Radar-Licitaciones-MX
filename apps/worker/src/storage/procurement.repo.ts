@@ -1,16 +1,20 @@
 /**
  * PROCUREMENT REPOSITORY — Operaciones de lectura/escritura de expedientes.
  */
-import { v4 as uuidv4 } from 'uuid';
-import { getSupabaseClient } from './client';
-import { StorageError } from '../core/errors';
-import { nowISO } from '../core/time';
-import { createModuleLogger } from '../core/logger';
-import { detectChangedFields } from '../core/fingerprints';
-import type { NormalizedProcurement } from '../types/procurement';
-import type { DbProcurement, DbProcurementVersion, DbAttachment } from '../types/database';
+import { v4 as uuidv4 } from "uuid";
+import { getSupabaseClient } from "./client";
+import { StorageError } from "../core/errors";
+import { nowISO } from "../core/time";
+import { createModuleLogger } from "../core/logger";
+import { detectChangedFields } from "../core/fingerprints";
+import type { NormalizedProcurement } from "../types/procurement";
+import type {
+  DbProcurement,
+  DbProcurementVersion,
+  DbAttachment,
+} from "../types/database";
 
-const log = createModuleLogger('procurement-repo');
+const log = createModuleLogger("procurement-repo");
 
 // ─── Upsert principal ────────────────────────────────────────────────────────
 
@@ -31,20 +35,23 @@ export interface UpsertProcurementResult {
  */
 export async function upsertProcurement(
   normalized: NormalizedProcurement,
-  sourceId: string
+  sourceId: string,
 ): Promise<UpsertProcurementResult> {
   const db = getSupabaseClient();
 
   // Buscar existente
   const { data: existing, error: findError } = await db
-    .from('procurements')
-    .select('*')
-    .eq('source_id', sourceId)
-    .eq('external_id', normalized.externalId)
+    .from("procurements")
+    .select("*")
+    .eq("source_id", sourceId)
+    .eq("external_id", normalized.externalId)
     .single();
 
-  if (findError && findError.code !== 'PGRST116') {
-    throw new StorageError(`Error buscando procurement: ${findError.message}`, 'find');
+  if (findError && findError.code !== "PGRST116") {
+    throw new StorageError(
+      `Error buscando procurement: ${findError.message}`,
+      "find",
+    );
   }
 
   const now = nowISO();
@@ -52,17 +59,21 @@ export async function upsertProcurement(
   // ── Caso 1: No existe → insertar ──────────────────────────────────────────
   if (!existing) {
     const id = uuidv4();
-    
+
     // Insertar RAW
-    const { data: rawData, error: rawError } = await db.from('raw_items').insert({
-      source_id: sourceId,
-      external_id: normalized.externalId,
-      raw_data: normalized.rawJson,
-      fetched_at: now
-    }).select('id').single();
+    const { data: rawData, error: rawError } = await db
+      .from("raw_items")
+      .insert({
+        source_id: sourceId,
+        external_id: normalized.externalId,
+        raw_data: normalized.rawJson,
+        fetched_at: now,
+      })
+      .select("id")
+      .single();
 
     if (rawError) {
-      log.warn({ rawError }, 'Error insertando raw_item, continuando...');
+      log.warn({ rawError }, "Error insertando raw_item, continuando...");
     }
 
     const newRecord: DbProcurement = {
@@ -92,14 +103,20 @@ export async function upsertProcurement(
       lightweight_fingerprint: normalized.lightweightFingerprint,
       last_seen_at: now,
       last_detail_checked_at: now,
-      last_attachments_checked_at: normalized.attachments.length > 0 ? now : null,
+      last_attachments_checked_at:
+        normalized.attachments.length > 0 ? now : null,
       created_at: now,
       updated_at: now,
     };
 
-    const { error: insertError } = await db.from('procurements').insert(newRecord);
+    const { error: insertError } = await db
+      .from("procurements")
+      .insert(newRecord);
     if (insertError) {
-      throw new StorageError(`Error insertando procurement: ${insertError.message}`, 'insert');
+      throw new StorageError(
+        `Error insertando procurement: ${insertError.message}`,
+        "insert",
+      );
     }
 
     // Insertar versión inicial
@@ -109,16 +126,25 @@ export async function upsertProcurement(
       await insertAttachments(id, null, normalized.attachments);
     }
 
-    log.info({ externalId: normalized.externalId, title: normalized.title }, 'Nuevo expediente');
-    return { isNew: true, isUpdated: false, procurementId: id, changedFields: {}, versionNumber: 1 };
+    log.info(
+      { externalId: normalized.externalId, title: normalized.title },
+      "Nuevo expediente",
+    );
+    return {
+      isNew: true,
+      isUpdated: false,
+      procurementId: id,
+      changedFields: {},
+      versionNumber: 1,
+    };
   }
 
   // ── Caso 2: Ya existe, sin cambios ────────────────────────────────────────
   if (existing.canonical_fingerprint === normalized.canonicalFingerprint) {
     await db
-      .from('procurements')
+      .from("procurements")
       .update({ last_seen_at: now })
-      .eq('id', existing.id);
+      .eq("id", existing.id);
 
     return {
       isNew: false,
@@ -154,7 +180,7 @@ export async function upsertProcurement(
 
   // Actualizar registro principal
   const { error: updateError } = await db
-    .from('procurements')
+    .from("procurements")
     .update({
       expediente_id: normalized.expedienteId,
       licitation_number: normalized.licitationNumber,
@@ -178,27 +204,39 @@ export async function upsertProcurement(
       lightweight_fingerprint: normalized.lightweightFingerprint,
       last_seen_at: now,
       last_detail_checked_at: now,
-      last_attachments_checked_at: normalized.attachments.length > 0 ? now : null,
+      last_attachments_checked_at:
+        normalized.attachments.length > 0 ? now : null,
       updated_at: now,
     })
-    .eq('id', existing.id);
+    .eq("id", existing.id);
 
   if (updateError) {
-    throw new StorageError(`Error actualizando procurement: ${updateError.message}`, 'update');
+    throw new StorageError(
+      `Error actualizando procurement: ${updateError.message}`,
+      "update",
+    );
   }
 
   // Obtener versión actual
   const { count } = await db
-    .from('procurement_versions')
-    .select('*', { count: 'exact', head: true })
-    .eq('procurement_id', existing.id);
+    .from("procurement_versions")
+    .select("*", { count: "exact", head: true })
+    .eq("procurement_id", existing.id);
 
   const nextVersion = (count ?? 0) + 1;
-  await insertProcurementVersion(existing.id, nextVersion, normalized, changedFields);
+  await insertProcurementVersion(
+    existing.id,
+    nextVersion,
+    normalized,
+    changedFields,
+  );
 
   log.info(
-    { externalId: normalized.externalId, changedFields: Object.keys(changedFields) },
-    'Expediente actualizado'
+    {
+      externalId: normalized.externalId,
+      changedFields: Object.keys(changedFields),
+    },
+    "Expediente actualizado",
   );
 
   return {
@@ -216,7 +254,7 @@ async function insertProcurementVersion(
   procurementId: string,
   versionNumber: number,
   normalized: NormalizedProcurement,
-  changedFields?: Record<string, { prev: unknown; next: unknown }>
+  changedFields?: Record<string, { prev: unknown; next: unknown }>,
 ): Promise<void> {
   const db = getSupabaseClient();
   const version: DbProcurementVersion = {
@@ -234,9 +272,12 @@ async function insertProcurementVersion(
     created_at: nowISO(),
   };
 
-  const { error } = await db.from('procurement_versions').insert(version);
+  const { error } = await db.from("procurement_versions").insert(version);
   if (error) {
-    throw new StorageError(`Error insertando versión: ${error.message}`, 'insert_version');
+    throw new StorageError(
+      `Error insertando versión: ${error.message}`,
+      "insert_version",
+    );
   }
 }
 
@@ -245,7 +286,7 @@ async function insertProcurementVersion(
 async function insertAttachments(
   procurementId: string,
   versionId: string | null,
-  attachments: NormalizedProcurement['attachments']
+  attachments: NormalizedProcurement["attachments"],
 ): Promise<void> {
   const db = getSupabaseClient();
   const now = nowISO();
@@ -262,42 +303,53 @@ async function insertAttachments(
     created_at: now,
   }));
 
-  const { error } = await db.from('attachments').insert(records);
+  const { error } = await db.from("attachments").insert(records);
   if (error) {
-    log.warn({ error: error.message }, 'Error insertando adjuntos');
+    log.warn({ error: error.message }, "Error insertando adjuntos");
   }
 }
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
-export async function findProcurementById(id: string): Promise<DbProcurement | null> {
+export async function findProcurementById(
+  id: string,
+): Promise<DbProcurement | null> {
   const { data, error } = await getSupabaseClient()
-    .from('procurements')
-    .select('*')
-    .eq('id', id)
+    .from("procurements")
+    .select("*")
+    .eq("id", id)
     .single();
 
-  if (error && error.code !== 'PGRST116') {
-    throw new StorageError(`Error buscando procurement: ${error.message}`, 'find_by_id');
+  if (error && error.code !== "PGRST116") {
+    throw new StorageError(
+      `Error buscando procurement: ${error.message}`,
+      "find_by_id",
+    );
   }
   return data ?? null;
 }
 
-export async function searchProcurements(query: string, limit = 10): Promise<DbProcurement[]> {
+export async function searchProcurements(
+  query: string,
+  limit = 10,
+): Promise<DbProcurement[]> {
   const { data, error } = await getSupabaseClient()
-    .from('procurements')
-    .select('*')
+    .from("procurements")
+    .select("*")
     .or(
       `title.ilike.%${query}%,` +
-      `dependency_name.ilike.%${query}%,` +
-      `expediente_id.ilike.%${query}%,` +
-      `licitation_number.ilike.%${query}%`
+        `dependency_name.ilike.%${query}%,` +
+        `expediente_id.ilike.%${query}%,` +
+        `licitation_number.ilike.%${query}%`,
     )
-    .order('last_seen_at', { ascending: false })
+    .order("last_seen_at", { ascending: false })
     .limit(limit);
 
   if (error) {
-    throw new StorageError(`Error buscando procurements: ${error.message}`, 'search');
+    throw new StorageError(
+      `Error buscando procurements: ${error.message}`,
+      "search",
+    );
   }
   return data ?? [];
 }

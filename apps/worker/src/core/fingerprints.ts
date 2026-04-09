@@ -2,14 +2,14 @@
  * FINGERPRINTS — Hash determinista para deduplicación.
  * SHA-256 sobre texto canónico normalizado.
  */
-import crypto from 'crypto';
-import { normalizeText } from './text';
+import crypto from "crypto";
+import { normalizeText } from "./text";
 
 /**
  * Genera SHA-256 hex de un string.
  */
 export function sha256(input: string): string {
-  return crypto.createHash('sha256').update(input, 'utf8').digest('hex');
+  return crypto.createHash("sha256").update(input, "utf8").digest("hex");
 }
 
 /**
@@ -24,13 +24,13 @@ export function buildProcurementFingerprint(params: {
   expedienteId?: string | null;
 }): string {
   const parts = [
-    params.expedienteId ?? '',
+    params.expedienteId ?? "",
     params.title,
-    params.description ?? '',
-    params.dependencyName ?? '',
-    params.buyingUnit ?? '',
+    params.description ?? "",
+    params.dependencyName ?? "",
+    params.buyingUnit ?? "",
   ];
-  const canonical = normalizeText(parts.join('|'));
+  const canonical = normalizeText(parts.join("|"));
   return sha256(canonical);
 }
 
@@ -51,21 +51,24 @@ export function buildVersionFingerprint(params: {
   const parts = [
     params.status,
     params.title,
-    params.description ?? '',
-    params.publicationDate ?? '',
-    params.openingDate ?? '',
-    String(params.amount ?? ''),
-    params.licitationNumber ?? '',
+    params.description ?? "",
+    params.publicationDate ?? "",
+    params.openingDate ?? "",
+    String(params.amount ?? ""),
+    params.licitationNumber ?? "",
     params.sourceUrl,
   ];
-  const canonical = normalizeText(parts.join('|'));
+  const canonical = normalizeText(parts.join("|"));
   return sha256(canonical);
 }
 
 /**
  * Fingerprint de adjunto: URL + nombre de archivo.
  */
-export function buildAttachmentFingerprint(fileUrl: string, fileName: string): string {
+export function buildAttachmentFingerprint(
+  fileUrl: string,
+  fileName: string,
+): string {
   return sha256(`${fileName}|${fileUrl}`);
 }
 
@@ -83,7 +86,7 @@ export function buildRawFingerprint(raw: Record<string, unknown>): string {
  */
 export function detectChangedFields(
   prev: Record<string, unknown>,
-  next: Record<string, unknown>
+  next: Record<string, unknown>,
 ): Record<string, { prev: unknown; next: unknown }> {
   const changed: Record<string, { prev: unknown; next: unknown }> = {};
   const allKeys = new Set([...Object.keys(prev), ...Object.keys(next)]);
