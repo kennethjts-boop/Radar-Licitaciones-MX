@@ -40,8 +40,61 @@ import { BrowserManager } from "../collectors/comprasmx/browser.manager";
 import { ComprasMxNavigator } from "../collectors/comprasmx/comprasmx.navigator";
 import { downloadAttachmentsFromDetail } from "../collectors/comprasmx/comprasmx.downloader";
 import { uploadAttachment } from "../storage/storage.service";
+import { extractTextFromPdf } from "../utils/pdf.util";
+import { analyzeTenderDocument } from "../ai/openai.service";
+import { sendTelegramMessage } from "../alerts/telegram.alerts";
+import { truncateForTelegram } from "../core/text";
 
 const log = createModuleLogger("collect-job");
+const AI_VIP_ALERT_SCORE_THRESHOLD = 70;
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatAiVipAlertMessage(params: {
+  score: number;
+  procurementTitle: string;
+  procurementRef: string;
+  fileName: string;
+  summary: string;
+  opportunities: string[];
+  risks: string[];
+  link: string;
+}): string {
+  const opportunities =
+    params.opportunities.length > 0
+      ? params.opportunities.slice(0, 3).map((item) => `• ${escapeHtml(item)}`)
+      : ["• Sin oportunidades explícitas detectadas."];
+  const risks =
+    params.risks.length > 0
+      ? params.risks.slice(0, 3).map((item) => `• ${escapeHtml(item)}`)
+      : ["• Sin riesgos explícitos detectados."];
+
+  const lines: string[] = [
+    `🚨 <b>ALERTA DE OPORTUNIDAD: ${params.score}/100</b> 🚨`,
+    `📄 <b>Licitación:</b> ${escapeHtml(params.procurementTitle)}`,
+    `🆔 <b>Referencia:</b> ${escapeHtml(params.procurementRef)}`,
+    `📁 <b>Archivo:</b> ${escapeHtml(params.fileName)}`,
+    "",
+    `📝 <b>Resumen:</b> ${escapeHtml(params.summary || "Sin resumen disponible.")}`,
+    "",
+    "✅ <b>Oportunidades:</b>",
+    ...opportunities,
+    "",
+    "⚠️ <b>Riesgos:</b>",
+    ...risks,
+    "",
+    `🔗 <b>Link:</b> ${escapeHtml(params.link)}`,
+  ];
+
+  return truncateForTelegram(lines.join("\n"));
+}
 
 // Source ID para comprasmx — resuelto en bootstrap y propagado aquí
 let _comprasMxSourceId: string | null = null;
@@ -57,6 +110,23 @@ async function processAttachmentsForProcurement(
   sourceUrl: string,
 ): Promise<void> {
   const db = getSupabaseClient();
+  const { data: procurementRow, error: procurementErr } = await db
+    .from("procurements")
+    .select("title, licitation_number, source_url")
+    .eq("id", procurementId)
+    .maybeSingle();
+
+  if (procurementErr) {
+    log.warn(
+      { err: procurementErr, procurementId },
+      "No se pudo cargar metadata de procurement para alertas IA",
+    );
+  }
+
+  const procurementTitle = procurementRow?.title ?? `Procurement ${procurementId}`;
+  const procurementRef = procurementRow?.licitation_number ?? procurementId;
+  const procurementLink = procurementRow?.source_url ?? sourceUrl;
+
   const { data: existingRows, error: existingErr } = await db
     .from("attachments")
     .select("file_name")
@@ -101,18 +171,98 @@ async function processAttachmentsForProcurement(
           file.tempFilePath,
         );
 
-        const { error: insertErr } = await db.from("attachments").insert({
-          procurement_id: procurementId,
-          file_name: file.fileName,
-          storage_path: uploaded.storagePath,
-          file_size_bytes: uploaded.fileSizeBytes,
-          file_hash: uploaded.fileHash,
-          file_url: uploaded.storagePath,
-          source_url: sourceUrl,
-        });
+        const { data: insertedAttachment, error: insertErr } = await db
+          .from("attachments")
+          .insert({
+            procurement_id: procurementId,
+            file_name: file.fileName,
+            storage_path: uploaded.storagePath,
+            file_size_bytes: uploaded.fileSizeBytes,
+            file_hash: uploaded.fileHash,
+            file_url: uploaded.storagePath,
+            source_url: sourceUrl,
+          })
+          .select("id")
+          .single();
 
         if (insertErr) {
           throw new Error(insertErr.message);
+        }
+
+        try {
+          const extractedText = await extractTextFromPdf(file.tempFilePath);
+
+          if (!extractedText.trim()) {
+            log.warn(
+              {
+                event: "AI_ANALYSIS_SKIPPED_NO_TEXT",
+                procurementId,
+                fileName: file.fileName,
+              },
+              "PDF sin texto legible, requiere OCR (Omitiendo IA)",
+            );
+          } else {
+            const analysis = await analyzeTenderDocument(extractedText);
+
+            const { error: analysisInsertErr } = await db
+              .from("document_analysis")
+              .insert({
+                attachment_id: insertedAttachment.id,
+                score: analysis.score,
+                summary: analysis.summary,
+                opportunities: analysis.opportunities,
+                risks: analysis.risks,
+              });
+
+            if (analysisInsertErr) {
+              throw new Error(analysisInsertErr.message);
+            }
+
+            if (analysis.score >= AI_VIP_ALERT_SCORE_THRESHOLD) {
+              const vipMessage = formatAiVipAlertMessage({
+                score: analysis.score,
+                procurementTitle,
+                procurementRef,
+                fileName: file.fileName,
+                summary: analysis.summary,
+                opportunities: analysis.opportunities,
+                risks: analysis.risks,
+                link: procurementLink,
+              });
+
+              await sendTelegramMessage(vipMessage, "HTML");
+              log.info(
+                {
+                  event: "AI_VIP_ALERT_SENT",
+                  score: analysis.score,
+                  threshold: AI_VIP_ALERT_SCORE_THRESHOLD,
+                  procurementId,
+                  fileName: file.fileName,
+                },
+                "Alerta VIP de IA enviada a Telegram",
+              );
+            }
+
+            log.info(
+              {
+                event: "AI_ANALYSIS_COMPLETED",
+                score: analysis.score,
+                procurementId,
+                fileName: file.fileName,
+              },
+              "Análisis de IA completado para adjunto",
+            );
+          }
+        } catch (aiErr) {
+          log.warn(
+            {
+              event: "AI_ANALYSIS_FAILED",
+              err: aiErr,
+              procurementId,
+              fileName: file.fileName,
+            },
+            "Fallo en análisis IA del adjunto; continuando pipeline",
+          );
         }
 
         existingFileNames.add(file.fileName);
@@ -121,6 +271,10 @@ async function processAttachmentsForProcurement(
           { err, procurementId, fileName: file.fileName },
           "Error procesando adjunto; continuando con el siguiente",
         );
+      } finally {
+        if (existsSync(file.tempFilePath)) {
+          unlinkSync(file.tempFilePath);
+        }
       }
     }
   });
