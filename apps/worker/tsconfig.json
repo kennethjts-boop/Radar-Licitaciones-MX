@@ -1,0 +1,41 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "lib": ["ES2022"],
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "removeComments": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "moduleResolution": "node",
+    "baseUrl": ".",
+    "paths": {
+      "@core/*": ["src/core/*"],
+      "@collectors/*": ["src/collectors/*"],
+      "@normalizers/*": ["src/normalizers/*"],
+      "@matchers/*": ["src/matchers/*"],
+      "@helpers/*": ["src/helpers/*"],
+      "@radars/*": ["src/radars/*"],
+      "@enrichers/*": ["src/enrichers/*"],
+      "@alerts/*": ["src/alerts/*"],
+      "@commands/*": ["src/commands/*"],
+      "@storage/*": ["src/storage/*"],
+      "@jobs/*": ["src/jobs/*"],
+      "@types/*": ["src/types/*"],
+      "@config/*": ["src/config/*"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+}

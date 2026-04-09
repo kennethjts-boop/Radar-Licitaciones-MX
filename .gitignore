@@ -1,0 +1,49 @@
+# ── Entorno ──────────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Dependencias ──────────────────────────────────────────────────────────────
+node_modules/
+**/node_modules/
+
+# ── Build y compilación ───────────────────────────────────────────────────────
+dist/
+build/
+*.js.map
+*.d.ts.map
+*.tsbuildinfo
+
+# ── Sistema operativo ─────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Tests y cobertura ─────────────────────────────────────────────────────────
+coverage/
+.nyc_output/
+
+# ── Playwright ────────────────────────────────────────────────────────────────
+playwright-report/
+test-results/
+.playwright/
+/ms-playwright/
+playwright/.auth/
+
+# ── IDEs ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Railway / CI ──────────────────────────────────────────────────────────────
+.railway/
