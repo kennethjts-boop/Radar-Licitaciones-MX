@@ -1,6 +1,7 @@
 import path from "path";
 import type { Page } from "playwright";
 import { createModuleLogger } from "../../core/logger";
+import { toErrorMessage, withRetries } from "../../utils/retry.util";
 
 const log = createModuleLogger("comprasmx-downloader");
 
@@ -11,6 +12,7 @@ export interface DownloadedAttachment {
 
 export interface DownloadAttachmentsOptions {
   timeoutMs?: number;
+  procurementId?: string;
 }
 
 const ATTACHMENT_TRIGGER_SELECTOR = [
@@ -51,6 +53,7 @@ export async function downloadAttachmentsFromDetail(
   options: DownloadAttachmentsOptions = {},
 ): Promise<DownloadedAttachment[]> {
   const timeoutMs = options.timeoutMs ?? 45_000;
+  const procurementId = options.procurementId ?? "unknown";
   const triggers = page.locator(ATTACHMENT_TRIGGER_SELECTOR);
   const total = await triggers.count();
   const results: DownloadedAttachment[] = [];
@@ -67,24 +70,64 @@ export async function downloadAttachmentsFromDetail(
       const label = ((await trigger.innerText().catch(() => "")) || "").trim();
       const fallbackName = normalizeFileName(label) || `adjunto_${i + 1}`;
 
-      const downloadPromise = page.waitForEvent("download", { timeout: timeoutMs });
-      await trigger.click({ timeout: timeoutMs });
-      const download = await downloadPromise;
+      const downloaded = await withRetries(
+        async (attempt) => {
+          const downloadPromise = page.waitForEvent("download", { timeout: timeoutMs });
+          await trigger.click({ timeout: timeoutMs });
+          const download = await downloadPromise;
 
-      const tempFilePath = await download.path();
-      if (!tempFilePath) {
-        throw new Error("Playwright no devolvió tempFilePath del archivo");
-      }
+          const tempFilePath = await download.path();
+          if (!tempFilePath) {
+            throw new Error("Playwright no devolvió tempFilePath del archivo");
+          }
 
-      const suggestedName =
-        normalizeFileName(download.suggestedFilename()) || `adjunto_${i + 1}`;
-      const fileName = ensureExtension(fallbackName, suggestedName);
+          const suggestedName =
+            normalizeFileName(download.suggestedFilename()) || `adjunto_${i + 1}`;
+          const fileName = ensureExtension(fallbackName, suggestedName);
 
-      results.push({ fileName, tempFilePath });
-      log.info({ fileName, tempFilePath }, "Descarga de adjunto completada");
+          return { fileName, tempFilePath, attempt };
+        },
+        {
+          maxAttempts: 3,
+          initialDelayMs: 1_000,
+          backoffMultiplier: 2,
+          onRetry: async (error, attempt, delayMs) => {
+            log.warn(
+              {
+                event: "DOWNLOAD_RETRY",
+                attempt,
+                procurementId,
+                fileName: fallbackName,
+                delayMs,
+                error: toErrorMessage(error),
+              },
+              "Reintentando descarga de adjunto",
+            );
+          },
+        },
+      );
+
+      results.push({ fileName: downloaded.fileName, tempFilePath: downloaded.tempFilePath });
+      log.info(
+        {
+          event: "DOWNLOAD_COMPLETED",
+          attempt: downloaded.attempt,
+          procurementId,
+          fileName: downloaded.fileName,
+          tempFilePath: downloaded.tempFilePath,
+        },
+        "Descarga de adjunto completada",
+      );
     } catch (err) {
       log.warn(
-        { err, index: i, timeoutMs },
+        {
+          event: "DOWNLOAD_FAILED",
+          attempt: 3,
+          procurementId,
+          fileName: `adjunto_${i + 1}`,
+          timeoutMs,
+          error: toErrorMessage(err),
+        },
         "Falló descarga de adjunto; se continúa con el siguiente",
       );
       continue;

@@ -3,6 +3,7 @@ import { basename } from "path";
 import { createHash } from "crypto";
 import { createModuleLogger } from "../core/logger";
 import { getSupabaseClient } from "./client";
+import { toErrorMessage, withRetries } from "../utils/retry.util";
 
 const log = createModuleLogger("storage-service");
 
@@ -37,16 +38,50 @@ export async function uploadAttachment(
   const storagePath = `${procurementId}/${safeFileName}`;
 
   try {
-    const stream = createReadStream(tempFilePath);
-    const { error } = await db.storage
-      .from("tender-documents")
-      .upload(storagePath, stream, {
-        upsert: false,
-      });
+    await withRetries(
+      async (attempt) => {
+        const stream = createReadStream(tempFilePath);
+        const { error } = await db.storage
+          .from("tender-documents")
+          .upload(storagePath, stream, {
+            upsert: false,
+          });
 
-    if (error) {
-      throw new Error(error.message);
-    }
+        if (error) {
+          throw new Error(error.message);
+        }
+
+        log.debug(
+          {
+            event: "STORAGE_UPLOAD_SUCCESS",
+            attempt,
+            procurementId,
+            fileName: safeFileName,
+            storagePath,
+          },
+          "Upload de adjunto completado en intento",
+        );
+      },
+      {
+        maxAttempts: 3,
+        initialDelayMs: 1_000,
+        backoffMultiplier: 2,
+        onRetry: async (error, attempt, delayMs) => {
+          log.warn(
+            {
+              event: "STORAGE_UPLOAD_RETRY",
+              attempt,
+              procurementId,
+              fileName: safeFileName,
+              storagePath,
+              delayMs,
+              error: toErrorMessage(error),
+            },
+            "Reintentando upload de adjunto",
+          );
+        },
+      },
+    );
 
     const fileSizeBytes = statSync(tempFilePath).size;
     const fileHash = await calculateFileHash(tempFilePath);
@@ -64,7 +99,15 @@ export async function uploadAttachment(
     return { storagePath, fileSizeBytes, fileHash };
   } catch (err) {
     log.error(
-      { err, procurementId, fileName: safeFileName, tempFilePath },
+      {
+        event: "STORAGE_UPLOAD_FAILED",
+        attempt: 3,
+        procurementId,
+        fileName: safeFileName,
+        storagePath,
+        tempFilePath,
+        error: toErrorMessage(err),
+      },
       "Error subiendo adjunto a Storage",
     );
     throw err;
