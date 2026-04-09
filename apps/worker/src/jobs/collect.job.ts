@@ -48,6 +48,7 @@ import { extractTextFromPdf, chunkText } from "../utils/pdf.util";
 import { analyzeTenderDocument, generateEmbedding } from "../ai/openai.service";
 import { BUSINESS_PROFILE } from "../config/business_profile";
 import { sanitizeForKeywordRegex } from "../core/text";
+import { sendCapufePeajeDeepReportToTelegram } from "../scripts/capufe-peaje-deep-report";
 
 const log = createModuleLogger("collect-job");
 const AI_VIP_ALERT_SCORE_THRESHOLD = 70;
@@ -56,6 +57,7 @@ const RAG_MATCH_THRESHOLD = 0.7;
 const RAG_MATCH_COUNT = 3;
 const MAX_HISTORICAL_CONTEXT_CHARS = 2_000;
 const CATEGORY_NONE = "NONE";
+const CAPUFE_DEEP_REPORT_TERMS = ["capufe", "peaje", "bolet", "papel term", "rollo term", "caseta"];
 
 // Source ID para comprasmx — resuelto en bootstrap y propagado aquí
 let _comprasMxSourceId: string | null = null;
@@ -546,6 +548,7 @@ export async function runCollectJob(): Promise<void> {
     let itemsCreated = 0;
     let itemsUpdated = 0;
     let totalMatches = 0;
+    const capufeDeepReportsSent = new Set<string>();
     let errorMessage: string | null = null;
     let collectResult: ComprasMxCollectResult | null = null;
 
@@ -599,6 +602,38 @@ export async function runCollectJob(): Promise<void> {
             upsertResult.isNew,
             previousStatus,
           );
+
+          const canonicalLower = item.canonicalText.toLowerCase();
+          const dependencyLower = (item.dependencyName ?? "").toLowerCase();
+          const isCapufeTender =
+            dependencyLower.includes("capufe") &&
+            CAPUFE_DEEP_REPORT_TERMS.some((term) => canonicalLower.includes(term));
+
+          if (isCapufeTender && !capufeDeepReportsSent.has(upsertResult.procurementId)) {
+            try {
+              const reportSent = await sendCapufePeajeDeepReportToTelegram({
+                procurementId: upsertResult.procurementId,
+                forceProcess: true,
+              });
+              if (reportSent) {
+                capufeDeepReportsSent.add(upsertResult.procurementId);
+              } else {
+                log.info(
+                  { procurementId: upsertResult.procurementId, externalId: item.externalId },
+                  "Esperando documentos de CAPUFE...",
+                );
+              }
+            } catch (deepReportErr) {
+              log.warn(
+                {
+                  err: deepReportErr,
+                  procurementId: upsertResult.procurementId,
+                  externalId: item.externalId,
+                },
+                "Falló envío de Reporte Deep CAPUFE a Telegram",
+              );
+            }
+          }
 
           totalMatches += matches.length;
 
