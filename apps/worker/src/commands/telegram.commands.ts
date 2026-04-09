@@ -1,14 +1,19 @@
 /**
  * TELEGRAM COMMANDS — Bot listener y handlers.
  * Arranca polling solo cuando se inicializa.
+ *
+ * /prueba  → Estado real del sistema con datos de DB
+ * /buscar  → Búsqueda en expedientes
+ * /debug_resumen → Estado técnico detallado
  */
 import TelegramBot from 'node-telegram-bot-api';
 import { getConfig } from '../config/env';
 import { createModuleLogger } from '../core/logger';
 import { healthTracker } from '../core/healthcheck';
-import { formatDuration, formatMexicoDate } from '../core/time';
+import { formatDuration, formatMexicoDate, nowISO } from '../core/time';
+import { getState, STATE_KEYS } from '../core/system-state';
 import { searchProcurements } from '../storage/procurement.repo';
-import { getLastCollectRun } from '../storage/collect-run.repo';
+import { getActiveRadars } from '../radars/index';
 
 const log = createModuleLogger('commands');
 
@@ -22,51 +27,98 @@ export function initCommandBot(): TelegramBot {
 
   registerCommands(_bot, config.TELEGRAM_CHAT_ID);
 
-  log.info('Bot de comandos Telegram iniciado con polling');
+  log.info('✅ Bot de comandos Telegram iniciado con polling');
   return _bot;
 }
 
+export function getCommandBot(): TelegramBot | null {
+  return _bot;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function statusIcon(status: 'ok' | 'degraded' | 'down'): string {
+  return status === 'ok' ? '✅' : status === 'degraded' ? '⚠️' : '❌';
+}
+
+function serviceLabel(status: 'ok' | 'degraded' | 'down'): string {
+  return status === 'ok' ? 'OK' : status === 'degraded' ? 'DEGRADADO' : 'CAÍDO';
+}
+
+// Calcula la próxima ejecución del cron basado en el intervalo
+function nextRunEstimate(intervalMinutes: number): string {
+  const now = new Date();
+  const minutesPast = now.getMinutes() % intervalMinutes;
+  const minutesUntilNext = intervalMinutes - minutesPast;
+  const next = new Date(now.getTime() + minutesUntilNext * 60 * 1000);
+  next.setSeconds(0, 0);
+  return formatMexicoDate(next.toISOString(), 'HH:mm');
+}
+
+// ─── Registro de comandos ─────────────────────────────────────────────────────
+
 function registerCommands(bot: TelegramBot, chatId: string): void {
+
   // ── /prueba ──────────────────────────────────────────────────────────────
   bot.onText(/\/prueba/, async (msg) => {
     if (String(msg.chat.id) !== chatId) return;
-    log.info({ from: msg.from?.username }, 'Comando /prueba recibido');
+    log.info({ from: msg.from?.username, chatId: msg.chat.id }, '📥 Comando /prueba recibido');
 
     try {
+      const config = getConfig();
       const status = healthTracker.getStatus();
-      const lastRun = await getLastCollectRun('comprasmx');
+      const radars = getActiveRadars();
+
+      // Leer estado real desde DB
+      const lastRunState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_COLLECT_RUN);
+      const bootState = await getState<Record<string, unknown>>(STATE_KEYS.WORKER_BOOT_TIME);
+      const schedulerState = await getState<Record<string, unknown>>(STATE_KEYS.SCHEDULER_STATUS);
+
+      const dbIcon = statusIcon(status.services.database);
+      const tgIcon = statusIcon(status.services.telegram);
+      const workerIcon = statusIcon(status.overall);
+
+      const lastCycle = lastRunState?.startedAt
+        ? formatMexicoDate(String(lastRunState.startedAt))
+        : status.lastCycleAt
+        ? formatMexicoDate(status.lastCycleAt)
+        : 'Sin ciclos aún';
+
+      const nextRun = nextRunEstimate(config.COLLECT_INTERVAL_MINUTES);
+      const bootTime = bootState?.bootedAt
+        ? formatMexicoDate(String(bootState.bootedAt))
+        : 'N/D';
+
+      const schedulerStatusText =
+        schedulerState?.status === 'active' ? '✅ Activo' : '⏳ Iniciando';
 
       const lines = [
         `🔍 <b>ESTADO DEL SISTEMA — Radar Licitaciones MX</b>`,
         '',
-        `🖥 Worker: <b>${status.overall === 'ok' ? '✅ OK' : status.overall === 'degraded' ? '⚠️ DEGRADADO' : '❌ CAÍDO'}</b>`,
-        `🗄 Base de datos: <b>${status.services.database === 'ok' ? '✅ OK' : '❌ ERROR'}</b>`,
-        `📨 Telegram: <b>${status.services.telegram === 'ok' ? '✅ OK' : '❌ ERROR'}</b>`,
-        `🎭 Playwright: <b>${status.services.playwright === 'ok' ? '✅ OK' : '⚠️ No verificado'}</b>`,
+        `🖥 Worker: <b>${workerIcon} ${serviceLabel(status.overall)}</b>`,
+        `${dbIcon} Base de datos: <b>${serviceLabel(status.services.database)}</b>`,
+        `${tgIcon} Telegram: <b>${serviceLabel(status.services.telegram)}</b>`,
         '',
-        status.lastCycleAt
-          ? `⏰ Última corrida: ${formatMexicoDate(status.lastCycleAt)}`
-          : `⏰ Sin ciclos completados aún`,
-        status.lastCycleDurationMs
-          ? `⌛ Duración: ${formatDuration(status.lastCycleDurationMs)}`
-          : '',
-        status.lastCycleMatches !== null
-          ? `🎯 Matches recientes: ${status.lastCycleMatches}`
-          : '',
+        `⏰ Última corrida: <b>${lastCycle}</b>`,
+        `🔜 Próxima corrida: ~<b>${nextRun} MX</b>`,
+        `📡 Scheduler: <b>${schedulerStatusText}</b>`,
         '',
-        `⏱ Uptime: ${formatDuration(status.uptimeMs)}`,
-        `🕐 Verificado: ${formatMexicoDate(status.checkedAt)}`,
-        lastRun
-          ? `\n📦 Último run Compras MX: ${lastRun.status} — ${lastRun.items_seen} vistos, ${lastRun.items_created} nuevos`
-          : '',
+        `🛰 Radares activos: <b>${radars.length}</b>`,
+        `⏱ Uptime: <b>${formatDuration(status.uptimeMs)}</b>`,
+        `🌍 Entorno: <b>${config.NODE_ENV}</b>`,
+        `🚂 Railway: <b>${config.RAILWAY_ENVIRONMENT ?? 'local'}</b>`,
+        `🕐 Boot: ${bootTime}`,
+        `🕐 Ahora: ${formatMexicoDate(nowISO())}`,
       ];
 
       await bot.sendMessage(chatId, lines.filter(Boolean).join('\n'), {
         parse_mode: 'HTML',
       });
+
+      log.info({ from: msg.from?.username }, '✅ /prueba respondido');
     } catch (err) {
-      log.error({ err }, 'Error en /prueba');
-      await bot.sendMessage(chatId, '❌ Error ejecutando /prueba');
+      log.error({ err }, '❌ Error en /prueba');
+      await bot.sendMessage(chatId, '❌ Error ejecutando /prueba — revisar logs').catch(() => {});
     }
   });
 
@@ -75,19 +127,21 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     if (String(msg.chat.id) !== chatId) return;
     const query = match?.[1]?.trim();
     if (!query) {
-      await bot.sendMessage(chatId, 'Uso: /buscar <texto>');
+      await bot.sendMessage(chatId, 'Uso: /buscar <texto o número de expediente>');
       return;
     }
 
-    log.info({ query }, 'Comando /buscar recibido');
+    log.info({ query, from: msg.from?.username }, '📥 Comando /buscar recibido');
 
     try {
       const results = await searchProcurements(query, 5);
 
       if (results.length === 0) {
-        await bot.sendMessage(chatId, `🔍 Sin resultados para: <b>${query}</b>`, {
-          parse_mode: 'HTML',
-        });
+        await bot.sendMessage(
+          chatId,
+          `🔍 Sin resultados para: <b>${query}</b>\n\n<i>La base de datos puede estar vacía hasta Fase 2.</i>`,
+          { parse_mode: 'HTML' }
+        );
         return;
       }
 
@@ -108,20 +162,25 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         parse_mode: 'HTML',
         disable_web_page_preview: true,
       });
+
+      log.info({ query, count: results.length }, '✅ /buscar respondido');
     } catch (err) {
-      log.error({ err, query }, 'Error en /buscar');
-      await bot.sendMessage(chatId, '❌ Error ejecutando búsqueda');
+      log.error({ err, query }, '❌ Error en /buscar');
+      await bot.sendMessage(chatId, '❌ Error ejecutando búsqueda').catch(() => {});
     }
   });
 
   // ── /debug_resumen ────────────────────────────────────────────────────────
   bot.onText(/\/debug_resumen/, async (msg) => {
     if (String(msg.chat.id) !== chatId) return;
-    log.info({ from: msg.from?.username }, 'Comando /debug_resumen recibido');
+    log.info({ from: msg.from?.username }, '📥 Comando /debug_resumen recibido');
 
     try {
       const status = healthTracker.getStatus();
-      const lastRun = await getLastCollectRun('comprasmx');
+      const lastRunState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_COLLECT_RUN);
+      const bootState = await getState<Record<string, unknown>>(STATE_KEYS.WORKER_BOOT_TIME);
+      const schedulerState = await getState<Record<string, unknown>>(STATE_KEYS.SCHEDULER_STATUS);
+      const radars = getActiveRadars();
 
       const lines = [
         `🔧 <b>DEBUG RESUMEN — Radar Licitaciones MX</b>`,
@@ -131,32 +190,32 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         '',
         `<b>Último ciclo:</b> ${status.lastCycleAt ? formatMexicoDate(status.lastCycleAt) : 'N/A'}`,
         status.lastCycleDurationMs ? `<b>Duración:</b> ${formatDuration(status.lastCycleDurationMs)}` : '',
+        `<b>Matches último ciclo:</b> ${status.lastCycleMatches ?? 0}`,
         '',
-        '<b>Collector comprasmx:</b>',
-        lastRun
-          ? [
-              `  Estatus: ${lastRun.status}`,
-              `  Revisados: ${lastRun.items_seen}`,
-              `  Creados: ${lastRun.items_created}`,
-              `  Actualizados: ${lastRun.items_updated}`,
-              lastRun.error_message ? `  ⚠️ Error: ${lastRun.error_message.slice(0, 100)}` : '',
-            ]
-              .filter(Boolean)
-              .join('\n')
-          : '  Sin datos de corridas',
+        `<b>System state (DB):</b>`,
+        `  Boot: ${bootState?.bootedAt ? formatMexicoDate(String(bootState.bootedAt)) : 'N/D'}`,
+        `  Scheduler: ${schedulerState?.status ?? 'N/D'}`,
+        `  Último run: ${lastRunState?.startedAt ? formatMexicoDate(String(lastRunState.startedAt)) : 'N/D'}`,
+        `  Run status: ${lastRunState?.status ?? 'N/D'}`,
+        lastRunState?.errorMessage ? `  ⚠️ Error: ${String(lastRunState.errorMessage).slice(0, 100)}` : '',
         '',
-        `<b>Matches última corrida:</b> ${status.lastCycleMatches ?? 'N/A'}`,
+        `<b>Radares activos:</b> ${radars.length}`,
+        radars.map((r) => `  • ${r.key} (prio ${r.priority})`).join('\n'),
+        '',
         `<b>Uptime:</b> ${formatDuration(status.uptimeMs)}`,
+        `<b>Ahora:</b> ${formatMexicoDate(nowISO())}`,
       ];
 
       await bot.sendMessage(chatId, lines.filter(Boolean).join('\n'), {
         parse_mode: 'HTML',
       });
+
+      log.info({ from: msg.from?.username }, '✅ /debug_resumen respondido');
     } catch (err) {
-      log.error({ err }, 'Error en /debug_resumen');
-      await bot.sendMessage(chatId, '❌ Error ejecutando /debug_resumen');
+      log.error({ err }, '❌ Error en /debug_resumen');
+      await bot.sendMessage(chatId, '❌ Error ejecutando /debug_resumen').catch(() => {});
     }
   });
 
-  log.info('Comandos registrados: /prueba, /buscar, /debug_resumen');
+  log.info('✅ Comandos registrados: /prueba, /buscar, /debug_resumen');
 }

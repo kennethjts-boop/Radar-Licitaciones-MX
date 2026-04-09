@@ -6,6 +6,7 @@ import { createModuleLogger } from '../core/logger';
 import { todayMexicoStr, nowISO } from '../core/time';
 import { getSupabaseClient } from '../storage/client';
 import { sendDailySummary } from '../alerts/telegram.alerts';
+import { healthTracker } from '../core/healthcheck';
 import type { DailySummary } from '../types/procurement';
 
 const log = createModuleLogger('daily-summary-job');
@@ -78,6 +79,17 @@ export async function runDailySummaryJob(): Promise<void> {
       .slice(0, 5)
       .map(([name, count]) => ({ name, count }));
 
+    const healthStatus = healthTracker.getStatus();
+
+    // En Fase 1 no hay scraping — incluir nota técnica en el resumen
+    const technicalIncidents: string[] = [];
+    if (totalSeen === 0) {
+      technicalIncidents.push('Fase 1 activa: sin scraping todavía (Compras MX pendiente Fase 2)');
+    }
+    if (healthStatus.services.database !== 'ok') {
+      technicalIncidents.push('DB con problemas de conectividad en algún ciclo');
+    }
+
     const summary: DailySummary = {
       summaryDate: today,
       totalSeen: totalSeen ?? 0,
@@ -87,7 +99,7 @@ export async function runDailySummaryJob(): Promise<void> {
       totalAlerts: totalAlerts ?? 0,
       matchesByRadar,
       topDependencies,
-      technicalIncidents: [],
+      technicalIncidents,
       telegramMessage: '',
     };
 
