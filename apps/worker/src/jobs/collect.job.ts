@@ -49,6 +49,7 @@ import { analyzeTenderDocument, generateEmbedding } from "../ai/openai.service";
 
 const log = createModuleLogger("collect-job");
 const AI_VIP_ALERT_SCORE_THRESHOLD = 70;
+const AI_VIP_ALERT_WIN_PROBABILITY_THRESHOLD = 50;
 const RAG_MATCH_THRESHOLD = 0.7;
 const RAG_MATCH_COUNT = 3;
 
@@ -223,6 +224,12 @@ async function processAttachmentsForProcurement(
                 summary: analysis.summary,
                 opportunities: analysis.opportunities,
                 risks: analysis.risks,
+                win_probability: analysis.opportunity_engine.win_probability,
+                competitor_threat_level:
+                  analysis.opportunity_engine.competitor_threat_level,
+                implementation_complexity:
+                  analysis.opportunity_engine.implementation_complexity,
+                red_flags: analysis.opportunity_engine.red_flags,
               }, { onConflict: "attachment_id" })
               .select("id, alert_sent")
               .single();
@@ -232,7 +239,25 @@ async function processAttachmentsForProcurement(
             }
 
             const alreadySent = analysisRow?.alert_sent === true;
-            const shouldSendVip = analysis.scores.total >= AI_VIP_ALERT_SCORE_THRESHOLD;
+            const hasHighScore = analysis.scores.total >= AI_VIP_ALERT_SCORE_THRESHOLD;
+            const hasViableWinProbability =
+              analysis.opportunity_engine.win_probability >=
+              AI_VIP_ALERT_WIN_PROBABILITY_THRESHOLD;
+            const shouldSendVip = hasHighScore && hasViableWinProbability;
+
+            if (hasHighScore && !hasViableWinProbability) {
+              log.info(
+                {
+                  event: "AI_VIP_ALERT_IGNORED_LOW_WIN_PROBABILITY",
+                  procurementId,
+                  fileName: file.fileName,
+                  scoreTotal: analysis.scores.total,
+                  winProbability: analysis.opportunity_engine.win_probability,
+                  winProbabilityThreshold: AI_VIP_ALERT_WIN_PROBABILITY_THRESHOLD,
+                },
+                "Alerta VIP omitida por baja probabilidad de ganar (posible licitación dirigida)",
+              );
+            }
 
             if (shouldSendVip && !alreadySent) {
               const vipMessage = formatAiVipAlertMessage({
@@ -242,6 +267,14 @@ async function processAttachmentsForProcurement(
                 deadline: analysis.key_data.deadline,
                 opportunities: analysis.opportunities,
                 risks: analysis.risks,
+                opportunityEngine: {
+                  winProbability: analysis.opportunity_engine.win_probability,
+                  competitorThreatLevel:
+                    analysis.opportunity_engine.competitor_threat_level,
+                  implementationComplexity:
+                    analysis.opportunity_engine.implementation_complexity,
+                  redFlags: analysis.opportunity_engine.red_flags,
+                },
                 link: procurementLink,
               });
 
