@@ -13,6 +13,7 @@
 import { getConfig } from './config/env';
 import { getLogger } from './core/logger';
 import { bootstrap } from './bootstrap';
+import { SchemaValidationError } from './storage/schema-validator';
 import { startScheduler } from './jobs/scheduler';
 import { initCommandBot } from './commands/telegram.commands';
 import { setComprasMxSourceId } from './jobs/heartbeat.job';
@@ -94,6 +95,23 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error('💥 Error fatal al iniciar worker:', err);
+  const log = getLogger();
+  if (err instanceof SchemaValidationError) {
+    log.fatal(
+      {
+        missing: err.missing,
+        found: err.found,
+        total: err.total,
+      },
+      [
+        '💥 FATAL: DATABASE SCHEMA NOT INITIALIZED',
+        `  Tables found: ${err.found} / ${err.total}`,
+        `  Missing: [${err.missing.join(', ')}]`,
+        '  Fix: Execute docs/supabase-schema.sql in Supabase SQL Editor',
+      ].join('\n')
+    );
+  } else {
+    log.fatal({ err }, '💥 Fatal error starting worker');
+  }
   process.exit(1);
 });

@@ -2,20 +2,22 @@
  * BOOTSTRAP — Secuencia de arranque del worker.
  *
  * Orden de arranque:
- * 1. Validar env (ya hecho por Zod en config/env)
- * 2. Verificar conectividad con Supabase
- * 3. Verificar conectividad con Telegram (getMe)
- * 4. Actualizar healthcheck en memoria
+ * 1. Conectar a Supabase — validar primer query real
+ * 2. Validar schema de DB — FALLA si faltan tablas (SchemaValidationError)
+ * 3. Conectar a Telegram — validar token con getMe()
+ * 4. Actualizar healthcheck en memoria con estado real
  * 5. Registrar boot en system_state
- * 6. Enviar mensaje de arranque a Telegram (si está disponible)
+ * 6. Enviar mensaje de boot a Telegram
  *
  * Política de fallos:
- * - Si Supabase falla → continúa con advertencia (worker funciona sin DB al arrancar)
- * - Si Telegram falla → continúa con advertencia
- * - Si falla env → crash inmediato (ya gestionado por Zod)
+ * - Si Supabase NO conecta    → crash inmediato (sin DB no hay sistema)
+ * - Si schema falta tablas    → crash inmediato con lista de tablas faltantes
+ * - Si Telegram falla         → advertencia, continúa (monitor puede funcionar sin bot)
+ * - Si falla env              → crash inmediato (Zod ya lo gestiona)
  *
- * La razón de no crashear por DB/Telegram en boot es que Railway puede reiniciar
- * el proceso antes de que los servicios downstream estén listos.
+ * La razón del crash en DB: sin schema válido, cualquier operación de storage
+ * fallará de forma silenciosa o con errores confusos. Es mejor fallar rápido
+ * con un mensaje claro que dejar correr un worker roto.
  */
 import TelegramBot from 'node-telegram-bot-api';
 import { getConfig } from './config/env';
@@ -24,66 +26,131 @@ import { healthTracker } from './core/healthcheck';
 import { recordWorkerBoot, recordHealthcheck } from './core/system-state';
 import { nowISO, formatMexicoDate } from './core/time';
 import { getActiveRadars } from './radars/index';
+import {
+  verifyDatabaseSchema,
+  SchemaValidationError,
+  REQUIRED_TABLES,
+} from './storage/schema-validator';
 
 const log = createModuleLogger('bootstrap');
 
+// ─── Resultado de bootstrap ───────────────────────────────────────────────────
+
 export interface BootstrapResult {
   supabaseOk: boolean;
+  schemaValid: boolean;
+  tablesFound: number;
+  tablesMissing: string[];
   telegramOk: boolean;
   botUsername: string | null;
-  sourceId: string | null;          // ID de la fuente comprasmx en Supabase
+  sourceId: string | null;
   bootedAt: string;
 }
 
-// ─── Check Supabase ───────────────────────────────────────────────────────────
+// ─── 1. Conectar a Supabase ───────────────────────────────────────────────────
 
-async function checkSupabase(): Promise<{ ok: boolean; sourceId: string | null }> {
+async function connectSupabase(): Promise<{
+  ok: boolean;
+  sourceId: string | null;
+}> {
+  log.info('Connecting to Supabase...');
+
   try {
     const { getSupabaseClient } = await import('./storage/client');
     const db = getSupabaseClient();
 
-    // Leer la fuente comprasmx — valida conectividad y la existencia del seed
-    const { data, error } = await db
+    // Ping real — leer la tabla sources que es la más estable del sistema
+    const { error } = await db
       .from('sources')
-      .select('id, key, name')
-      .eq('key', 'comprasmx')
-      .single();
+      .select('id', { count: 'exact', head: true });
 
-    if (error) {
-      log.error({ error: error.message }, '❌ Supabase: error al leer tabla sources');
+    if (error && error.code !== 'PGRST116') {
+      // Si el error es 42P01 (tabla no existe), la conexión funciona pero el schema no está
+      // Esto lo detectará verifyDatabaseSchema() en el siguiente paso
+      if (error.code === '42P01') {
+        log.warn('Supabase connection OK — but tables not yet initialized');
+        return { ok: true, sourceId: null };
+      }
+
+      log.error({ code: error.code, msg: error.message }, '❌ Supabase connection FAILED');
       return { ok: false, sourceId: null };
     }
 
-    if (!data) {
-      log.warn('⚠️ Supabase: tabla sources existe pero no hay seed para comprasmx');
-      return { ok: true, sourceId: null };
-    }
+    log.info('✅ Supabase connection OK');
 
-    log.info({ sourceKey: data.key, sourceName: data.name }, '✅ Supabase: conectado');
-    return { ok: true, sourceId: data.id };
+    // Intentar leer source ID de comprasmx para el heartbeat job
+    const { data, error: srcErr } = await db
+      .from('sources')
+      .select('id, key')
+      .eq('key', 'comprasmx')
+      .single();
+
+    const sourceId = (!srcErr && data?.id) ? data.id : null;
+
+    return { ok: true, sourceId };
   } catch (err) {
-    log.error({ err }, '❌ Supabase: no se pudo conectar');
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error({ error: msg }, '❌ Supabase connection FAILED — network error');
     return { ok: false, sourceId: null };
   }
 }
 
-// ─── Check Telegram ───────────────────────────────────────────────────────────
+// ─── 2. Validar schema ────────────────────────────────────────────────────────
 
-async function checkTelegram(token: string): Promise<{ ok: boolean; username: string | null }> {
+async function validateSchema(): Promise<{
+  valid: boolean;
+  tablesFound: number;
+  tablesMissing: string[];
+}> {
+  log.info('Validating database schema...');
+
   try {
-    // Usar un bot sin polling solo para validar el token
+    const result = await verifyDatabaseSchema();
+    return {
+      valid: true,
+      tablesFound: result.tablesFound.length,
+      tablesMissing: [],
+    };
+  } catch (err) {
+    if (err instanceof SchemaValidationError) {
+      // El error ya tiene el log de error dentro de verifyDatabaseSchema()
+      return {
+        valid: false,
+        tablesFound: REQUIRED_TABLES.length - err.missing.length,
+        tablesMissing: err.missing,
+      };
+    }
+    // Error inesperado durante validación
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error({ error: msg }, '❌ Error inesperado validando schema');
+    return {
+      valid: false,
+      tablesFound: 0,
+      tablesMissing: [...REQUIRED_TABLES],
+    };
+  }
+}
+
+// ─── 3. Verificar Telegram ────────────────────────────────────────────────────
+
+async function checkTelegram(
+  token: string
+): Promise<{ ok: boolean; username: string | null }> {
+  log.info('Connecting to Telegram...');
+
+  try {
     const bot = new TelegramBot(token, { polling: false });
     const me = await bot.getMe();
-    log.info({ username: me.username, id: me.id }, '✅ Telegram: bot verificado');
+    log.info({ username: me.username, id: me.id }, '✅ Telegram bot verified');
     return { ok: true, username: me.username ?? null };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error({ error: msg }, '❌ Telegram: error verificando bot');
+    log.error({ error: msg }, '❌ Telegram connection FAILED');
     return { ok: false, username: null };
   }
 }
 
-// ─── Mensaje de boot ──────────────────────────────────────────────────────────
+// ─── 4. Mensaje de boot ───────────────────────────────────────────────────────
 
 async function sendBootMessage(
   token: string,
@@ -95,34 +162,41 @@ async function sendBootMessage(
     const config = getConfig();
     const radars = getActiveRadars();
 
-    const dbStatusLine = result.supabaseOk
-      ? '🗄 DB: ✅ Conectada'
-      : '🗄 DB: ❌ Sin conexión';
+    const dbLine = result.supabaseOk
+      ? `🗄 DB: ✅ Conectada`
+      : `🗄 DB: ❌ Sin conexión`;
 
-    const tgStatusLine = result.telegramOk
+    const schemaLine = result.schemaValid
+      ? `🧱 Schema: ✅ Validado (${result.tablesFound} / ${REQUIRED_TABLES.length} tablas)`
+      : `🧱 Schema: ❌ INCOMPLETO — faltan: [${result.tablesMissing.join(', ')}]`;
+
+    const tgLine = result.telegramOk
       ? `📨 Bot: ✅ @${result.botUsername}`
-      : '📨 Bot: ❌ Error';
+      : `📨 Bot: ❌ Error`;
+
+    const systemReady = result.supabaseOk && result.schemaValid && result.telegramOk;
 
     const message = [
       `🚀 <b>Worker iniciado — Radar Licitaciones MX</b>`,
       '',
       `🌍 Entorno: <b>${config.NODE_ENV}</b>`,
       `🚂 Railway: <b>${config.RAILWAY_ENVIRONMENT ?? 'local'}</b>`,
-      dbStatusLine,
-      tgStatusLine,
+      dbLine,
+      schemaLine,
+      tgLine,
       `📡 Radares activos: <b>${radars.length}</b>`,
-      `⏱ Scheduler: cada <b>${config.COLLECT_INTERVAL_MINUTES} min</b>`,
+      `⏱ Ciclos: cada <b>${config.COLLECT_INTERVAL_MINUTES} min</b>`,
       `🕐 Boot: ${formatMexicoDate(result.bootedAt)}`,
       '',
-      result.supabaseOk && result.telegramOk
-        ? '✅ Sistema listo — esperando primer ciclo'
+      systemReady
+        ? '✅ Sistema listo — all systems go'
         : '⚠️ Sistema iniciado con advertencias — revisar logs',
     ].join('\n');
 
     await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
-    log.info('📩 Mensaje de boot enviado a Telegram');
+    log.info('📩 Boot message sent to Telegram');
   } catch (err) {
-    log.warn({ err }, 'No se pudo enviar mensaje de boot — continuando');
+    log.warn({ err }, 'Could not send boot message — continuing');
   }
 }
 
@@ -132,47 +206,97 @@ export async function bootstrap(): Promise<BootstrapResult> {
   const config = getConfig();
   const bootedAt = nowISO();
 
-  log.info('🔧 Iniciando bootstrap...');
+  log.info(
+    {
+      env: config.NODE_ENV,
+      railway: config.RAILWAY_ENVIRONMENT ?? 'local',
+    },
+    '🔧 Starting bootstrap sequence...'
+  );
 
-  // 1. Check Supabase
-  const { ok: supabaseOk, sourceId } = await checkSupabase();
-  healthTracker.setDbHealth(supabaseOk ? 'ok' : 'down');
+  // ── Paso 1: Conectar Supabase ────────────────────────────────────────────────
+  const { ok: supabaseOk, sourceId } = await connectSupabase();
 
-  // 2. Check Telegram
+  if (!supabaseOk) {
+    // Sin conexión a DB no podemos operar. Crash inmediato.
+    log.fatal(
+      'FATAL: Cannot connect to Supabase. Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
+    );
+    throw new Error('FATAL: Supabase connection failed — cannot start worker');
+  }
+
+  healthTracker.setDbHealth('ok');
+
+  // ── Paso 2: Validar schema ───────────────────────────────────────────────────
+  const { valid: schemaValid, tablesFound, tablesMissing } = await validateSchema();
+
+  if (!schemaValid) {
+    // Schema inválido = crash inmediato. Sin tablas no hay operaciones posibles.
+    healthTracker.setDbSchemaValid(false, tablesFound, tablesMissing, REQUIRED_TABLES.length);
+
+    log.fatal(
+      {
+        tablesFound,
+        tablesMissing,
+        totalRequired: REQUIRED_TABLES.length,
+      },
+      [
+        'FATAL: DATABASE SCHEMA NOT INITIALIZED',
+        `Tables found: ${tablesFound} / ${REQUIRED_TABLES.length}`,
+        `Missing: [${tablesMissing.join(', ')}]`,
+        'Fix: Run docs/supabase-schema.sql in Supabase SQL Editor',
+        'URL: https://supabase.com → Your project → SQL Editor → New query → paste file → Run',
+      ].join('\n')
+    );
+
+    throw new SchemaValidationError(tablesMissing, tablesFound, REQUIRED_TABLES.length);
+  }
+
+  healthTracker.setDbSchemaValid(true, tablesFound, [], REQUIRED_TABLES.length);
+  log.info({ tablesFound, total: REQUIRED_TABLES.length }, '✅ Database schema validated');
+
+  // ── Paso 3: Conectar Telegram ────────────────────────────────────────────────
   const { ok: telegramOk, username: botUsername } = await checkTelegram(config.TELEGRAM_BOT_TOKEN);
   healthTracker.setTelegramHealth(telegramOk ? 'ok' : 'down');
 
   const result: BootstrapResult = {
     supabaseOk,
+    schemaValid,
+    tablesFound,
+    tablesMissing,
     telegramOk,
     botUsername,
     sourceId,
     bootedAt,
   };
 
-  // 3. Registrar en system_state (no crashea si falla)
-  if (supabaseOk) {
-    await recordWorkerBoot('0.1.0');
-    await recordHealthcheck(supabaseOk && telegramOk);
-  }
+  // ── Paso 4: Registrar en system_state ────────────────────────────────────────
+  await recordWorkerBoot('0.1.0');
+  await recordHealthcheck(supabaseOk && schemaValid && telegramOk);
 
-  // 4. Enviar mensaje de boot a Telegram
+  // ── Paso 5: Enviar mensaje de boot ───────────────────────────────────────────
   if (telegramOk) {
     await sendBootMessage(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID, result);
+  } else {
+    log.warn('Skipping boot message — Telegram not available');
   }
 
-  // 5. Log resumen del bootstrap
+  // ── Paso 6: Log resumen ──────────────────────────────────────────────────────
+  const allGood = supabaseOk && schemaValid && telegramOk;
+
   log.info(
     {
-      supabaseOk,
-      telegramOk,
-      botUsername,
-      sourceId,
+      supabase: supabaseOk,
+      schemaValid,
+      tablesFound: `${tablesFound}/${REQUIRED_TABLES.length}`,
+      telegram: telegramOk,
+      bot: botUsername ?? 'N/A',
+      sourceId: sourceId ?? 'pendiente (seed comprasmx no encontrado)',
       radarsActive: getActiveRadars().length,
     },
-    supabaseOk && telegramOk
-      ? '✅ Bootstrap completado — all systems go'
-      : '⚠️ Bootstrap completado con advertencias'
+    allGood
+      ? '✅ Bootstrap completed — all systems go'
+      : '⚠️ Bootstrap completed with warnings'
   );
 
   return result;

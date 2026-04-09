@@ -12,6 +12,7 @@ const envSchema = z.object({
   // Supabase
   SUPABASE_URL: z.string().url({ message: 'SUPABASE_URL debe ser una URL válida' }),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(10, { message: 'SUPABASE_SERVICE_ROLE_KEY requerido' }),
+  SUPABASE_DB_URL: z.string().url({ message: 'SUPABASE_DB_URL debe ser una URL válida' }).optional(),
 
   // Telegram
   TELEGRAM_BOT_TOKEN: z.string().min(10, { message: 'TELEGRAM_BOT_TOKEN requerido' }),

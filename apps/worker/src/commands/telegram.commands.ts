@@ -37,12 +37,18 @@ export function getCommandBot(): TelegramBot | null {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function statusIcon(status: 'ok' | 'degraded' | 'down'): string {
-  return status === 'ok' ? '✅' : status === 'degraded' ? '⚠️' : '❌';
+function statusIcon(status: 'ok' | 'degraded' | 'down' | 'unknown'): string {
+  if (status === 'ok') return '✅';
+  if (status === 'degraded') return '⚠️';
+  if (status === 'down') return '❌';
+  return '⬛'; // unknown
 }
 
-function serviceLabel(status: 'ok' | 'degraded' | 'down'): string {
-  return status === 'ok' ? 'OK' : status === 'degraded' ? 'DEGRADADO' : 'CAÍDO';
+function serviceLabel(status: 'ok' | 'degraded' | 'down' | 'unknown'): string {
+  if (status === 'ok') return 'OK';
+  if (status === 'degraded') return 'DEGRADADO';
+  if (status === 'down') return 'CAÍDO';
+  return 'DESCONOCIDO';
 }
 
 // Calcula la próxima ejecución del cron basado en el intervalo
@@ -78,6 +84,14 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       const tgIcon = statusIcon(status.services.telegram);
       const workerIcon = statusIcon(status.overall);
 
+      const schemaLine = status.dbSchemaValid
+        ? `🧱 DB Schema: ✅ Válido (${status.schemaDetail.tablesFound}/${status.schemaDetail.tablesRequired} tablas)`
+        : `🧱 DB Schema: ❌ INCOMPLETO (${status.schemaDetail.tablesFound}/${status.schemaDetail.tablesRequired} tablas)`;
+
+      const schemaWarning = !status.dbSchemaValid && status.schemaDetail.missingList.length > 0
+        ? `⚠️ Tablas faltantes: [${status.schemaDetail.missingList.join(', ')}]`
+        : null;
+
       const lastCycle = lastRunState?.startedAt
         ? formatMexicoDate(String(lastRunState.startedAt))
         : status.lastCycleAt
@@ -97,6 +111,9 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         '',
         `🖥 Worker: <b>${workerIcon} ${serviceLabel(status.overall)}</b>`,
         `${dbIcon} Base de datos: <b>${serviceLabel(status.services.database)}</b>`,
+        `  🔗 Conectada: <b>${status.dbConnected ? 'Sí' : 'No'}</b>`,
+        schemaLine,
+        schemaWarning,
         `${tgIcon} Telegram: <b>${serviceLabel(status.services.telegram)}</b>`,
         '',
         `⏰ Última corrida: <b>${lastCycle}</b>`,
