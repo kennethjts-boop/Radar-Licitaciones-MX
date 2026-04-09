@@ -6,6 +6,7 @@ import { createModuleLogger } from "../core/logger";
 
 const KEYWORDS = ["bolet", "peaje", "papel term", "papel térm", "rollo term", "rollo térm"];
 const log = createModuleLogger("capufe-peaje-deep-report");
+const WAITING_CAPUFE_MESSAGE = "Esperando documentos de CAPUFE...";
 
 type LatestRow = {
   attachment_id: string;
@@ -387,14 +388,18 @@ function buildExecutiveReport(latest: LatestRow, historical: HistoricalRow[]): s
 export async function generateCapufePeajeDeepReport(options?: {
   procurementId?: string;
   forceProcess?: boolean;
-}): Promise<{ report: string; forced: boolean; procurementId: string; attachmentId: string }> {
+}): Promise<{ report: string; forced: boolean; procurementId: string; attachmentId: string } | null> {
   const db = getDb();
   const force = options?.forceProcess ?? false;
   const procurementId = options?.procurementId;
 
   const latest = await queryLatestCapufeDocument(db, procurementId);
   if (!latest) {
-    throw new Error("No se encontró documento CAPUFE de boletos/peaje/papel térmico en attachments/document_analysis");
+    log.info(
+      { event: "CAPUFE_WAITING_DOCUMENTS", procurementId: procurementId ?? null },
+      WAITING_CAPUFE_MESSAGE,
+    );
+    return null;
   }
 
   let forced = false;
@@ -416,8 +421,12 @@ export async function generateCapufePeajeDeepReport(options?: {
 export async function sendCapufePeajeDeepReportToTelegram(options?: {
   procurementId?: string;
   forceProcess?: boolean;
-}): Promise<void> {
+}): Promise<boolean> {
   const result = await generateCapufePeajeDeepReport(options);
+  if (!result) {
+    return false;
+  }
+
   await sendTelegramLongReport(
     `REPORTE DEEP CAPUFE/PEAJE — Procurement ${result.procurementId}`,
     result.report,
@@ -432,11 +441,17 @@ export async function sendCapufePeajeDeepReportToTelegram(options?: {
     },
     "Reporte Deep de CAPUFE enviado a Telegram",
   );
+
+  return true;
 }
 
 async function run(): Promise<void> {
   const force = process.argv.includes("--force-process");
   const result = await generateCapufePeajeDeepReport({ forceProcess: force });
+  if (!result) {
+    console.info(`[INFO] ${WAITING_CAPUFE_MESSAGE}`);
+    return;
+  }
 
   console.log(result.report);
   if (force) {

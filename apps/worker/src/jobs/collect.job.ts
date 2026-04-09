@@ -611,11 +611,18 @@ export async function runCollectJob(): Promise<void> {
 
           if (isCapufeTender && !capufeDeepReportsSent.has(upsertResult.procurementId)) {
             try {
-              await sendCapufePeajeDeepReportToTelegram({
+              const reportSent = await sendCapufePeajeDeepReportToTelegram({
                 procurementId: upsertResult.procurementId,
                 forceProcess: true,
               });
-              capufeDeepReportsSent.add(upsertResult.procurementId);
+              if (reportSent) {
+                capufeDeepReportsSent.add(upsertResult.procurementId);
+              } else {
+                log.info(
+                  { procurementId: upsertResult.procurementId, externalId: item.externalId },
+                  "Esperando documentos de CAPUFE...",
+                );
+              }
             } catch (deepReportErr) {
               log.warn(
                 {
