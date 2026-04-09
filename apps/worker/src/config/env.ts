@@ -19,8 +19,18 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(10, { message: 'TELEGRAM_BOT_TOKEN requerido' }),
   TELEGRAM_CHAT_ID: z.string().min(1, { message: 'TELEGRAM_CHAT_ID requerido' }),
 
-  // Playwright
+  // Playwright & Escudo
   PLAYWRIGHT_HEADLESS: z.string().default('true').transform((v) => v === 'true'),
+  PROXY_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  HTTP_PROXY: z.string().url().optional(),
+  HTTPS_PROXY: z.string().url().optional(),
+
+  // Compras MX Incremental Strategy
+  COMPRASMX_SEED_URL: z.string().url().default('https://upcp-compranet.hacienda.gob.mx/siete/concursos'),
+  COMPRASMX_MAX_LIST_PAGES: z.string().default('5').transform(Number),
+  COMPRASMX_STOP_AFTER_KNOWN_STREAK: z.string().default('15').transform(Number),
+  COMPRASMX_INCREMENTAL_LOOKBACK_HOURS: z.string().default('72').transform(Number),
+  COMPRASMX_DAILY_RECHECK_HOUR: z.string().default('8').transform(Number),
 
   // Scheduler
   COLLECT_INTERVAL_MINUTES: z.string().default('30').transform(Number),

@@ -16,7 +16,7 @@ import { bootstrap } from './bootstrap';
 import { SchemaValidationError } from './storage/schema-validator';
 import { startScheduler } from './jobs/scheduler';
 import { initCommandBot } from './commands/telegram.commands';
-import { setComprasMxSourceId } from './jobs/heartbeat.job';
+import { setComprasMxSourceId } from './jobs/collect.job';
 
 async function main(): Promise<void> {
   // ── 1. Configuración y logger ─────────────────────────────────────────────

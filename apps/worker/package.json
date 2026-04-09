@@ -12,7 +12,9 @@
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "db:init": "ts-node-dev src/scripts/db-init.ts",
-    "db:verify": "ts-node-dev src/scripts/db-verify.ts"
+    "db:verify": "ts-node-dev src/scripts/db-verify.ts",
+    "db:migrate:fase2a": "ts-node-dev src/scripts/migrate-fase2a.ts",
+    "db:verify:fase2a": "ts-node-dev src/scripts/verify-fase2a.ts"
   },
   "engines": {
     "node": ">=20.0.0"

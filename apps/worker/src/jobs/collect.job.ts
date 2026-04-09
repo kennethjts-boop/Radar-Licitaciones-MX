@@ -16,7 +16,7 @@ import { withLock } from '../core/lock';
 import { withTimeout } from '../core/errors';
 import { nowISO, formatDuration } from '../core/time';
 import { healthTracker } from '../core/healthcheck';
-import { collectComprasMx, COMPRASMX_SOURCE_KEY } from '../collectors/comprasmx/comprasmx.collector';
+import { collectComprasMx, recheckComprasMx, COMPRASMX_SOURCE_KEY, ComprasMxCollectResult } from '../collectors/comprasmx/comprasmx.collector';
 import { upsertProcurement } from '../storage/procurement.repo';
 import { startCollectRun, finishCollectRun } from '../storage/collect-run.repo';
 import { createAlert, markAlertSent, markAlertFailed } from '../storage/match-alert.repo';
@@ -28,26 +28,37 @@ import type { ProcurementStatus } from '../types/procurement';
 
 const log = createModuleLogger('collect-job');
 
-// Source ID para comprasmx — debe existir en Supabase (seede en Fase 1)
-const COMPRASMX_SOURCE_ID = 'comprasmx-source-id'; // TODO: obtener de DB en Fase 1
+// Source ID para comprasmx — resuelto en bootstrap y propagado aquí
+let _comprasMxSourceId: string | null = null;
+
+export function setComprasMxSourceId(id: string | null): void {
+  _comprasMxSourceId = id;
+}
 
 const COLLECT_TIMEOUT_MS = 25 * 60 * 1000; // 25 minutos
 
 export async function runCollectJob(): Promise<void> {
-  log.info('Iniciando ciclo de colección');
+  log.info('Iniciando ciclo de colección (Playwright Fase 2)');
   const cycleStart = Date.now();
 
   await withLock('collect-job', 'main-collect', async () => {
-    const runId = await startCollectRun(COMPRASMX_SOURCE_ID, COMPRASMX_SOURCE_KEY);
+    if (!_comprasMxSourceId) {
+      log.error('No source_id for comprasmx available. Cannot collect.');
+      return;
+    }
+    const sourceId = _comprasMxSourceId;
+
+    const runId = await startCollectRun(sourceId, COMPRASMX_SOURCE_KEY);
     let itemsSeen = 0;
     let itemsCreated = 0;
     let itemsUpdated = 0;
     let totalMatches = 0;
     let errorMessage: string | null = null;
+    let collectResult: ComprasMxCollectResult | null = null;
 
     try {
       // 1. Colectar
-      const collectResult = await withTimeout(
+      collectResult = await withTimeout(
         collectComprasMx({ maxPages: 10, headless: true }),
         COLLECT_TIMEOUT_MS,
         'comprasmx-collection'
@@ -62,7 +73,7 @@ export async function runCollectJob(): Promise<void> {
       for (const item of collectResult.items) {
         try {
           // Upsert en DB
-          const upsertResult = await upsertProcurement(item, COMPRASMX_SOURCE_ID);
+          const upsertResult = await upsertProcurement(item, sourceId);
 
           if (upsertResult.isNew) itemsCreated++;
           else if (upsertResult.isUpdated) itemsUpdated++;
@@ -132,9 +143,24 @@ export async function runCollectJob(): Promise<void> {
         itemsSeen,
         itemsCreated,
         itemsUpdated,
-        errorMessage,
-        metadata: { totalMatches },
+        errorMessage: errorMessage || collectResult?.stopReason || null,
+        metadata: { totalMatches, pagesCollected: collectResult?.pagesCollected || 0 },
       });
+
+      await (async () => {
+         const { setState, STATE_KEYS } = await import('../core/system-state');
+         await setState(STATE_KEYS.LAST_COLLECT_RUN, {
+            collectorKey: 'comprasmx_playwright',
+            startedAt: cycleStart,
+            finishedAt,
+            status: errorMessage ? 'error' : 'success',
+            errorMessage: errorMessage || collectResult?.stopReason || null,
+            itemsSeen,
+            itemsCreated,
+            itemsUpdated,
+            pagesScanned: collectResult?.pagesCollected || 0
+         });
+      })();
 
       const durationMs = Date.now() - cycleStart;
       healthTracker.recordCycle(durationMs, totalMatches);
@@ -154,6 +180,106 @@ export async function runCollectJob(): Promise<void> {
   });
 }
 
-// NOTE: COMPRASMX_SOURCE_ID debe resolverse desde la tabla sources en Fase 1.
-// Seed en supabase-schema.sql garantiza que el key 'comprasmx' existe.
-// En Fase 1: SELECT id FROM sources WHERE key = 'comprasmx'
+/**
+ * RE-CHECK JOB (MODO 2) — Para la iteración de Activos diariamente
+ */
+export async function runRecheckJob(): Promise<void> {
+  log.info('🔄 Iniciando ciclo de ReCheck de expedientes activos');
+  const cycleStart = Date.now();
+
+  await withLock('recheck-job', 'daily-recheck', async () => {
+    if (!_comprasMxSourceId) {
+      log.error('No source_id for comprasmx available. Cannot recheck.');
+      return;
+    }
+    const sourceId = _comprasMxSourceId;
+    const runId = await startCollectRun(sourceId, COMPRASMX_SOURCE_KEY + '_recheck');
+
+    let itemsSeen = 0;
+    let itemsCreated = 0;
+    let itemsUpdated = 0;
+    let totalMatches = 0;
+    let errorMessage: string | null = null;
+    
+    try {
+      const db = (await import('../storage/client')).getSupabaseClient();
+
+      // Obtener expedientes activos o en proceso
+      const { data: actives } = await db
+        .from('procurements')
+        .select('source_url')
+        .eq('source_id', sourceId)
+        .in('status', ['Vigente', 'activa', 'en_proceso', 'Publicado', 'Por Adjudicar']);
+
+      if (!actives || actives.length === 0) {
+        log.info('No hay expedientes activos para re-checar');
+        return;
+      }
+
+      const urls = actives.map(a => a.source_url).filter(Boolean);
+      log.info(`Procediendo a re-checar ${urls.length} URLs activas`);
+
+      const collectResult = await recheckComprasMx(urls);
+      itemsSeen = collectResult.itemsSeen;
+      
+      const radars = getActiveRadars();
+
+      for (const item of collectResult.items) {
+        try {
+          const upsertResult = await upsertProcurement(item, sourceId);
+          if (upsertResult.isNew) itemsCreated++;
+          else if (upsertResult.isUpdated) itemsUpdated++;
+
+          if (!upsertResult.isNew && !upsertResult.isUpdated) continue;
+
+          const previousStatus = upsertResult.isUpdated && upsertResult.changedFields['status']
+            ? (upsertResult.changedFields['status'].prev as ProcurementStatus)
+            : null;
+
+          const matches = evaluateAllRadars(item, radars, upsertResult.isNew, previousStatus);
+          totalMatches += matches.length;
+
+          for (const match of matches) {
+            try {
+              const enrichableMatch = {
+                ...match,
+                procurementId: upsertResult.procurementId,
+              };
+              const enriched = await enrichMatch(item, enrichableMatch);
+              const alertId = await createAlert(enriched);
+              const msgId = await sendMatchAlert(enriched);
+              if (msgId) await markAlertSent(alertId, msgId);
+              else await markAlertFailed(alertId);
+            } catch (err) {
+              log.error({ err }, 'Error procesando match en Recheck');
+            }
+          }
+        } catch(e) {
+          log.error({ e, url: item.sourceUrl }, 'Error upserting rechecked item');
+        }
+      }
+
+      if (collectResult.errors.length > 0) {
+        errorMessage = collectResult.errors.join('; ');
+      }
+    } catch (err) {
+      errorMessage = err instanceof Error ? err.message : String(err);
+      log.error({ err }, '❌ Error en ciclo recheck');
+    } finally {
+      const finishedAt = nowISO();
+      await finishCollectRun(runId, {
+        finishedAt,
+        status: errorMessage ? 'error' : 'success',
+        itemsSeen,
+        itemsCreated,
+        itemsUpdated,
+        errorMessage,
+        metadata: { totalMatches },
+      });
+
+      const durationMs = Date.now() - cycleStart;
+      log.info({ duration: formatDuration(durationMs), status: errorMessage ? 'error' : 'success' }, '🏁 ReCheck Cycle finished');
+    }
+  });
+}
+

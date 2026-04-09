@@ -161,6 +161,7 @@ export function normalize(input: RawProcurementInput): NormalizedProcurement {
     attachments,
     canonicalText,
     canonicalFingerprint,
+    lightweightFingerprint: null,
     rawJson: input.rawJson,
     fetchedAt: nowISO(),
   };
