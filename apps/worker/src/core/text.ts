@@ -22,6 +22,19 @@ export function normalizeText(text: string): string {
 }
 
 /**
+ * Limpia texto para búsquedas por keyword con RegExp.
+ */
+export function sanitizeForKeywordRegex(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
  * Extrae tokens únicos de un texto normalizado (palabras ≥ 3 chars).
  */
 export function tokenize(text: string): string[] {

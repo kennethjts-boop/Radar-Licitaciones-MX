@@ -47,12 +47,14 @@ import { uploadAttachment } from "../storage/storage.service";
 import { extractTextFromPdf, chunkText } from "../utils/pdf.util";
 import { analyzeTenderDocument, generateEmbedding } from "../ai/openai.service";
 import { BUSINESS_PROFILE } from "../config/business_profile";
+import { sanitizeForKeywordRegex } from "../core/text";
 
 const log = createModuleLogger("collect-job");
 const AI_VIP_ALERT_SCORE_THRESHOLD = 70;
 const AI_VIP_ALERT_WIN_PROBABILITY_THRESHOLD = 50;
 const RAG_MATCH_THRESHOLD = 0.7;
 const RAG_MATCH_COUNT = 3;
+const MAX_HISTORICAL_CONTEXT_CHARS = 2_000;
 const CATEGORY_NONE = "NONE";
 
 // Source ID para comprasmx — resuelto en bootstrap y propagado aquí
@@ -68,19 +70,13 @@ async function processAttachmentsForProcurement(
   procurementId: string,
   sourceUrl: string,
 ): Promise<void> {
-  const normalizeForKeywordSearch = (value: string): string =>
-    value
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "");
-
   const excludedKeywordsIndex = BUSINESS_PROFILE.EXCLUDED_KEYWORDS.map((word) => ({
     raw: word,
-    normalized: normalizeForKeywordSearch(word),
+    normalized: sanitizeForKeywordRegex(word),
   }));
 
   const detectExcludedKeyword = (rawText: string): string | null => {
-    const normalizedText = normalizeForKeywordSearch(rawText);
+    const normalizedText = sanitizeForKeywordRegex(rawText);
 
     for (const keyword of excludedKeywordsIndex) {
       const escaped = keyword.normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -265,6 +261,19 @@ async function processAttachmentsForProcurement(
                     .filter(Boolean)
                     .join("\n\n---\n\n")
                 : "";
+
+              if (historicalContext.length > MAX_HISTORICAL_CONTEXT_CHARS) {
+                historicalContext = historicalContext.slice(0, MAX_HISTORICAL_CONTEXT_CHARS);
+                log.info(
+                  {
+                    event: "RAG_CONTEXT_TRUNCATED",
+                    procurementId,
+                    fileName: file.fileName,
+                    maxChars: MAX_HISTORICAL_CONTEXT_CHARS,
+                  },
+                  "Contexto histórico RAG truncado para proteger límite de tokens",
+                );
+              }
             } catch (ragErr) {
               log.warn(
                 {
@@ -335,6 +344,16 @@ async function processAttachmentsForProcurement(
                 },
                 "Alerta VIP omitida por baja relevancia para el perfil de negocio",
               );
+
+              log.info(
+                {
+                  event: "DOCUMENT_DISCARDED_NOT_RELEVANT",
+                  procurementId,
+                  fileName: file.fileName,
+                  reason: analysis.relevance_justification,
+                },
+                "Documento descartado por is_relevant=false",
+              );
             }
 
             if (hasHighScore && !hasViableWinProbability) {
@@ -352,25 +371,47 @@ async function processAttachmentsForProcurement(
             }
 
             if (shouldSendVip && !alreadySent) {
-              const vipMessage = formatAiVipAlertMessage({
-                categoryDetected: analysis.category_detected,
-                relevanceJustification: analysis.relevance_justification,
-                score: analysis.scores,
-                licitacionRef: procurementRef,
-                contractType: analysis.key_data.contract_type,
-                deadline: analysis.key_data.deadline,
-                opportunities: analysis.opportunities,
-                risks: analysis.risks,
-                opportunityEngine: {
-                  winProbability: analysis.opportunity_engine.win_probability,
-                  competitorThreatLevel:
-                    analysis.opportunity_engine.competitor_threat_level,
-                  implementationComplexity:
-                    analysis.opportunity_engine.implementation_complexity,
-                  redFlags: analysis.opportunity_engine.red_flags,
-                },
-                link: procurementLink,
-              });
+              let vipMessage: string | null = null;
+
+              try {
+                vipMessage = formatAiVipAlertMessage({
+                  categoryDetected: analysis.category_detected,
+                  relevanceJustification: analysis.relevance_justification,
+                  score: analysis.scores,
+                  licitacionRef: procurementRef,
+                  contractType: analysis.key_data.contract_type,
+                  deadline: analysis.key_data.deadline,
+                  opportunities: analysis.opportunities,
+                  risks: analysis.risks,
+                  opportunityEngine: {
+                    winProbability: analysis.opportunity_engine.win_probability,
+                    competitorThreatLevel:
+                      analysis.opportunity_engine.competitor_threat_level,
+                    implementationComplexity:
+                      analysis.opportunity_engine.implementation_complexity,
+                    redFlags: analysis.opportunity_engine.red_flags,
+                  },
+                  link: procurementLink,
+                });
+              } catch (vipFormatErr) {
+                log.warn(
+                  {
+                    event: "AI_VIP_FORMAT_FAILED",
+                    err: vipFormatErr,
+                    procurementId,
+                    fileName: file.fileName,
+                  },
+                  "Error formateando alerta VIP; se usará fallback básico",
+                );
+                const safeReference = procurementRef || "Sin referencia";
+                const safeLink = procurementLink || sourceUrl;
+                vipMessage = [
+                  "⚠️ <b>ALERTA VIP (FALLBACK)</b>",
+                  "Se detectó una oportunidad relevante y se activó modo resiliente.",
+                  `📄 <b>Ref:</b> ${safeReference}`,
+                  `🔗 <a href="${safeLink}">Ver Documento</a>`,
+                ].join("\n");
+              }
 
               if (vipMessage) {
                 await sendTelegramMessage(vipMessage, "HTML");
