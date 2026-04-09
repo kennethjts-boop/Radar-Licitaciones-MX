@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { createModuleLogger } from "../core/logger";
+import { BUSINESS_PROFILE, BusinessCategory } from "../config/business_profile";
 
 const log = createModuleLogger("openai-service");
 
@@ -28,6 +29,9 @@ export interface TenderDocumentAnalysis {
     implementation_complexity: "LOW" | "MEDIUM" | "HIGH";
     red_flags: string[];
   };
+  category_detected: BusinessCategory | "NONE";
+  is_relevant: boolean;
+  relevance_justification: string;
 }
 
 const systemPrompt = `Actúas como Director de Ventas a Gobierno (C-Level) para un proveedor privado en México.
@@ -45,6 +49,17 @@ Si detectas estos candados:
 - Sube competitor_threat_level.
 - Reduce win_probability de forma consistente con la evidencia.
 - Registra los candados concretos en red_flags.
+
+Contexto de negocio (perfil maestro):
+{{BUSINESS_CATEGORIES}}
+
+Instrucción: Eres un experto en licitaciones mexicanas. Evalúa si el documento pertenece a alguna de estas categorías.
+Si es CAPUFE, busca productos específicos. Si es ISSSTE o IMSS Morelos, busca servicios integrales o suministros técnicos.
+
+Evalúa explícitamente la relevancia real del documento:
+- category_detected: categoría exacta detectada o "NONE" si no hay match.
+- is_relevant=true solo si hay evidencia sustantiva de coincidencia con alguna categoría.
+- relevance_justification debe explicar por qué sí/no aplica en máximo 15 palabras.
 
 Debes responder EXCLUSIVAMENTE en JSON válido con este formato exacto:
 {
@@ -68,7 +83,10 @@ Debes responder EXCLUSIVAMENTE en JSON válido con este formato exacto:
     "competitor_threat_level": "LOW" | "MEDIUM" | "HIGH",
     "implementation_complexity": "LOW" | "MEDIUM" | "HIGH",
     "red_flags": string[] (máximo 5, candados o requisitos limitantes)
-  }
+  },
+  "category_detected": "CAPUFE_VEHICULOS" | "CAPUFE_PEAJE" | "CAPUFE_OPORTUNIDADES" | "CONAVI_FEDERAL" | "IMSS_MORELOS" | "ISSSTE_CENTRAL" | "NONE",
+  "is_relevant": boolean,
+  "relevance_justification": string (máximo 15 palabras)
 }
 
 Reglas:
@@ -80,7 +98,8 @@ Reglas:
 - scores.total=0 mala oportunidad / scores.total=100 oportunidad alta con riesgo controlado.
 - win_probability=0 casi imposible de ganar / win_probability=100 muy alta probabilidad real de adjudicación.
 - competitor_threat_level: LOW (abierto), MEDIUM (hay señales mixtas), HIGH (múltiples candados claros o fuerte sesgo a incumbente).
-- implementation_complexity evalúa dificultad real de ejecución para cumplir alcance, tiempos y requisitos.`;
+- implementation_complexity evalúa dificultad real de ejecución para cumplir alcance, tiempos y requisitos.
+- Si is_relevant=false, no maquilles scores: mantén coherencia entre baja relevancia y scoring.`;
 
 function ensureApiKey(): string {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -109,8 +128,17 @@ function normalizeResult(payload: unknown): TenderDocumentAnalysis {
   };
 
   const summaryRaw = typeof obj.summary === "string" ? obj.summary.trim() : "";
+  const relevanceJustificationRaw =
+    typeof obj.relevance_justification === "string"
+      ? obj.relevance_justification.trim()
+      : "";
   const summaryWords = summaryRaw.split(/\s+/).filter(Boolean).slice(0, 15);
   const summary = summaryWords.join(" ");
+  const relevanceWords = relevanceJustificationRaw
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 15);
+  const relevanceJustification = relevanceWords.join(" ") || "No especificado";
   const opportunities = Array.isArray(obj.opportunities)
     ? obj.opportunities
         .map((item) => String(item).trim())
@@ -163,6 +191,20 @@ function normalizeResult(payload: unknown): TenderDocumentAnalysis {
       ),
       red_flags: redFlags,
     },
+    category_detected:
+      typeof obj.category_detected === "string" &&
+      [
+        "CAPUFE_VEHICULOS",
+        "CAPUFE_PEAJE",
+        "CAPUFE_OPORTUNIDADES",
+        "CONAVI_FEDERAL",
+        "IMSS_MORELOS",
+        "ISSSTE_CENTRAL",
+      ].includes(obj.category_detected)
+        ? (obj.category_detected as BusinessCategory)
+        : "NONE",
+    is_relevant: obj.is_relevant === true,
+    relevance_justification: relevanceJustification,
   };
 }
 
@@ -178,9 +220,18 @@ export async function analyzeTenderDocument(
 
   try {
     const normalizedHistoricalContext = historicalContext?.trim() ?? "";
+    const categoriesBlock = Object.entries(BUSINESS_PROFILE.CATEGORIES)
+      .map(([category, terms]) => `- ${category}: ${terms.join(", ")}`)
+      .join("\n");
+    const excludedKeywordsList = BUSINESS_PROFILE.EXCLUDED_KEYWORDS.join(", ");
+
     const userPrompt = normalizedHistoricalContext
       ? [
           "Analiza el siguiente documento de licitación y devuelve el JSON solicitado.",
+          "",
+          "Categorías de negocio:",
+          categoriesBlock,
+          `EXCLUDED_KEYWORDS: ${excludedKeywordsList}`,
           "",
           "Antecedentes históricos relevantes (RAG):",
           normalizedHistoricalContext,
@@ -192,7 +243,16 @@ export async function analyzeTenderDocument(
           "Documento de licitación actual:",
           text,
         ].join("\n")
-      : `Analiza el siguiente documento de licitación y devuelve el JSON solicitado:\n\n${text}`;
+      : [
+          "Analiza el siguiente documento de licitación y devuelve el JSON solicitado.",
+          "",
+          "Categorías de negocio:",
+          categoriesBlock,
+          `EXCLUDED_KEYWORDS: ${excludedKeywordsList}`,
+          "",
+          "Documento de licitación actual:",
+          text,
+        ].join("\n");
 
     const completion = await client.chat.completions.create({
       model: OPENAI_MODEL,
@@ -210,6 +270,9 @@ export async function analyzeTenderDocument(
               "opportunities",
               "risks",
               "opportunity_engine",
+              "category_detected",
+              "is_relevant",
+              "relevance_justification",
             ],
             properties: {
               scores: {
@@ -277,6 +340,20 @@ export async function analyzeTenderDocument(
                   },
                 },
               },
+              category_detected: {
+                type: "string",
+                enum: [
+                  "CAPUFE_VEHICULOS",
+                  "CAPUFE_PEAJE",
+                  "CAPUFE_OPORTUNIDADES",
+                  "CONAVI_FEDERAL",
+                  "IMSS_MORELOS",
+                  "ISSSTE_CENTRAL",
+                  "NONE",
+                ],
+              },
+              is_relevant: { type: "boolean" },
+              relevance_justification: { type: "string", maxLength: 200 },
             },
           },
           strict: true,
@@ -286,7 +363,8 @@ export async function analyzeTenderDocument(
       messages: [
         {
           role: "system",
-          content: `${systemPrompt}
+          content: `${systemPrompt
+            .replace("{{BUSINESS_CATEGORIES}}", categoriesBlock)}
 - Si te proporcionan antecedentes históricos reales (RAG), utilízalos para detectar recurrencia y patrones de riesgo/oportunidad.
 - No trates esos antecedentes como hechos del documento actual; úsalo como contexto comparativo.
 - Integra esos hallazgos en summary y opportunities solo cuando haya evidencia.`,

@@ -35,6 +35,8 @@ function escapeHtml(text: string): string {
 }
 
 export interface AiVipAlertPayload {
+  categoryDetected: string;
+  relevanceJustification: string;
   score: {
     total: number;
     technical: number;
@@ -76,6 +78,8 @@ export function formatAiVipAlertMessage(payload: AiVipAlertPayload): string | nu
     "Sin candados relevantes detectados";
 
   const lines = [
+    `📂 <b>CATEGORÍA:</b> ${escapeHtml(payload.categoryDetected)}`,
+    `🎯 <b>RELEVANCIA:</b> ${escapeHtml(payload.relevanceJustification)}`,
     `${icon} <b>SCORE: ${payload.score.total}/100</b>`,
     `🎯 <b>Probabilidad de Ganar:</b> ${payload.opportunityEngine.winProbability}%`,
     `🥷 <b>Amenaza de Competencia:</b> ${payload.opportunityEngine.competitorThreatLevel}`,

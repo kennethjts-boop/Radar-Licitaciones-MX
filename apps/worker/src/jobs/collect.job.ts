@@ -16,7 +16,7 @@ import { withLock } from "../core/lock";
 import { withTimeout } from "../core/errors";
 import { nowISO, formatDuration } from "../core/time";
 import { healthTracker } from "../core/healthcheck";
-import { existsSync, unlinkSync } from "fs";
+import { existsSync, readFileSync, unlinkSync } from "fs";
 import {
   collectComprasMx,
   recheckComprasMx,
@@ -46,12 +46,14 @@ import { downloadAttachmentsFromDetail } from "../collectors/comprasmx/comprasmx
 import { uploadAttachment } from "../storage/storage.service";
 import { extractTextFromPdf, chunkText } from "../utils/pdf.util";
 import { analyzeTenderDocument, generateEmbedding } from "../ai/openai.service";
+import { BUSINESS_PROFILE } from "../config/business_profile";
 
 const log = createModuleLogger("collect-job");
 const AI_VIP_ALERT_SCORE_THRESHOLD = 70;
 const AI_VIP_ALERT_WIN_PROBABILITY_THRESHOLD = 50;
 const RAG_MATCH_THRESHOLD = 0.7;
 const RAG_MATCH_COUNT = 3;
+const CATEGORY_NONE = "NONE";
 
 // Source ID para comprasmx — resuelto en bootstrap y propagado aquí
 let _comprasMxSourceId: string | null = null;
@@ -66,6 +68,31 @@ async function processAttachmentsForProcurement(
   procurementId: string,
   sourceUrl: string,
 ): Promise<void> {
+  const normalizeForKeywordSearch = (value: string): string =>
+    value
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+
+  const excludedKeywordsIndex = BUSINESS_PROFILE.EXCLUDED_KEYWORDS.map((word) => ({
+    raw: word,
+    normalized: normalizeForKeywordSearch(word),
+  }));
+
+  const detectExcludedKeyword = (rawText: string): string | null => {
+    const normalizedText = normalizeForKeywordSearch(rawText);
+
+    for (const keyword of excludedKeywordsIndex) {
+      const escaped = keyword.normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const pattern = new RegExp(`(^|\\b)${escaped}(\\b|$)`, "i");
+      if (pattern.test(normalizedText)) {
+        return keyword.raw;
+      }
+    }
+
+    return null;
+  };
+
   const db = getSupabaseClient();
   const { data: procurementRow, error: procurementErr } = await db
     .from("procurements")
@@ -146,6 +173,52 @@ async function processAttachmentsForProcurement(
         }
 
         try {
+          const rawPdfText = readFileSync(file.tempFilePath).toString("latin1");
+          const excludedKeyword = detectExcludedKeyword(rawPdfText);
+          if (excludedKeyword) {
+            const skipJustification = `Excluida por keyword bloqueada: ${excludedKeyword}`;
+            const { error: skipAnalysisErr } = await db
+              .from("document_analysis")
+              .upsert({
+                attachment_id: insertedAttachment.id,
+                score_total: 0,
+                score_tech: 0,
+                score_commercial: 0,
+                score_urgency: 0,
+                score_viability: 0,
+                contract_type: "No especificado",
+                deadline: "No especificado",
+                guarantees: "No especificado",
+                summary: "Documento descartado por keyword excluida",
+                opportunities: [],
+                risks: [],
+                win_probability: 0,
+                competitor_threat_level: "MEDIUM",
+                implementation_complexity: "MEDIUM",
+                red_flags: [],
+                category_detected: CATEGORY_NONE,
+                is_relevant: false,
+                relevance_justification: skipJustification,
+              }, { onConflict: "attachment_id" });
+
+            if (skipAnalysisErr) {
+              throw new Error(skipAnalysisErr.message);
+            }
+
+            log.info(
+              {
+                event: "SKIP_EXCLUDED",
+                procurementId,
+                fileName: file.fileName,
+                reason: excludedKeyword,
+              },
+              "Documento descartado por keyword de exclusión (sin llamada a OpenAI)",
+            );
+
+            existingFileNames.add(file.fileName);
+            continue;
+          }
+
           const extractedText = await extractTextFromPdf(file.tempFilePath);
 
           if (!extractedText.trim()) {
@@ -230,6 +303,9 @@ async function processAttachmentsForProcurement(
                 implementation_complexity:
                   analysis.opportunity_engine.implementation_complexity,
                 red_flags: analysis.opportunity_engine.red_flags,
+                category_detected: analysis.category_detected,
+                is_relevant: analysis.is_relevant,
+                relevance_justification: analysis.relevance_justification,
               }, { onConflict: "attachment_id" })
               .select("id, alert_sent")
               .single();
@@ -243,7 +319,23 @@ async function processAttachmentsForProcurement(
             const hasViableWinProbability =
               analysis.opportunity_engine.win_probability >=
               AI_VIP_ALERT_WIN_PROBABILITY_THRESHOLD;
-            const shouldSendVip = hasHighScore && hasViableWinProbability;
+            const isRelevant = analysis.is_relevant === true;
+            const shouldSendVip =
+              hasHighScore && hasViableWinProbability && isRelevant;
+
+            if (!isRelevant) {
+              log.info(
+                {
+                  event: "AI_VIP_ALERT_IGNORED_NOT_RELEVANT",
+                  procurementId,
+                  fileName: file.fileName,
+                  scoreTotal: analysis.scores.total,
+                  winProbability: analysis.opportunity_engine.win_probability,
+                  relevanceJustification: analysis.relevance_justification,
+                },
+                "Alerta VIP omitida por baja relevancia para el perfil de negocio",
+              );
+            }
 
             if (hasHighScore && !hasViableWinProbability) {
               log.info(
@@ -261,6 +353,8 @@ async function processAttachmentsForProcurement(
 
             if (shouldSendVip && !alreadySent) {
               const vipMessage = formatAiVipAlertMessage({
+                categoryDetected: analysis.category_detected,
+                relevanceJustification: analysis.relevance_justification,
                 score: analysis.scores,
                 licitacionRef: procurementRef,
                 contractType: analysis.key_data.contract_type,
