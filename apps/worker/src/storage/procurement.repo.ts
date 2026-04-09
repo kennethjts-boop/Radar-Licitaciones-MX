@@ -52,10 +52,24 @@ export async function upsertProcurement(
   // ── Caso 1: No existe → insertar ──────────────────────────────────────────
   if (!existing) {
     const id = uuidv4();
+    
+    // Insertar RAW
+    const { data: rawData, error: rawError } = await db.from('raw_items').insert({
+      source_id: sourceId,
+      external_id: normalized.externalId,
+      raw_data: normalized.rawJson,
+      fetched_at: now
+    }).select('id').single();
+
+    if (rawError) {
+      log.warn({ rawError }, 'Error insertando raw_item, continuando...');
+    }
+
     const newRecord: DbProcurement = {
       id,
       source_id: sourceId,
       external_id: normalized.externalId,
+      raw_item_id: rawData?.id ?? null,
       expediente_id: normalized.expedienteId,
       licitation_number: normalized.licitationNumber,
       procedure_number: normalized.procedureNumber,
@@ -75,7 +89,10 @@ export async function upsertProcurement(
       source_url: normalized.sourceUrl,
       canonical_text: normalized.canonicalText,
       canonical_fingerprint: normalized.canonicalFingerprint,
+      lightweight_fingerprint: normalized.lightweightFingerprint,
       last_seen_at: now,
+      last_detail_checked_at: now,
+      last_attachments_checked_at: normalized.attachments.length > 0 ? now : null,
       created_at: now,
       updated_at: now,
     };
@@ -158,7 +175,10 @@ export async function upsertProcurement(
       source_url: normalized.sourceUrl,
       canonical_text: normalized.canonicalText,
       canonical_fingerprint: normalized.canonicalFingerprint,
+      lightweight_fingerprint: normalized.lightweightFingerprint,
       last_seen_at: now,
+      last_detail_checked_at: now,
+      last_attachments_checked_at: normalized.attachments.length > 0 ? now : null,
       updated_at: now,
     })
     .eq('id', existing.id);

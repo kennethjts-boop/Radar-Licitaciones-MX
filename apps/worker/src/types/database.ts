@@ -53,6 +53,7 @@ export interface DbProcurement {
   id: string;
   source_id: string;
   external_id: string;
+  raw_item_id: string | null;
   expediente_id: string | null;
   licitation_number: string | null;
   procedure_number: string | null;
@@ -72,7 +73,10 @@ export interface DbProcurement {
   source_url: string;
   canonical_text: string;
   canonical_fingerprint: string;
+  lightweight_fingerprint: string | null;
   last_seen_at: string;
+  last_detail_checked_at: string | null;
+  last_attachments_checked_at: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -90,6 +90,7 @@ export interface NormalizedProcurement {
   // Texto canónico para fingerprint y matching
   canonicalText: string;             // título + descripción + dependencia + unidad + términos adjuntos
   canonicalFingerprint: string;      // SHA-256 hex del canonicalText
+  lightweightFingerprint: string | null;
 
   // Raw original (preservar siempre)
   rawJson: Record<string, unknown>;
