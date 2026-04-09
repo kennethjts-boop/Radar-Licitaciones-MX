@@ -7,14 +7,14 @@
  * - Sección relevante: "Convocatorias" y "Avisos"
  * - Puede requerir descarga de PDFs para extraer expedientes
  */
-import { createModuleLogger } from '../../core/logger';
-import { nowISO } from '../../core/time';
-import type { NormalizedProcurement } from '../../types/procurement';
+import { createModuleLogger } from "../../core/logger";
+import { nowISO } from "../../core/time";
+import type { NormalizedProcurement } from "../../types/procurement";
 
-const log = createModuleLogger('collector-dof');
+const log = createModuleLogger("collector-dof");
 
-export const DOF_SOURCE_KEY = 'dof';
-export const DOF_BASE_URL = 'https://dof.gob.mx/';
+export const DOF_SOURCE_KEY = "dof";
+export const DOF_BASE_URL = "https://dof.gob.mx/";
 
 export interface DofCollectResult {
   items: NormalizedProcurement[];
@@ -25,6 +25,11 @@ export interface DofCollectResult {
 
 export async function collectDof(): Promise<DofCollectResult> {
   const startedAt = nowISO();
-  log.warn('STUB: collector DOF no implementado — implementar en Fase 3');
-  return { items: [], errors: ['Collector DOF — Fase 3 stub'], startedAt, finishedAt: nowISO() };
+  log.warn("STUB: collector DOF no implementado — implementar en Fase 3");
+  return {
+    items: [],
+    errors: ["Collector DOF — Fase 3 stub"],
+    startedAt,
+    finishedAt: nowISO(),
+  };
 }

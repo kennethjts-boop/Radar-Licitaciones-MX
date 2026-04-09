@@ -18,28 +18,28 @@
  * - NO crear tablas automáticamente
  * - Sugerir ejecutar docs/supabase-schema.sql
  */
-import { createModuleLogger } from '../core/logger';
-import { getSupabaseClient } from './client';
+import { createModuleLogger } from "../core/logger";
+import { getSupabaseClient } from "./client";
 
-const log = createModuleLogger('schema-validator');
+const log = createModuleLogger("schema-validator");
 
 // ─── Tablas requeridas ────────────────────────────────────────────────────────
 
 export const REQUIRED_TABLES = [
-  'sources',
-  'collect_runs',
-  'raw_items',
-  'procurements',
-  'procurement_versions',
-  'attachments',
-  'radars',
-  'radar_rules',
-  'matches',
-  'alerts',
-  'telegram_logs',
-  'daily_summaries',
-  'entity_memory',
-  'system_state',
+  "sources",
+  "collect_runs",
+  "raw_items",
+  "procurements",
+  "procurement_versions",
+  "attachments",
+  "radars",
+  "radar_rules",
+  "matches",
+  "alerts",
+  "telegram_logs",
+  "daily_summaries",
+  "entity_memory",
+  "system_state",
 ] as const;
 
 export type RequiredTable = (typeof REQUIRED_TABLES)[number];
@@ -61,26 +61,26 @@ export class SchemaValidationError extends Error {
   constructor(
     public readonly missing: string[],
     public readonly found: number,
-    public readonly total: number
+    public readonly total: number,
   ) {
     super(
-      `DATABASE SCHEMA NOT INITIALIZED — Faltan ${missing.length} tabla(s): [${missing.join(', ')}]`
+      `DATABASE SCHEMA NOT INITIALIZED — Faltan ${missing.length} tabla(s): [${missing.join(", ")}]`,
     );
-    this.name = 'SchemaValidationError';
+    this.name = "SchemaValidationError";
   }
 }
 
 // ─── Verificar una sola tabla ─────────────────────────────────────────────────
 
 async function checkTable(
-  tableName: string
+  tableName: string,
 ): Promise<{ exists: boolean; error?: string }> {
   const db = getSupabaseClient();
 
   try {
     const { error } = await db
       .from(tableName as RequiredTable)
-      .select('*', { count: 'exact', head: true });
+      .select("*", { count: "exact", head: true });
 
     if (!error) {
       return { exists: true };
@@ -89,22 +89,24 @@ async function checkTable(
     // PostgreSQL error 42P01: undefined_table (tabla no existe)
     // PostgREST lo propaga sin modificación
     if (
-      error.code === '42P01' ||
-      error.message?.toLowerCase().includes('does not exist') ||
-      error.message?.toLowerCase().includes('no existe')
+      error.code === "42P01" ||
+      error.message?.toLowerCase().includes("does not exist") ||
+      error.message?.toLowerCase().includes("no existe")
     ) {
       return { exists: false, error: error.message };
     }
 
     // Cualquier otro error (permisos, red, etc.) — asumimos que la tabla SÍ existe
     // porque el error no es de "tabla no encontrada"
-    log.warn({ table: tableName, code: error.code, msg: error.message },
-      'Error al verificar tabla — asumiendo que existe');
+    log.warn(
+      { table: tableName, code: error.code, msg: error.message },
+      "Error al verificar tabla — asumiendo que existe",
+    );
     return { exists: true, error: error.message };
   } catch (err) {
     // Error de red o crítico — no podemos determinar existencia
     const msg = err instanceof Error ? err.message : String(err);
-    log.warn({ table: tableName, err: msg }, 'Error de red verificando tabla');
+    log.warn({ table: tableName, err: msg }, "Error de red verificando tabla");
     // En caso de error de red, tratamos como existente para no generar
     // falsos positivos de "tabla faltante" cuando es un problema de conectividad
     return { exists: true, error: msg };
@@ -120,8 +122,11 @@ async function checkTable(
  * @returns SchemaValidationResult con el detalle completo
  */
 export async function verifyDatabaseSchema(): Promise<SchemaValidationResult> {
-  log.info('🔍 Validating database schema...');
-  log.info({ required: REQUIRED_TABLES.length }, `Checking ${REQUIRED_TABLES.length} required tables...`);
+  log.info("🔍 Validating database schema...");
+  log.info(
+    { required: REQUIRED_TABLES.length },
+    `Checking ${REQUIRED_TABLES.length} required tables...`,
+  );
 
   const tablesFound: string[] = [];
   const tablesMissing: string[] = [];
@@ -131,7 +136,7 @@ export async function verifyDatabaseSchema(): Promise<SchemaValidationResult> {
     REQUIRED_TABLES.map(async (table) => {
       const result = await checkTable(table);
       return { table, ...result };
-    })
+    }),
   );
 
   for (const { table, exists } of results) {
@@ -159,20 +164,23 @@ export async function verifyDatabaseSchema(): Promise<SchemaValidationResult> {
   if (tablesMissing.length > 0) {
     log.error(
       { found, total, missing: tablesMissing },
-      `❌ DATABASE SCHEMA NOT INITIALIZED — Tables found: ${found} / ${total}`
+      `❌ DATABASE SCHEMA NOT INITIALIZED — Tables found: ${found} / ${total}`,
     );
     log.error(
       { missing: tablesMissing },
-      `Missing tables: [${tablesMissing.join(', ')}]`
+      `Missing tables: [${tablesMissing.join(", ")}]`,
     );
     log.error(
-      'Run the SQL schema to fix: docs/supabase-schema.sql (copy-paste in Supabase SQL Editor)'
+      "Run the SQL schema to fix: docs/supabase-schema.sql (copy-paste in Supabase SQL Editor)",
     );
 
     throw new SchemaValidationError(tablesMissing, found, total);
   }
 
-  log.info({ found, total }, `✅ DATABASE SCHEMA VALIDATED — Tables found: ${found} / ${total}`);
+  log.info(
+    { found, total },
+    `✅ DATABASE SCHEMA VALIDATED — Tables found: ${found} / ${total}`,
+  );
   return validationResult;
 }
 
@@ -187,9 +195,7 @@ export async function verifyDatabaseSchemaSafe(): Promise<SchemaValidationResult
     if (err instanceof SchemaValidationError) {
       return {
         valid: false,
-        tablesFound: REQUIRED_TABLES.filter(
-          (t) => !err.missing.includes(t)
-        ),
+        tablesFound: REQUIRED_TABLES.filter((t) => !err.missing.includes(t)),
         tablesMissing: err.missing,
         tablesChecked: REQUIRED_TABLES.length,
         tablesRequired: REQUIRED_TABLES.length,

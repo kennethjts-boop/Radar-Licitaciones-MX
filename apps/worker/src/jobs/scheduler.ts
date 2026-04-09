@@ -1,66 +1,115 @@
 /**
- * SCHEDULER — Ciclo principal de 30 minutos con cron.
+ * SCHEDULER — Orquestador de ciclos con cron.
  *
- * FASE 1: usa heartbeat job (sin scraping).
- * FASE 2: descomentar la línea del collect job real.
+ * MODO 1 — Periodic Incremental Listing Scan
+ *   Corre cada COLLECT_INTERVAL_MINUTES minutos.
+ *   Usa el listado superficial + comparación de fingerprints + stop condition.
+ *
+ * MODO 2 — Daily Direct Recheck
+ *   Corre una vez al día a COMPRASMX_DAILY_RECHECK_HOUR (America/Mexico_City).
+ *   Toma expedientes activos/en_proceso desde DB y entra directo a source_url
+ *   sin cargar el índice general.
+ *
+ * RESUMEN DIARIO
+ *   Corre una vez al día a DAILY_SUMMARY_HOUR.
+ *   Genera y envía el resumen operativo por Telegram.
  */
-import cron from 'node-cron';
-import { createModuleLogger } from '../core/logger';
-import { getConfig } from '../config/env';
-import { recordSchedulerStarted } from '../core/system-state';
-import { runCollectJob, runRecheckJob } from './collect.job';
-import { runDailySummaryJob } from './daily-summary.job';
+import cron from "node-cron";
+import { createModuleLogger } from "../core/logger";
+import { getConfig } from "../config/env";
+import { recordSchedulerStarted } from "../core/system-state";
+import { runCollectJob, runRecheckJob } from "./collect.job";
+import { runDailySummaryJob } from "./daily-summary.job";
 
-const log = createModuleLogger('scheduler');
+const log = createModuleLogger("scheduler");
 
 export function startScheduler(): void {
   const config = getConfig();
-  const interval = config.COLLECT_INTERVAL_MINUTES;
+  const intervalMinutes = config.COLLECT_INTERVAL_MINUTES;
+  const recheckHour = config.COMPRASMX_DAILY_RECHECK_HOUR;
   const summaryHour = config.DAILY_SUMMARY_HOUR;
 
-  // ── Ciclo principal cada N minutos ────────────────────────────────────────
-  const collectCron = `*/${interval} * * * *`;
+  // ── MODO 1: Periodic Incremental Listing Scan ─────────────────────────────
+  // Corre cada N minutos, usa listing superficial, compara fingerprints, aplica stop condition.
+  const collectCron = `*/${intervalMinutes} * * * *`;
 
-  cron.schedule(collectCron, async () => {
-    log.info({ cron: collectCron }, '⏰ Disparando ciclo');
-    try {
-      // FASE 2: Playwright Collector
-      await runCollectJob();
-    } catch (err) {
-      log.error({ err }, '❌ Error no manejado en ciclo principal');
-    }
-  }, { timezone: 'America/Mexico_City' });
+  cron.schedule(
+    collectCron,
+    async () => {
+      log.info(
+        { cron: collectCron, mode: "listing_scan" },
+        "⏰ [MODO 1] Disparando Periodic Incremental Listing Scan",
+      );
+      try {
+        await runCollectJob();
+      } catch (err) {
+        log.error(
+          { err, mode: "listing_scan" },
+          "❌ Error no manejado en MODO 1 (Listing Scan)",
+        );
+      }
+    },
+    { timezone: "America/Mexico_City" },
+  );
 
-  // ── MODO 2: Revisión de Activos Diaria ──────────────────────────────────────
-  const recheckCron = `0 ${config.COMPRASMX_DAILY_RECHECK_HOUR} * * *`;
-  cron.schedule(recheckCron, async () => {
-    log.info('🔍 Disparando ReCheck Diario de expedientes activos');
-    try {
-      await runRecheckJob();
-    } catch (err) {
-      log.error({ err }, '❌ Error en ReCheck job diario');
-    }
-  }, { timezone: 'America/Mexico_City' });
+  // ── MODO 2: Daily Direct Recheck ──────────────────────────────────────────
+  // Corre una vez al día a COMPRASMX_DAILY_RECHECK_HOUR.
+  // Elude el listado general — entra directo a source_url de cada expediente activo.
+  const recheckCron = `0 ${recheckHour} * * *`;
 
-  // ── Resumen diario ────────────────────────────────────────────────────────
+  cron.schedule(
+    recheckCron,
+    async () => {
+      log.info(
+        { cron: recheckCron, hour: recheckHour, mode: "daily_recheck" },
+        "🔍 [MODO 2] Disparando Daily Direct Recheck de expedientes activos/en_proceso",
+      );
+      try {
+        await runRecheckJob();
+      } catch (err) {
+        log.error(
+          { err, mode: "daily_recheck" },
+          "❌ Error no manejado en MODO 2 (Daily Recheck)",
+        );
+      }
+    },
+    { timezone: "America/Mexico_City" },
+  );
+
+  // ── RESUMEN DIARIO ────────────────────────────────────────────────────────
   const summaryCron = `0 ${summaryHour} * * *`;
 
-  cron.schedule(summaryCron, async () => {
-    log.info('📊 Disparando resumen diario');
-    try {
-      await runDailySummaryJob();
-    } catch (err) {
-      log.error({ err }, '❌ Error en daily summary job');
-    }
-  }, { timezone: 'America/Mexico_City' });
+  cron.schedule(
+    summaryCron,
+    async () => {
+      log.info({ cron: summaryCron }, "📊 Disparando resumen diario");
+      try {
+        await runDailySummaryJob();
+      } catch (err) {
+        log.error({ err }, "❌ Error en daily summary job");
+      }
+    },
+    { timezone: "America/Mexico_City" },
+  );
 
-  // Registrar en system_state (no crashea si falla)
+  // Registrar estado en system_state
   recordSchedulerStarted(collectCron, summaryCron).catch((err) =>
-    log.warn({ err }, 'No se pudo registrar scheduler en system_state')
+    log.warn({ err }, "No se pudo registrar scheduler en system_state"),
   );
 
   log.info(
-    { collectCron, summaryCron },
-    `Scheduler started (${interval} min)`
+    {
+      mode1: {
+        cron: collectCron,
+        description: "Periodic Incremental Listing Scan",
+      },
+      mode2: {
+        cron: recheckCron,
+        description: "Daily Direct Recheck",
+        hour: recheckHour,
+      },
+      summary: { cron: summaryCron, hour: summaryHour },
+    },
+    `✅ Scheduler iniciado — Modo 1 cada ${intervalMinutes} min, Modo 2 a las ${recheckHour}:00, Resumen a las ${summaryHour}:00`,
   );
 }

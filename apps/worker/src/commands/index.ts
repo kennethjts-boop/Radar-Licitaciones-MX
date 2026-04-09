@@ -1,4 +1,4 @@
 /**
  * COMMANDS — Barrel exports
  */
-export * from './telegram.commands';
+export * from "./telegram.commands";

@@ -7,7 +7,10 @@ ADD COLUMN IF NOT EXISTS lightweight_fingerprint TEXT,
 ADD COLUMN IF NOT EXISTS last_detail_checked_at TIMESTAMPTZ,
 ADD COLUMN IF NOT EXISTS last_attachments_checked_at TIMESTAMPTZ;
 
--- Índice en el nuevo fingerprint para detección rápida
+-- Índice para búsqueda rápida combinando origin y external_id (clave natural) para la decisión incremental
+CREATE INDEX IF NOT EXISTS idx_proc_source_ext_id ON procurements (source_id, external_id);
+
+-- Índice en el nuevo fingerprint superficial
 CREATE INDEX IF NOT EXISTS idx_proc_lightweight_fp ON procurements (lightweight_fingerprint);
 
 -- Comentario documental

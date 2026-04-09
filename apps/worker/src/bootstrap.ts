@@ -19,20 +19,20 @@
  * fallará de forma silenciosa o con errores confusos. Es mejor fallar rápido
  * con un mensaje claro que dejar correr un worker roto.
  */
-import TelegramBot from 'node-telegram-bot-api';
-import { getConfig } from './config/env';
-import { createModuleLogger } from './core/logger';
-import { healthTracker } from './core/healthcheck';
-import { recordWorkerBoot, recordHealthcheck } from './core/system-state';
-import { nowISO, formatMexicoDate } from './core/time';
-import { getActiveRadars } from './radars/index';
+import TelegramBot from "node-telegram-bot-api";
+import { getConfig } from "./config/env";
+import { createModuleLogger } from "./core/logger";
+import { healthTracker } from "./core/healthcheck";
+import { recordWorkerBoot, recordHealthcheck } from "./core/system-state";
+import { nowISO, formatMexicoDate } from "./core/time";
+import { getActiveRadars } from "./radars/index";
 import {
   verifyDatabaseSchema,
   SchemaValidationError,
   REQUIRED_TABLES,
-} from './storage/schema-validator';
+} from "./storage/schema-validator";
 
-const log = createModuleLogger('bootstrap');
+const log = createModuleLogger("bootstrap");
 
 // ─── Resultado de bootstrap ───────────────────────────────────────────────────
 
@@ -53,44 +53,47 @@ async function connectSupabase(): Promise<{
   ok: boolean;
   sourceId: string | null;
 }> {
-  log.info('Connecting to Supabase...');
+  log.info("Connecting to Supabase...");
 
   try {
-    const { getSupabaseClient } = await import('./storage/client');
+    const { getSupabaseClient } = await import("./storage/client");
     const db = getSupabaseClient();
 
     // Ping real — leer la tabla sources que es la más estable del sistema
     const { error } = await db
-      .from('sources')
-      .select('id', { count: 'exact', head: true });
+      .from("sources")
+      .select("id", { count: "exact", head: true });
 
-    if (error && error.code !== 'PGRST116') {
+    if (error && error.code !== "PGRST116") {
       // Si el error es 42P01 (tabla no existe), la conexión funciona pero el schema no está
       // Esto lo detectará verifyDatabaseSchema() en el siguiente paso
-      if (error.code === '42P01') {
-        log.warn('Supabase connection OK — but tables not yet initialized');
+      if (error.code === "42P01") {
+        log.warn("Supabase connection OK — but tables not yet initialized");
         return { ok: true, sourceId: null };
       }
 
-      log.error({ code: error.code, msg: error.message }, '❌ Supabase connection FAILED');
+      log.error(
+        { code: error.code, msg: error.message },
+        "❌ Supabase connection FAILED",
+      );
       return { ok: false, sourceId: null };
     }
 
-    log.info('✅ Supabase connected');
+    log.info("✅ Supabase connected");
 
     // Intentar leer source ID de comprasmx para el heartbeat job
     const { data, error: srcErr } = await db
-      .from('sources')
-      .select('id, key')
-      .eq('key', 'comprasmx')
+      .from("sources")
+      .select("id, key")
+      .eq("key", "comprasmx")
       .single();
 
-    const sourceId = (!srcErr && data?.id) ? data.id : null;
+    const sourceId = !srcErr && data?.id ? data.id : null;
 
     return { ok: true, sourceId };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error({ error: msg }, '❌ Supabase connection FAILED — network error');
+    log.error({ error: msg }, "❌ Supabase connection FAILED — network error");
     return { ok: false, sourceId: null };
   }
 }
@@ -102,7 +105,7 @@ async function validateSchema(): Promise<{
   tablesFound: number;
   tablesMissing: string[];
 }> {
-  log.info('Validating database schema...');
+  log.info("Validating database schema...");
 
   try {
     const result = await verifyDatabaseSchema();
@@ -122,7 +125,7 @@ async function validateSchema(): Promise<{
     }
     // Error inesperado durante validación
     const msg = err instanceof Error ? err.message : String(err);
-    log.error({ error: msg }, '❌ Error inesperado validando schema');
+    log.error({ error: msg }, "❌ Error inesperado validando schema");
     return {
       valid: false,
       tablesFound: 0,
@@ -134,18 +137,18 @@ async function validateSchema(): Promise<{
 // ─── 3. Verificar Telegram ────────────────────────────────────────────────────
 
 async function checkTelegram(
-  token: string
+  token: string,
 ): Promise<{ ok: boolean; username: string | null }> {
-  log.info('Connecting to Telegram...');
+  log.info("Connecting to Telegram...");
 
   try {
     const bot = new TelegramBot(token, { polling: false });
     const me = await bot.getMe();
-    log.info({ username: me.username, id: me.id }, '✅ Telegram connected');
+    log.info({ username: me.username, id: me.id }, "✅ Telegram connected");
     return { ok: true, username: me.username ?? null };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error({ error: msg }, '❌ Telegram connection FAILED');
+    log.error({ error: msg }, "❌ Telegram connection FAILED");
     return { ok: false, username: null };
   }
 }
@@ -155,7 +158,7 @@ async function checkTelegram(
 async function sendBootMessage(
   token: string,
   chatId: string,
-  result: BootstrapResult
+  result: BootstrapResult,
 ): Promise<void> {
   try {
     const bot = new TelegramBot(token, { polling: false });
@@ -168,35 +171,36 @@ async function sendBootMessage(
 
     const schemaLine = result.schemaValid
       ? `🧱 Schema: ✅ Validado (${result.tablesFound} / ${REQUIRED_TABLES.length} tablas)`
-      : `🧱 Schema: ❌ INCOMPLETO — faltan: [${result.tablesMissing.join(', ')}]`;
+      : `🧱 Schema: ❌ INCOMPLETO — faltan: [${result.tablesMissing.join(", ")}]`;
 
     const tgLine = result.telegramOk
       ? `📨 Bot: ✅ @${result.botUsername}`
       : `📨 Bot: ❌ Error`;
 
-    const systemReady = result.supabaseOk && result.schemaValid && result.telegramOk;
+    const systemReady =
+      result.supabaseOk && result.schemaValid && result.telegramOk;
 
     const message = [
       `🚀 <b>Worker iniciado — Radar Licitaciones MX</b>`,
-      '',
+      "",
       `🌍 Entorno: <b>${config.NODE_ENV}</b>`,
-      `🚂 Railway: <b>${config.RAILWAY_ENVIRONMENT ?? 'local'}</b>`,
+      `🚂 Railway: <b>${config.RAILWAY_ENVIRONMENT ?? "local"}</b>`,
       dbLine,
       schemaLine,
       tgLine,
       `📡 Radares activos: <b>${radars.length}</b>`,
       `⏱ Ciclos: cada <b>${config.COLLECT_INTERVAL_MINUTES} min</b>`,
       `🕐 Boot: ${formatMexicoDate(result.bootedAt)}`,
-      '',
+      "",
       systemReady
-        ? '✅ Sistema listo — all systems go'
-        : '⚠️ Sistema iniciado con advertencias — revisar logs',
-    ].join('\n');
+        ? "✅ Sistema listo — all systems go"
+        : "⚠️ Sistema iniciado con advertencias — revisar logs",
+    ].join("\n");
 
-    await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
-    log.info('📩 Boot message sent to Telegram');
+    await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
+    log.info("📩 Boot message sent to Telegram");
   } catch (err) {
-    log.warn({ err }, 'Could not send boot message — continuing');
+    log.warn({ err }, "Could not send boot message — continuing");
   }
 }
 
@@ -209,14 +213,14 @@ export async function bootstrap(): Promise<BootstrapResult> {
   log.info(
     {
       env: config.NODE_ENV,
-      railway: config.RAILWAY_ENVIRONMENT ?? 'local',
+      railway: config.RAILWAY_ENVIRONMENT ?? "local",
     },
-    '🔧 Starting bootstrap sequence...'
+    "🔧 Starting bootstrap sequence...",
   );
 
-  log.info('Env validated');
-  log.info('Runtime DB mode: Supabase REST');
-  log.info('SUPABASE_DB_URL not required for runtime');
+  log.info("Env validated");
+  log.info("Runtime DB mode: Supabase REST");
+  log.info("SUPABASE_DB_URL not required for runtime");
 
   // ── Paso 1: Conectar Supabase ────────────────────────────────────────────────
   const { ok: supabaseOk, sourceId } = await connectSupabase();
@@ -224,19 +228,28 @@ export async function bootstrap(): Promise<BootstrapResult> {
   if (!supabaseOk) {
     // Sin conexión a DB no podemos operar. Crash inmediato.
     log.fatal(
-      'FATAL: Cannot connect to Supabase. Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
+      "FATAL: Cannot connect to Supabase. Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
     );
-    throw new Error('FATAL: Supabase connection failed — cannot start worker');
+    throw new Error("FATAL: Supabase connection failed — cannot start worker");
   }
 
-  healthTracker.setDbHealth('ok');
+  healthTracker.setDbHealth("ok");
 
   // ── Paso 2: Validar schema ───────────────────────────────────────────────────
-  const { valid: schemaValid, tablesFound, tablesMissing } = await validateSchema();
+  const {
+    valid: schemaValid,
+    tablesFound,
+    tablesMissing,
+  } = await validateSchema();
 
   if (!schemaValid) {
     // Schema inválido = crash inmediato. Sin tablas no hay operaciones posibles.
-    healthTracker.setDbSchemaValid(false, tablesFound, tablesMissing, REQUIRED_TABLES.length);
+    healthTracker.setDbSchemaValid(
+      false,
+      tablesFound,
+      tablesMissing,
+      REQUIRED_TABLES.length,
+    );
 
     log.fatal(
       {
@@ -245,23 +258,32 @@ export async function bootstrap(): Promise<BootstrapResult> {
         totalRequired: REQUIRED_TABLES.length,
       },
       [
-        'FATAL: DATABASE SCHEMA NOT INITIALIZED',
+        "FATAL: DATABASE SCHEMA NOT INITIALIZED",
         `Tables found: ${tablesFound} / ${REQUIRED_TABLES.length}`,
-        `Missing: [${tablesMissing.join(', ')}]`,
-        'Fix: Run docs/supabase-schema.sql in Supabase SQL Editor',
-        'URL: https://supabase.com → Your project → SQL Editor → New query → paste file → Run',
-      ].join('\n')
+        `Missing: [${tablesMissing.join(", ")}]`,
+        "Fix: Run docs/supabase-schema.sql in Supabase SQL Editor",
+        "URL: https://supabase.com → Your project → SQL Editor → New query → paste file → Run",
+      ].join("\n"),
     );
 
-    throw new SchemaValidationError(tablesMissing, tablesFound, REQUIRED_TABLES.length);
+    throw new SchemaValidationError(
+      tablesMissing,
+      tablesFound,
+      REQUIRED_TABLES.length,
+    );
   }
 
   healthTracker.setDbSchemaValid(true, tablesFound, [], REQUIRED_TABLES.length);
-  log.info({ tablesFound, total: REQUIRED_TABLES.length }, '✅ Database schema validated');
+  log.info(
+    { tablesFound, total: REQUIRED_TABLES.length },
+    "✅ Database schema validated",
+  );
 
   // ── Paso 3: Conectar Telegram ────────────────────────────────────────────────
-  const { ok: telegramOk, username: botUsername } = await checkTelegram(config.TELEGRAM_BOT_TOKEN);
-  healthTracker.setTelegramHealth(telegramOk ? 'ok' : 'down');
+  const { ok: telegramOk, username: botUsername } = await checkTelegram(
+    config.TELEGRAM_BOT_TOKEN,
+  );
+  healthTracker.setTelegramHealth(telegramOk ? "ok" : "down");
 
   const result: BootstrapResult = {
     supabaseOk,
@@ -275,23 +297,27 @@ export async function bootstrap(): Promise<BootstrapResult> {
   };
 
   // ── Paso 4: Registrar en system_state ────────────────────────────────────────
-  await recordWorkerBoot('0.1.0');
-  
+  await recordWorkerBoot("0.1.0");
+
   const allGood = supabaseOk && schemaValid && telegramOk;
   await recordHealthcheck({
     healthy: allGood,
-    worker_status: allGood ? 'ok' : 'degraded',
+    worker_status: allGood ? "ok" : "degraded",
     db_connected: supabaseOk,
     db_schema_valid: schemaValid,
     telegram_connected: telegramOk,
-    runtime_db_mode: 'supabase-rest',
+    runtime_db_mode: "supabase-rest",
   });
 
   // ── Paso 5: Enviar mensaje de boot ───────────────────────────────────────────
   if (telegramOk) {
-    await sendBootMessage(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID, result);
+    await sendBootMessage(
+      config.TELEGRAM_BOT_TOKEN,
+      config.TELEGRAM_CHAT_ID,
+      result,
+    );
   } else {
-    log.warn('Skipping boot message — Telegram not available');
+    log.warn("Skipping boot message — Telegram not available");
   }
 
   // ── Paso 6: Log resumen ──────────────────────────────────────────────────────
@@ -302,13 +328,13 @@ export async function bootstrap(): Promise<BootstrapResult> {
       schemaValid,
       tablesFound: `${tablesFound}/${REQUIRED_TABLES.length}`,
       telegram: telegramOk,
-      bot: botUsername ?? 'N/A',
-      sourceId: sourceId ?? 'pendiente (seed comprasmx no encontrado)',
+      bot: botUsername ?? "N/A",
+      sourceId: sourceId ?? "pendiente (seed comprasmx no encontrado)",
       radarsActive: getActiveRadars().length,
     },
     allGood
-      ? '✅ Bootstrap completed — all systems go'
-      : '⚠️ Bootstrap completed with warnings'
+      ? "✅ Bootstrap completed — all systems go"
+      : "⚠️ Bootstrap completed with warnings",
   );
 
   return result;

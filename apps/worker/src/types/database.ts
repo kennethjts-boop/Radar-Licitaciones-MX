@@ -7,10 +7,10 @@
 // ─── sources ────────────────────────────────────────────────────────────────
 
 export interface DbSource {
-  id: string;                        // uuid
-  key: string;                       // 'comprasmx' | 'dof' | 'institutional' | 'fallback'
+  id: string; // uuid
+  key: string; // 'comprasmx' | 'dof' | 'institutional' | 'fallback'
   name: string;
-  type: 'web_scraper' | 'api' | 'rss' | 'pdf' | 'search';
+  type: "web_scraper" | "api" | "rss" | "pdf" | "search";
   base_url: string;
   is_active: boolean;
   created_at: string;
@@ -25,7 +25,7 @@ export interface DbCollectRun {
   collector_key: string;
   started_at: string;
   finished_at: string | null;
-  status: 'running' | 'success' | 'error' | 'timeout';
+  status: "running" | "success" | "error" | "timeout";
   items_seen: number;
   items_created: number;
   items_updated: number;
@@ -43,7 +43,7 @@ export interface DbRawItem {
   fetched_at: string;
   raw_json: Record<string, unknown>;
   raw_text: string | null;
-  fingerprint: string;               // SHA-256 del raw_json serializado
+  fingerprint: string; // SHA-256 del raw_json serializado
   created_at: string;
 }
 
@@ -164,7 +164,7 @@ export interface DbAlert {
   procurement_id: string | null;
   alert_type: string;
   telegram_message: string;
-  telegram_status: 'pending' | 'sent' | 'failed';
+  telegram_status: "pending" | "sent" | "failed";
   telegram_message_id: number | null;
   sent_at: string | null;
   created_at: string;
@@ -177,7 +177,7 @@ export interface DbTelegramLog {
   command: string;
   request_payload: Record<string, unknown> | null;
   response_payload: Record<string, unknown> | null;
-  status: 'ok' | 'error';
+  status: "ok" | "error";
   created_at: string;
 }
 
@@ -185,7 +185,7 @@ export interface DbTelegramLog {
 
 export interface DbDailySummary {
   id: string;
-  summary_date: string;             // YYYY-MM-DD
+  summary_date: string; // YYYY-MM-DD
   total_seen: number;
   total_new: number;
   total_updated: number;
@@ -199,7 +199,7 @@ export interface DbDailySummary {
 
 export interface DbEntityMemory {
   id: string;
-  entity_type: 'institution' | 'person' | 'product' | 'geo' | 'concept';
+  entity_type: "institution" | "person" | "product" | "geo" | "concept";
   entity_key: string;
   aliases_json: string[];
   context_terms_json: string[];

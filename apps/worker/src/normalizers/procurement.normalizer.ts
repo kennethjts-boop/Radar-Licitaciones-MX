@@ -2,58 +2,62 @@
  * NORMALIZER BASE — Convierte datos crudos de cualquier fuente al contrato NormalizedProcurement.
  * Cada collector produce un objeto crudo; este normalizer lo transforma.
  */
-import { buildCanonicalText, normalizeText } from '../core/text';
-import { buildProcurementFingerprint } from '../core/fingerprints';
-import { nowISO } from '../core/time';
+import { buildCanonicalText, normalizeText } from "../core/text";
+import { buildProcurementFingerprint } from "../core/fingerprints";
+import { nowISO } from "../core/time";
 import type {
   NormalizedProcurement,
   ProcedureType,
   ProcurementStatus,
-} from '../types/procurement';
+} from "../types/procurement";
 
 // ─── Maps de normalización ────────────────────────────────────────────────────
 
 const STATUS_MAP: Record<string, ProcurementStatus> = {
-  publicada: 'publicada',
-  activa: 'activa',
-  'en proceso': 'en_proceso',
-  'en_proceso': 'en_proceso',
-  desierta: 'desierta',
-  cancelada: 'cancelada',
-  adjudicada: 'adjudicada',
-  cerrada: 'cerrada',
-  concluida: 'cerrada',
-  finalizada: 'cerrada',
+  publicada: "publicada",
+  activa: "activa",
+  "en proceso": "en_proceso",
+  en_proceso: "en_proceso",
+  desierta: "desierta",
+  cancelada: "cancelada",
+  adjudicada: "adjudicada",
+  cerrada: "cerrada",
+  concluida: "cerrada",
+  finalizada: "cerrada",
 };
 
 const PROCEDURE_TYPE_MAP: Record<string, ProcedureType> = {
-  'licitación pública': 'licitacion_publica',
-  'licitacion publica': 'licitacion_publica',
-  lp: 'licitacion_publica',
-  'invitación a cuando menos tres personas': 'invitacion_tres',
-  'invitacion a cuando menos tres': 'invitacion_tres',
-  i3p: 'invitacion_tres',
-  'adjudicación directa': 'adjudicacion_directa',
-  'adjudicacion directa': 'adjudicacion_directa',
-  ad: 'adjudicacion_directa',
-  concurso: 'concurso',
-  subasta: 'subasta',
+  "licitación pública": "licitacion_publica",
+  "licitacion publica": "licitacion_publica",
+  lp: "licitacion_publica",
+  "invitación a cuando menos tres personas": "invitacion_tres",
+  "invitacion a cuando menos tres": "invitacion_tres",
+  i3p: "invitacion_tres",
+  "adjudicación directa": "adjudicacion_directa",
+  "adjudicacion directa": "adjudicacion_directa",
+  ad: "adjudicacion_directa",
+  concurso: "concurso",
+  subasta: "subasta",
 };
 
 /**
  * Normaliza un string de estatus a ProcurementStatus.
  */
-export function normalizeStatus(raw: string | null | undefined): ProcurementStatus {
-  if (!raw) return 'unknown';
+export function normalizeStatus(
+  raw: string | null | undefined,
+): ProcurementStatus {
+  if (!raw) return "unknown";
   const normalized = normalizeText(raw);
-  return STATUS_MAP[normalized] ?? 'unknown';
+  return STATUS_MAP[normalized] ?? "unknown";
 }
 
 /**
  * Normaliza un string de tipo de procedimiento a ProcedureType.
  */
-export function normalizeProcedureType(raw: string | null | undefined): ProcedureType {
-  if (!raw) return 'unknown';
+export function normalizeProcedureType(
+  raw: string | null | undefined,
+): ProcedureType {
+  if (!raw) return "unknown";
   const normalized = normalizeText(raw);
   // Búsqueda exacta primero
   if (PROCEDURE_TYPE_MAP[normalized]) return PROCEDURE_TYPE_MAP[normalized];
@@ -61,16 +65,21 @@ export function normalizeProcedureType(raw: string | null | undefined): Procedur
   for (const [key, val] of Object.entries(PROCEDURE_TYPE_MAP)) {
     if (normalized.includes(key)) return val;
   }
-  return 'unknown';
+  return "unknown";
 }
 
 /**
  * Normaliza un monto: acepta strings con $, comas, etc.
  */
-export function normalizeAmount(raw: string | number | null | undefined): number | null {
+export function normalizeAmount(
+  raw: string | number | null | undefined,
+): number | null {
   if (raw === null || raw === undefined) return null;
-  if (typeof raw === 'number') return isFinite(raw) ? raw : null;
-  const cleaned = String(raw).replace(/[$,\s]/g, '').replace(/MXN|USD/gi, '').trim();
+  if (typeof raw === "number") return isFinite(raw) ? raw : null;
+  const cleaned = String(raw)
+    .replace(/[$,\s]/g, "")
+    .replace(/MXN|USD/gi, "")
+    .trim();
   const num = parseFloat(cleaned);
   return isFinite(num) ? num : null;
 }
@@ -157,7 +166,7 @@ export function normalize(input: RawProcurementInput): NormalizedProcurement {
     state: input.state?.trim() ?? null,
     municipality: input.municipality?.trim() ?? null,
     amount: normalizeAmount(input.amount),
-    currency: (input.currency as 'MXN' | 'USD' | null) ?? null,
+    currency: (input.currency as "MXN" | "USD" | null) ?? null,
     attachments,
     canonicalText,
     canonicalFingerprint,

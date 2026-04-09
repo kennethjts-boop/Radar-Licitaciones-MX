@@ -1,16 +1,16 @@
 /**
  * COLLECT RUN REPOSITORY — Registro de ciclos de colección.
  */
-import { v4 as uuidv4 } from 'uuid';
-import { getSupabaseClient } from './client';
-import { StorageError } from '../core/errors';
-import { nowISO } from '../core/time';
-import type { DbCollectRun } from '../types/database';
-import type { CollectRunResult } from '../types/procurement';
+import { v4 as uuidv4 } from "uuid";
+import { getSupabaseClient } from "./client";
+import { StorageError } from "../core/errors";
+import { nowISO } from "../core/time";
+import type { DbCollectRun } from "../types/database";
+import type { CollectRunResult } from "../types/procurement";
 
 export async function startCollectRun(
   sourceId: string,
-  collectorKey: string
+  collectorKey: string,
 ): Promise<string> {
   const db = getSupabaseClient();
   const id = uuidv4();
@@ -21,7 +21,7 @@ export async function startCollectRun(
     collector_key: collectorKey,
     started_at: nowISO(),
     finished_at: null,
-    status: 'running',
+    status: "running",
     items_seen: 0,
     items_created: 0,
     items_updated: 0,
@@ -29,9 +29,12 @@ export async function startCollectRun(
     metadata_json: null,
   };
 
-  const { error } = await db.from('collect_runs').insert(record);
+  const { error } = await db.from("collect_runs").insert(record);
   if (error) {
-    throw new StorageError(`Error iniciando collect_run: ${error.message}`, 'start_run');
+    throw new StorageError(
+      `Error iniciando collect_run: ${error.message}`,
+      "start_run",
+    );
   }
 
   return id;
@@ -39,12 +42,12 @@ export async function startCollectRun(
 
 export async function finishCollectRun(
   runId: string,
-  result: Omit<CollectRunResult, 'collectorKey' | 'sourceId' | 'startedAt'>
+  result: Omit<CollectRunResult, "collectorKey" | "sourceId" | "startedAt">,
 ): Promise<void> {
   const db = getSupabaseClient();
 
   const { error } = await db
-    .from('collect_runs')
+    .from("collect_runs")
     .update({
       finished_at: result.finishedAt,
       status: result.status,
@@ -54,24 +57,32 @@ export async function finishCollectRun(
       error_message: result.errorMessage,
       metadata_json: result.metadata,
     })
-    .eq('id', runId);
+    .eq("id", runId);
 
   if (error) {
-    throw new StorageError(`Error finalizando collect_run: ${error.message}`, 'finish_run');
+    throw new StorageError(
+      `Error finalizando collect_run: ${error.message}`,
+      "finish_run",
+    );
   }
 }
 
-export async function getLastCollectRun(collectorKey: string): Promise<DbCollectRun | null> {
+export async function getLastCollectRun(
+  collectorKey: string,
+): Promise<DbCollectRun | null> {
   const { data, error } = await getSupabaseClient()
-    .from('collect_runs')
-    .select('*')
-    .eq('collector_key', collectorKey)
-    .order('started_at', { ascending: false })
+    .from("collect_runs")
+    .select("*")
+    .eq("collector_key", collectorKey)
+    .order("started_at", { ascending: false })
     .limit(1)
     .single();
 
-  if (error && error.code !== 'PGRST116') {
-    throw new StorageError(`Error obteniendo último run: ${error.message}`, 'get_last');
+  if (error && error.code !== "PGRST116") {
+    throw new StorageError(
+      `Error obteniendo último run: ${error.message}`,
+      "get_last",
+    );
   }
   return data ?? null;
 }

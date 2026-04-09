@@ -14,10 +14,10 @@
 export function normalizeText(text: string): string {
   return text
     .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')   // quita diacríticos
-    .replace(/[^\w\s]/g, ' ')          // reemplaza puntuación con espacio
-    .replace(/\s+/g, ' ')              // colapsa espacios
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // quita diacríticos
+    .replace(/[^\w\s]/g, " ") // reemplaza puntuación con espacio
+    .replace(/\s+/g, " ") // colapsa espacios
     .trim();
 }
 
@@ -26,7 +26,7 @@ export function normalizeText(text: string): string {
  */
 export function tokenize(text: string): string[] {
   const normalized = normalizeText(text);
-  const tokens = normalized.split(' ').filter((t) => t.length >= 3);
+  const tokens = normalized.split(" ").filter((t) => t.length >= 3);
   return [...new Set(tokens)];
 }
 
@@ -42,15 +42,15 @@ export function buildCanonicalText(params: {
 }): string {
   const parts = [
     params.title,
-    params.description ?? '',
-    params.dependencyName ?? '',
-    params.buyingUnit ?? '',
+    params.description ?? "",
+    params.dependencyName ?? "",
+    params.buyingUnit ?? "",
     ...(params.attachmentTexts ?? []),
   ];
   return parts
     .map((p) => p.trim())
     .filter(Boolean)
-    .join(' | ');
+    .join(" | ");
 }
 
 /**
@@ -65,14 +65,20 @@ export function textContainsTerm(canonicalText: string, term: string): boolean {
 /**
  * Retorna qué términos de una lista aparecen en el texto.
  */
-export function findMatchingTerms(canonicalText: string, terms: string[]): string[] {
+export function findMatchingTerms(
+  canonicalText: string,
+  terms: string[],
+): string[] {
   return terms.filter((term) => textContainsTerm(canonicalText, term));
 }
 
 /**
  * Retorna qué términos de exclusión aparecen en el texto.
  */
-export function findExcludedTerms(canonicalText: string, exclusions: string[]): string[] {
+export function findExcludedTerms(
+  canonicalText: string,
+  exclusions: string[],
+): string[] {
   return exclusions.filter((term) => textContainsTerm(canonicalText, term));
 }
 
@@ -81,7 +87,7 @@ export function findExcludedTerms(canonicalText: string, exclusions: string[]): 
  */
 export function truncateForTelegram(text: string, maxLength = 4000): string {
   if (text.length <= maxLength) return text;
-  return text.slice(0, maxLength - 3) + '...';
+  return text.slice(0, maxLength - 3) + "...";
 }
 
 /**
@@ -94,11 +100,14 @@ export function escapeTelegramMd(text: string): string {
 /**
  * Formatea moneda MXN para display.
  */
-export function formatCurrency(amount: number | null, currency: string | null): string {
-  if (amount === null || amount === 0) return 'No especificado';
-  const curr = currency ?? 'MXN';
-  return new Intl.NumberFormat('es-MX', {
-    style: 'currency',
+export function formatCurrency(
+  amount: number | null,
+  currency: string | null,
+): string {
+  if (amount === null || amount === 0) return "No especificado";
+  const curr = currency ?? "MXN";
+  return new Intl.NumberFormat("es-MX", {
+    style: "currency",
     currency: curr,
     maximumFractionDigits: 0,
   }).format(amount);

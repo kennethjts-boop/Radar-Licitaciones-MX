@@ -1,4 +1,4 @@
 /**
  * ALERTS — Barrel exports
  */
-export * from './telegram.alerts';
+export * from "./telegram.alerts";
