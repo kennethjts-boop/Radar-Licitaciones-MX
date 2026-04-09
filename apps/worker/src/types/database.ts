@@ -107,8 +107,6 @@ export interface DbAttachment {
   file_name: string;
   file_type: string | null;
   file_url: string;
-  storage_path: string | null;
-  file_size_bytes: number | null;
   file_hash: string | null;
   detected_text: string | null;
   created_at: string;

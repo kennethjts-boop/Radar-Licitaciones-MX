@@ -88,7 +88,6 @@ export class BrowserManager {
       timezoneId: "America/Mexico_City",
       javaScriptEnabled: true,
       bypassCSP: true,
-      acceptDownloads: true,
       proxy,
     });
 

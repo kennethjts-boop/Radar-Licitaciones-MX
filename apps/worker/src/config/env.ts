@@ -25,10 +25,6 @@ const envSchema = z.object({
     .string()
     .url({ message: "SUPABASE_DB_URL debe ser una URL válida" })
     .optional(),
-  SUPABASE_TENDER_DOCUMENTS_BUCKET: z
-    .string()
-    .min(3)
-    .default("tender-documents"),
 
   // Telegram
   TELEGRAM_BOT_TOKEN: z
