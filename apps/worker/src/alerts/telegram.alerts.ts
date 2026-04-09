@@ -159,6 +159,43 @@ export async function sendTelegramMessage(
   }
 }
 
+function chunkTextForTelegram(text: string, maxLen = 3500): string[] {
+  if (text.length <= maxLen) return [text];
+
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > maxLen) {
+    let splitIndex = remaining.lastIndexOf("\n", maxLen);
+    if (splitIndex < Math.floor(maxLen * 0.5)) {
+      splitIndex = maxLen;
+    }
+    chunks.push(remaining.slice(0, splitIndex));
+    remaining = remaining.slice(splitIndex).trimStart();
+  }
+
+  if (remaining.length > 0) {
+    chunks.push(remaining);
+  }
+
+  return chunks;
+}
+
+export async function sendTelegramLongReport(
+  header: string,
+  report: string,
+): Promise<void> {
+  const safeHeader = escapeHtml(header);
+  const chunks = chunkTextForTelegram(report, 3400);
+
+  await sendTelegramMessage(`🧠 <b>${safeHeader}</b>`, "HTML");
+
+  for (const chunk of chunks) {
+    const safeChunk = escapeHtml(chunk);
+    await sendTelegramMessage(`<pre>${safeChunk}</pre>`, "HTML");
+  }
+}
+
 // ─── Formato de alerta de match ──────────────────────────────────────────────
 
 function matchLevelEmoji(level: MatchLevel): string {

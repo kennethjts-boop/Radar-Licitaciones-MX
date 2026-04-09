@@ -1,8 +1,11 @@
 import "dotenv/config";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { analyzeTenderDocument } from "../ai/openai.service";
+import { sendTelegramLongReport } from "../alerts/telegram.alerts";
+import { createModuleLogger } from "../core/logger";
 
 const KEYWORDS = ["bolet", "peaje", "papel term", "papel térm", "rollo term", "rollo térm"];
+const log = createModuleLogger("capufe-peaje-deep-report");
 
 type LatestRow = {
   attachment_id: string;
@@ -100,8 +103,11 @@ function extractFinancial(text: string): string[] {
   return extract(/(?:capital contable[^\n\.]{0,120}|garant[ií]a de cumplimiento[^\n\.]{0,120}|fianza[^\n\.]{0,120}|garant[ií]a de seriedad[^\n\.]{0,120})/gi, text);
 }
 
-async function queryLatestCapufeDocument(db: SupabaseClient): Promise<LatestRow | null> {
-  const { data, error } = await db
+async function queryLatestCapufeDocument(
+  db: SupabaseClient,
+  procurementId?: string,
+): Promise<LatestRow | null> {
+  let query = db
     .from("attachments")
     .select(`
       id,
@@ -132,10 +138,15 @@ async function queryLatestCapufeDocument(db: SupabaseClient): Promise<LatestRow 
         win_probability,
         score_total
       )
-    `)
-    .ilike("procurements.dependency_name", "%CAPUFE%")
-    .order("created_at", { ascending: false })
-    .limit(80);
+    `);
+
+  if (procurementId) {
+    query = query.eq("procurement_id", procurementId);
+  } else {
+    query = query.ilike("procurements.dependency_name", "%CAPUFE%");
+  }
+
+  const { data, error } = await query.order("created_at", { ascending: false }).limit(80);
 
   if (error) throw new Error(`Error consultando adjuntos CAPUFE: ${error.message}`);
 
@@ -178,8 +189,11 @@ async function queryLatestCapufeDocument(db: SupabaseClient): Promise<LatestRow 
   return null;
 }
 
-async function queryHistoricalCapufe(db: SupabaseClient): Promise<HistoricalRow[]> {
-  const { data, error } = await db
+async function queryHistoricalCapufe(
+  db: SupabaseClient,
+  procurementId?: string,
+): Promise<HistoricalRow[]> {
+  let query = db
     .from("attachments")
     .select(`
       file_name,
@@ -199,10 +213,15 @@ async function queryHistoricalCapufe(db: SupabaseClient): Promise<HistoricalRow[
         score_total,
         win_probability
       )
-    `)
-    .ilike("procurements.dependency_name", "%CAPUFE%")
-    .order("created_at", { ascending: false })
-    .limit(400);
+    `);
+
+  if (procurementId) {
+    query = query.eq("procurement_id", procurementId);
+  } else {
+    query = query.ilike("procurements.dependency_name", "%CAPUFE%");
+  }
+
+  const { data, error } = await query.order("created_at", { ascending: false }).limit(400);
 
   if (error) throw new Error(`Error histórico CAPUFE: ${error.message}`);
 
@@ -365,11 +384,15 @@ function buildExecutiveReport(latest: LatestRow, historical: HistoricalRow[]): s
   ].join("\n");
 }
 
-async function run(): Promise<void> {
+export async function generateCapufePeajeDeepReport(options?: {
+  procurementId?: string;
+  forceProcess?: boolean;
+}): Promise<{ report: string; forced: boolean; procurementId: string; attachmentId: string }> {
   const db = getDb();
-  const force = process.argv.includes("--force-process");
+  const force = options?.forceProcess ?? false;
+  const procurementId = options?.procurementId;
 
-  const latest = await queryLatestCapufeDocument(db);
+  const latest = await queryLatestCapufeDocument(db, procurementId);
   if (!latest) {
     throw new Error("No se encontró documento CAPUFE de boletos/peaje/papel térmico en attachments/document_analysis");
   }
@@ -379,12 +402,45 @@ async function run(): Promise<void> {
     forced = await forceAnalyzeIfMissing(db, latest);
   }
 
-  const historical = await queryHistoricalCapufe(db);
+  const historical = await queryHistoricalCapufe(db, latest.procurement_id);
   const report = buildExecutiveReport(latest, historical);
 
-  console.log(report);
+  return {
+    report,
+    forced,
+    procurementId: latest.procurement_id,
+    attachmentId: latest.attachment_id,
+  };
+}
+
+export async function sendCapufePeajeDeepReportToTelegram(options?: {
+  procurementId?: string;
+  forceProcess?: boolean;
+}): Promise<void> {
+  const result = await generateCapufePeajeDeepReport(options);
+  await sendTelegramLongReport(
+    `REPORTE DEEP CAPUFE/PEAJE — Procurement ${result.procurementId}`,
+    result.report,
+  );
+
+  log.info(
+    {
+      event: "CAPUFE_DEEP_REPORT_SENT",
+      procurementId: result.procurementId,
+      attachmentId: result.attachmentId,
+      forced: result.forced,
+    },
+    "Reporte Deep de CAPUFE enviado a Telegram",
+  );
+}
+
+async function run(): Promise<void> {
+  const force = process.argv.includes("--force-process");
+  const result = await generateCapufePeajeDeepReport({ forceProcess: force });
+
+  console.log(result.report);
   if (force) {
-    console.log(`\n[INFO] Force processing solicitado: ${forced ? "análisis ejecutado" : "no fue necesario o faltó texto detectado"}`);
+    console.log(`\n[INFO] Force processing solicitado: ${result.forced ? "análisis ejecutado" : "no fue necesario o faltó texto detectado"}`);
   }
 }
 
