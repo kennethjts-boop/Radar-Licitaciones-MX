@@ -1,51 +1,47 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Radar Licitaciones MX — Docker image para Railway
 #
-# Usa la imagen oficial de Playwright que incluye Chromium preinstalado.
-# Fase 1: solo Node.js + dependencias (Playwright inactivo).
-# Fase 2: Chromium ya disponible para scraping.
-#
-# Build en 2 etapas para mantener la imagen final limpia:
-#   1. builder — instala devDependencies + compila TypeScript
-#   2. runner  — solo dependencias de producción + dist/
+# Build en 2 etapas:
+# 1. builder: Compila TypeScript a JavaScript nativamente dentro del contenedor
+# 2. runner: Imagen limpia solo con JS y dependencias de producción + Playwright
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── Etapa 1: Build ────────────────────────────────────────────────────────────
-FROM mcr.microsoft.com/playwright:v1.48.0-jammy AS builder
+# ── Etapa 1: Builder ────────────────────────────────────────────────────────
+FROM node:20-slim AS builder
 
 WORKDIR /build
 
-# Copiar manifests primero (cache de layers)
+# 1. Copiar manifiestos (el contexto de Railway es la raíz del repo)
+# Asumimos que context es root por railway.toml
 COPY apps/worker/package*.json ./
 
-# Instalar TODAS las dependencias (incluyendo devDependencies para el build)
+# 2. Instalar dependencias (incluyendo devDependencies para compilar)
 RUN npm ci
 
-# Copiar código fuente
+# 3. Copiar código fuente real
 COPY apps/worker/tsconfig.json ./
 COPY apps/worker/src ./src
 
-# Compilar TypeScript
+# 4. Compilar TypeScript (generará /build/dist dentro del builder)
 RUN npm run build
 
-# ── Etapa 2: Runner ───────────────────────────────────────────────────────────
+# ── Etapa 2: Runner ─────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/playwright:v1.48.0-jammy AS runner
 
+# Variables de entorno imperativas 
 ENV NODE_ENV=production
 ENV PLAYWRIGHT_HEADLESS=true
 
 WORKDIR /app
 
-# Copiar manifests para instalar solo producción
+# 1. Copiar manifiestos nuevamente
 COPY apps/worker/package*.json ./
 
-# Instalar solo dependencias de producción
+# 2. Instalar exclusivamente dependencias de producción
 RUN npm ci --only=production
 
-# Copiar código compilado desde el builder
+# 3. Traer el compilado desde la etapa "builder" (¡Ya no requiere apps/worker/dist pre-existente!)
 COPY --from=builder /build/dist ./dist
 
-# Worker es un proceso long-running, no expone puertos HTTP
-# Railway detecta el proceso como "healthy" mientras esté corriendo
-
+# Default CMD 
 CMD ["node", "dist/index.js"]
