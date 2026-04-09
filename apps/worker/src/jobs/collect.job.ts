@@ -22,7 +22,11 @@ import {
   COMPRASMX_SOURCE_KEY,
   ComprasMxCollectResult,
 } from "../collectors/comprasmx/comprasmx.collector";
-import { upsertProcurement } from "../storage/procurement.repo";
+import {
+  upsertProcurement,
+  getExistingAttachmentFileNames,
+  insertStoredAttachment,
+} from "../storage/procurement.repo";
 import { startCollectRun, finishCollectRun } from "../storage/collect-run.repo";
 import {
   createAlert,
@@ -34,6 +38,10 @@ import { evaluateAllRadars } from "../matchers/matcher";
 import { enrichMatch } from "../enrichers/match.enricher";
 import { sendMatchAlert } from "../alerts/telegram.alerts";
 import type { ProcurementStatus } from "../types/procurement";
+import { BrowserManager } from "../collectors/comprasmx/browser.manager";
+import { ComprasMxNavigator } from "../collectors/comprasmx/comprasmx.navigator";
+import { downloadAttachments } from "../collectors/comprasmx/attachment-downloader";
+import { uploadTenderFile } from "../storage/tender-document.storage";
 
 const log = createModuleLogger("collect-job");
 
@@ -45,6 +53,52 @@ export function setComprasMxSourceId(id: string | null): void {
 }
 
 const COLLECT_TIMEOUT_MS = 25 * 60 * 1000; // 25 minutos
+
+async function processTenderAttachments(
+  procurementId: string,
+  sourceUrl: string,
+): Promise<void> {
+  await BrowserManager.withContext(async (page, context) => {
+    const navigator = new ComprasMxNavigator();
+    const existingFileNames = await getExistingAttachmentFileNames(procurementId);
+    const detail = await navigator.extractDetail(context, sourceUrl, page);
+
+    if (!detail) return;
+
+    const downloaded = await downloadAttachments(page, procurementId, existingFileNames);
+
+    for (const file of downloaded) {
+      if (existingFileNames.has(file.fileName)) {
+        log.info(
+          { procurementId, fileName: file.fileName },
+          "Archivo ya existe en DB, ignorando",
+        );
+        continue;
+      }
+
+      const uploaded = await uploadTenderFile(
+        procurementId,
+        file.fileName,
+        file.tempFilePath,
+        file.fileType,
+      );
+      await insertStoredAttachment({
+        procurementId,
+        fileName: uploaded.fileName,
+        storagePath: uploaded.storagePath,
+        fileType: file.fileType,
+        fileSizeBytes: uploaded.fileSizeBytes,
+        fileHash: uploaded.fileHash,
+      });
+
+      existingFileNames.add(uploaded.fileName);
+      log.info(
+        { procurementId, fileName: uploaded.fileName },
+        "Registro DB OK para adjunto",
+      );
+    }
+  });
+}
 
 export async function runCollectJob(): Promise<void> {
   log.info(
@@ -91,6 +145,18 @@ export async function runCollectJob(): Promise<void> {
 
           // Solo evaluar matches si es nuevo o cambió
           if (!upsertResult.isNew && !upsertResult.isUpdated) continue;
+
+          try {
+            await processTenderAttachments(
+              upsertResult.procurementId,
+              item.sourceUrl,
+            );
+          } catch (attachmentErr) {
+            log.error(
+              { err: attachmentErr, externalId: item.externalId },
+              "Error procesando descarga/subida de adjuntos",
+            );
+          }
 
           // Determinar estatus anterior para detectar cambio
           const previousStatus =

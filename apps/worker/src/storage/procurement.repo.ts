@@ -298,6 +298,8 @@ async function insertAttachments(
     file_name: att.fileName,
     file_type: att.fileType,
     file_url: att.fileUrl,
+    storage_path: null,
+    file_size_bytes: null,
     file_hash: att.fileHash,
     detected_text: att.detectedText,
     created_at: now,
@@ -306,6 +308,57 @@ async function insertAttachments(
   const { error } = await db.from("attachments").insert(records);
   if (error) {
     log.warn({ error: error.message }, "Error insertando adjuntos");
+  }
+}
+
+export async function getExistingAttachmentFileNames(
+  procurementId: string,
+): Promise<Set<string>> {
+  const db = getSupabaseClient();
+  const { data, error } = await db
+    .from("attachments")
+    .select("file_name")
+    .eq("procurement_id", procurementId);
+
+  if (error) {
+    throw new StorageError(
+      `Error consultando adjuntos existentes: ${error.message}`,
+      "attachments_find",
+    );
+  }
+
+  return new Set((data ?? []).map((x) => x.file_name));
+}
+
+export async function insertStoredAttachment(params: {
+  procurementId: string;
+  fileName: string;
+  storagePath: string;
+  fileType: string | null;
+  fileSizeBytes: number;
+  fileHash: string;
+}): Promise<void> {
+  const db = getSupabaseClient();
+  const now = nowISO();
+  const { error } = await db.from("attachments").insert({
+    id: uuidv4(),
+    procurement_id: params.procurementId,
+    version_id: null,
+    file_name: params.fileName,
+    file_type: params.fileType,
+    file_url: params.storagePath,
+    storage_path: params.storagePath,
+    file_size_bytes: params.fileSizeBytes,
+    file_hash: params.fileHash,
+    detected_text: null,
+    created_at: now,
+  });
+
+  if (error) {
+    throw new StorageError(
+      `Error insertando adjunto descargado: ${error.message}`,
+      "attachments_insert",
+    );
   }
 }
 
