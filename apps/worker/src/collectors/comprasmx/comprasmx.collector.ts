@@ -19,6 +19,7 @@ import { BrowserManager } from "./browser.manager";
 import {
   ComprasMxNavigator,
   buildListingFingerprint,
+  SELECTORS,
 } from "./comprasmx.navigator";
 import { normalize } from "../../normalizers/procurement.normalizer";
 import { getConfig } from "../../config/env";
@@ -128,7 +129,7 @@ export async function collectComprasMx(
         if (sourceId) {
           const { data: existing } = await db
             .from("procurements")
-            .select("id, lightweight_fingerprint")
+            .select("id, lightweight_fingerprint, source_url")
             .eq("source_id", sourceId)
             .eq("external_id", row.externalId)
             .single();
@@ -138,7 +139,7 @@ export async function collectComprasMx(
               // ── C. Fingerprint coincide → saltar Detail Fetch ───────────
               needsDetail = false;
               knownStreak++;
-              log.debug(
+              log.info(
                 { externalId: row.externalId, knownStreak },
                 "⏩ skipping detail fetch fingerprint matched",
               );
@@ -186,10 +187,14 @@ export async function collectComprasMx(
         }
 
         try {
+          // Para ComprasMX, el detalle se obtiene clickeando el ID en el listado
+          // o navegando a la URL guardada si ya la tenemos.
           const rawInput = await navigator.extractDetail(
             context,
-            row.sourceUrl,
+            row.externalId,
+            page,
           );
+
           if (rawInput) {
             const normalized = normalize(rawInput);
             // Inyectar el fingerprint superficial calculado en listing
@@ -201,13 +206,22 @@ export async function collectComprasMx(
             }
 
             items.push(normalized);
+            
+            // Regresar al listado (en ComprasMX es un SPA, hay que volver atrás)
+            // Intentamos clickear el botón "Regresar" o usamos history back
+            log.info({ externalId: row.externalId }, "⬅️ returning to listing...");
+            await page.click('button:has-text("Regresar")').catch(() => page.goBack());
+            await page.waitForSelector(SELECTORS.LISTING_ROW, { timeout: 10000 }).catch(() => {});
           } else {
-            errors.push(`No se pudo extraer detalle: ${row.sourceUrl}`);
+            errors.push(`No se pudo extraer detalle: ${row.externalId}`);
+            // Asegurar que volvemos al listado si falló la extracción pero navegó
+            await page.goto(baseUrl, { waitUntil: 'networkidle' }).catch(() => {});
           }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          errors.push(`Error en URL ${row.sourceUrl}: ${msg}`);
-          log.error({ err: e, url: row.sourceUrl }, "❌ Error en detail fetch");
+          errors.push(`Error en ID ${row.externalId}: ${msg}`);
+          log.error({ err: e, id: row.externalId }, "❌ Error en detail fetch");
+          await page.goto(baseUrl, { waitUntil: 'networkidle' }).catch(() => {});
         }
       }
 
