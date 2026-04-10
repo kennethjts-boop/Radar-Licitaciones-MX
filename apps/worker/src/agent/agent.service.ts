@@ -105,6 +105,7 @@ export function selectOptionByKey(
 export async function startActiveSearch(
   chatId: string,
   query: string,
+  onProgress?: (message: string) => void,
 ): Promise<AgentSearchSession> {
   const session: AgentSearchSession = {
     chatId,
@@ -120,6 +121,7 @@ export async function startActiveSearch(
     const options = await runActiveSearch({
       searchId: makeSessionId(chatId, query),
       query,
+      onProgress,
     });
 
     const finished: AgentSearchSession = {

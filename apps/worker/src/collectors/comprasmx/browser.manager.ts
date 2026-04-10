@@ -36,6 +36,9 @@ export class BrowserManager {
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage", // Crucial para evitar OOM crashes en Docker
         "--disable-gpu",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-infobars",
+        "--disable-features=IsolateOrigins,site-per-process",
         "--blink-settings=imagesEnabled=false", // Bloquea carga de imágenes para CPU/RAM
       ],
     });
@@ -88,6 +91,10 @@ export class BrowserManager {
       timezoneId: "America/Mexico_City",
       javaScriptEnabled: true,
       bypassCSP: true,
+      extraHTTPHeaders: {
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+        DNT: "1",
+      },
       proxy,
     });
 
