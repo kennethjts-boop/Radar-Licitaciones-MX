@@ -11,6 +11,13 @@ import {
 import { analyzeLicitacionByUrl, analyzeSelectedLicitacion } from "./deep-analysis.service";
 
 const log = createModuleLogger("agent-telegram");
+const DEEP_ANALYSIS_TIMEOUT_MS = 3 * 60 * 1000;
+
+class DeepAnalysisTimeoutError extends Error {
+  constructor() {
+    super("Deep analysis timeout");
+  }
+}
 
 function shortLabel(input: string, max = 60): string {
   if (input.length <= max) return input;
@@ -112,6 +119,22 @@ function buildExecutiveMessage(payload: {
     `Fuente: ${payload.sourceUrl}`,
   ].join("\n");
 }
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeoutHandle: NodeJS.Timeout | null = null;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new DeepAnalysisTimeoutError());
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+}
 export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
   bot.onText(/\/buscar(?:\s+(.+))?/, async (msg, match) => {
     if (String(msg.chat.id) !== chatId) return;
@@ -133,13 +156,10 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
 
     // Fire-and-forget para mantener el comando no bloqueante.
     void (async () => {
-      const session = await startActiveSearch(
-        String(msg.chat.id),
-        query,
-        (progressMessage) => {
-          void bot.sendMessage(chatId, progressMessage).catch(() => {});
-        },
-      );
+      const stopHeartbeat = startSearchHeartbeat(bot, chatId);
+      const session = await startActiveSearch(String(msg.chat.id), query).finally(() => {
+        stopHeartbeat();
+      });
 
       if (session.status === "error") {
         await bot
@@ -155,7 +175,7 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
         await bot
           .sendMessage(
             chatId,
-            "🛰️ Agente activo: Analizando licitación en modo texto...",
+            "Investigando a fondo... te enviaré el expediente completo en texto.",
             {
               reply_markup: {
                 inline_keyboard: [
@@ -244,6 +264,27 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
           reply_markup: buildActionKeyboard(detectedLink),
         });
       } catch (err) {
+        if (err instanceof DeepAnalysisTimeoutError) {
+          await bot
+            .sendMessage(
+              chatId,
+              "⚠️ El documento es demasiado pesado. Generando resumen simplificado...",
+            )
+            .catch(() => {});
+
+          const simplified = buildSimplifiedResult("manual-link", "Licitación por enlace manual");
+          await bot.sendMessage(chatId, buildExecutiveMessage(simplified), {
+            parse_mode: "HTML",
+          }).catch(() => {});
+          const simplePdf = generateIntelligencePdf(simplified);
+          await bot.sendDocument(chatId, simplePdf, {
+            caption: "📄 Expediente simplificado por timeout",
+          }, {
+            filename: "expediente-simplificado-timeout.pdf",
+            contentType: "application/pdf",
+          }).catch(() => {});
+          return;
+        }
         await bot
           .sendMessage(
             chatId,
@@ -313,6 +354,30 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
           reply_markup: buildActionKeyboard(selected.sourceUrl),
         });
       } catch (err) {
+        if (err instanceof DeepAnalysisTimeoutError) {
+          await bot
+            .sendMessage(
+              chatId,
+              "⚠️ El documento es demasiado pesado. Generando resumen simplificado...",
+            )
+            .catch(() => {});
+
+          const simplified = buildSimplifiedResult(
+            selected.expedienteId,
+            selected.licitacionNombre,
+          );
+          await bot.sendMessage(chatId, buildExecutiveMessage(simplified), {
+            parse_mode: "HTML",
+          }).catch(() => {});
+          const simplePdf = generateIntelligencePdf(simplified);
+          await bot.sendDocument(chatId, simplePdf, {
+            caption: `📄 Expediente simplificado: ${selected.expedienteId}`,
+          }, {
+            filename: `expediente-simplificado-${selected.expedienteId}.pdf`,
+            contentType: "application/pdf",
+          }).catch(() => {});
+          return;
+        }
         await bot
           .sendMessage(
             chatId,

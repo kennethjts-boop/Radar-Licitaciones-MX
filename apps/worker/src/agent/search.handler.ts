@@ -408,7 +408,7 @@ export async function runActiveSearch(
     );
 
     return [];
-  }, { timeoutMs: 45_000 });
+  }, { timeoutMs: 60_000 });
 }
 
 export async function captureComprasMxDebugScreenshot(
