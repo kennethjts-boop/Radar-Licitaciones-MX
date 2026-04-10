@@ -9,7 +9,6 @@ import {
   AGENT_MANUAL_CAPUFE_LINK,
 } from "./search.handler";
 import { analyzeLicitacionByUrl, analyzeSelectedLicitacion } from "./deep-analysis.service";
-import { generateIntelligencePdf } from "./pdf-report.util";
 
 const log = createModuleLogger("agent-telegram");
 
@@ -34,9 +33,64 @@ function detectProcurementLink(text: string): string | null {
   return null;
 }
 
+function resolveSemaphore(veredicto: string): string {
+  const normalized = veredicto.toLowerCase();
+  if (normalized.includes("alto") || normalized.includes("alta")) return "🟢";
+  if (normalized.includes("medio") || normalized.includes("media")) return "🟡";
+  if (normalized.includes("bajo") || normalized.includes("baja")) return "🔴";
+  return "🟡";
+}
+
+function buildActionKeyboard(sourceUrl: string): TelegramBot.InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [{ text: "🔎 Ver enlace original", url: sourceUrl }],
+      [{ text: "🔄 Nueva búsqueda", callback_data: "agent:new_search" }],
+    ],
+  };
+}
+
+function startSearchHeartbeat(
+  bot: TelegramBot,
+  chatId: string,
+): () => void {
+  const timers: NodeJS.Timeout[] = [];
+
+  timers.push(
+    setTimeout(() => {
+      void bot
+        .sendMessage(chatId, "🛰️ Agente activo: Analizando licitación en modo texto... (entrando a ComprasMX)")
+        .catch(() => {});
+    }, 8_000),
+  );
+
+  timers.push(
+    setTimeout(() => {
+      void bot
+        .sendMessage(chatId, "🛰️ Agente activo: Analizando licitación en modo texto... (tabla encontrada)")
+        .catch(() => {});
+    }, 20_000),
+  );
+
+  timers.push(
+    setTimeout(() => {
+      void bot
+        .sendMessage(chatId, "🛰️ Agente activo: Analizando licitación en modo texto... (portal lento)")
+        .catch(() => {});
+    }, 40_000),
+  );
+
+  return () => {
+    for (const timer of timers) {
+      clearTimeout(timer);
+    }
+  };
+}
+
 function buildExecutiveMessage(payload: {
   title: string;
   expedienteId: string;
+  sourceUrl: string;
   report: {
     resumen: string;
     fechas_criticas: string[];
@@ -47,36 +101,52 @@ function buildExecutiveMessage(payload: {
     comparativo_capufe: string;
   };
 }): string {
+  const semaforo = resolveSemaphore(payload.report.veredicto);
   const fechas = payload.report.fechas_criticas.length
-    ? payload.report.fechas_criticas.map((f) => `• ${f}`).join("\n")
-    : "• No especificadas";
+    ? payload.report.fechas_criticas.map((f) => `- ${f}`).join("\n")
+    : "- No especificadas";
   const requisitos = payload.report.requisitos_experiencia.length
-    ? payload.report.requisitos_experiencia.map((r) => `• ${r}`).join("\n")
-    : "• No especificados";
+    ? payload.report.requisitos_experiencia.map((r) => `- ${r}`).join("\n")
+    : "- No especificados";
   const candados = payload.report.candados_detectados.length
-    ? payload.report.candados_detectados.map((r) => `• ${r}`).join("\n")
-    : "• No detectados";
+    ? payload.report.candados_detectados.map((r) => `- ${r}`).join("\n")
+    : "- No detectados";
 
   return [
-    `🧠 <b>Deep Analysis — ${payload.expedienteId}</b>`,
-    `<b>${payload.title}</b>`,
+    `${semaforo} **VEREDICTO:** ${payload.report.veredicto}`,
     "",
-    `<b>Resumen:</b> ${payload.report.resumen}`,
+    `**Deep Analysis — ${payload.expedienteId}**`,
+    `**${payload.title}**`,
     "",
-    "<b>Fechas:</b>",
+    "---",
+    "",
+    "**Resumen Ejecutivo**",
+    payload.report.resumen,
+    "",
+    "---",
+    "",
+    "**Puntos Críticos**",
+    "**Fechas clave:**",
     fechas,
     "",
-    `<b>Presupuesto estimado:</b> ${payload.report.presupuesto_estimado}`,
+    `**Presupuesto estimado:** ${payload.report.presupuesto_estimado}`,
     "",
-    "<b>Requisitos de experiencia:</b>",
+    "**Requisitos clave:**",
     requisitos,
     "",
-    "<b>Candados detectados:</b>",
+    "---",
+    "",
+    '**Análisis de "Candados"**',
     candados,
     "",
-    `<b>Comparativo CAPUFE:</b> ${payload.report.comparativo_capufe}`,
+    "---",
     "",
-    `<b>Veredicto:</b> ${payload.report.veredicto}`,
+    "**Contexto RAG (Comparativa con datos previos)**",
+    payload.report.comparativo_capufe,
+    "",
+    "---",
+    "",
+    `Fuente: ${payload.sourceUrl}`,
   ].join("\n");
 }
 export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
@@ -95,12 +165,15 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
 
     await bot.sendMessage(
       chatId,
-      `🛰️ Iniciando búsqueda activa para: '${query}'... Dame un momento.`,
+      "🛰️ Agente activo: Analizando licitación en modo texto...",
     );
 
     // Fire-and-forget para mantener el comando no bloqueante.
     void (async () => {
-      const session = await startActiveSearch(String(msg.chat.id), query);
+      const stopHeartbeat = startSearchHeartbeat(bot, chatId);
+      const session = await startActiveSearch(String(msg.chat.id), query).finally(() => {
+        stopHeartbeat();
+      });
 
       if (session.status === "error") {
         await bot
@@ -116,7 +189,7 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
         await bot
           .sendMessage(
             chatId,
-            "Investigando a fondo... generando tu expediente PDF.",
+            "🛰️ Agente activo: Analizando licitación en modo texto...",
             {
               reply_markup: {
                 inline_keyboard: [
@@ -184,30 +257,25 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
     await bot
       .sendMessage(
         chatId,
-        "🔍 Detecté un enlace de licitación. Iniciando extracción forzada...",
+        "🛰️ Agente activo: Analizando licitación en modo texto...",
       )
       .catch(() => {});
 
     await bot
       .sendMessage(
         chatId,
-        `🚀 Fase 2 (Deep Analysis) activada en modo manual para:
-${detectedLink}`,
+        `🛰️ Agente activo: Analizando licitación en modo texto...\n${detectedLink}`,
       )
       .catch(() => {});
 
     void (async () => {
       try {
         const analysis = await analyzeLicitacionByUrl(detectedLink);
-        await bot.sendMessage(chatId, buildExecutiveMessage(analysis), {
-          parse_mode: "HTML",
-        });
-        const pdfBuffer = generateIntelligencePdf(analysis);
-        await bot.sendDocument(chatId, pdfBuffer, {
-          caption: `📄 Expediente de Inteligencia generado: ${analysis.expedienteId}`,
-        }, {
-          filename: `expediente-inteligencia-${analysis.expedienteId}.pdf`,
-          contentType: "application/pdf",
+        await bot.sendMessage(chatId, buildExecutiveMessage({
+          ...analysis,
+          sourceUrl: detectedLink,
+        }), {
+          reply_markup: buildActionKeyboard(detectedLink),
         });
       } catch (err) {
         await bot
@@ -224,6 +292,16 @@ ${detectedLink}`,
     const message = callbackQuery.message;
     if (!message || String(message.chat.id) !== chatId) return;
     const selectionKey = callbackQuery.data;
+    if (selectionKey === "agent:new_search") {
+      await bot
+        .answerCallbackQuery(callbackQuery.id, {
+          text: "🔄 Envíame /buscar + términos para lanzar una nueva investigación.",
+          show_alert: false,
+        })
+        .catch(() => {});
+      return;
+    }
+
     if (!selectionKey?.startsWith("sel:")) return;
 
     const selected = selectOptionByKey(String(message.chat.id), selectionKey);
@@ -248,7 +326,7 @@ ${detectedLink}`,
     await bot
       .sendMessage(
         chatId,
-        `🎯 Selección guardada para Fase 2:\n${selected.licitacionNombre}\n🏢 ${selected.dependencia}\n🆔 ${selected.expedienteId}`,
+        `🛰️ Agente activo: Analizando licitación en modo texto...\n${selected.licitacionNombre}\n🏢 ${selected.dependencia}\n🆔 ${selected.expedienteId}`,
       )
       .catch(() => {});
 
@@ -256,21 +334,17 @@ ${detectedLink}`,
       await bot
         .sendMessage(
           chatId,
-          `🧠 Iniciando Deep Analysis estratégico para ${selected.expedienteId}...`,
+          "🛰️ Agente activo: Analizando licitación en modo texto...",
         )
         .catch(() => {});
 
       try {
         const analysis = await analyzeSelectedLicitacion(selected.expedienteId);
-        await bot.sendMessage(chatId, buildExecutiveMessage(analysis), {
-          parse_mode: "HTML",
-        });
-        const pdfBuffer = generateIntelligencePdf(analysis);
-        await bot.sendDocument(chatId, pdfBuffer, {
-          caption: `📄 Expediente de Inteligencia generado: ${analysis.expedienteId}`,
-        }, {
-          filename: `expediente-inteligencia-${analysis.expedienteId}.pdf`,
-          contentType: "application/pdf",
+        await bot.sendMessage(chatId, buildExecutiveMessage({
+          ...analysis,
+          sourceUrl: selected.sourceUrl,
+        }), {
+          reply_markup: buildActionKeyboard(selected.sourceUrl),
         });
       } catch (err) {
         await bot
