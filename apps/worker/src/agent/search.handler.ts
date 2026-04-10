@@ -13,6 +13,7 @@ const RESULT_TABLE_SELECTOR = ".p-datatable, .table, .p-datatable-tbody tr, .tab
 export interface ActiveSearchInput {
   searchId: string;
   query: string;
+  onProgress?: (message: string) => void;
 }
 
 function dedupeByExpediente(
@@ -205,10 +206,13 @@ async function extractPortalResults(
   baseUrl: string,
   query: string,
   mode: "default" | "multi",
+  emitProgress?: (message: string) => void,
 ): Promise<AgentSearchResult[]> {
+  emitProgress?.("🌐 Entrando a ComprasMX...");
   await page.goto(baseUrl, { waitUntil: "networkidle", timeout: 45_000 });
   await closeBlockingPopups(page);
 
+  emitProgress?.("🔎 Escribiendo término de búsqueda...");
   await applyKeywordFilterInComprasMx(page, query);
   if (mode === "multi") {
     await activateWideSearchMode(page);
@@ -336,12 +340,29 @@ export async function runActiveSearch(
 ): Promise<AgentSearchResult[]> {
   const config = getConfig();
   const navigator = new ComprasMxNavigator();
+  const startedAt = Date.now();
+  const emitProgress = (message: string) => {
+    const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+    input.onProgress?.(`${message} (t+${elapsedSeconds}s)`);
+  };
+
+  emitProgress("🚀 Abriendo navegador...");
 
   return BrowserManager.withContext(async (page) => {
     await page
       .setExtraHTTPHeaders({
         "User-Agent":
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+        DNT: "1",
+      })
+      .catch(() => {});
+
+    await page
+      .addInitScript(() => {
+        Object.defineProperty(navigator, "webdriver", {
+          get: () => undefined,
+        });
       })
       .catch(() => {});
 
@@ -351,6 +372,7 @@ export async function runActiveSearch(
       config.COMPRASMX_SEED_URL,
       input.query,
       "default",
+      emitProgress,
     );
 
     if (route1.length > 0) {
@@ -363,6 +385,7 @@ export async function runActiveSearch(
       config.COMPRASMX_SEED_URL,
       input.query,
       "multi",
+      emitProgress,
     );
 
     if (route2.length > 0) {
@@ -385,7 +408,7 @@ export async function runActiveSearch(
     );
 
     return [];
-  });
+  }, { timeoutMs: 45_000 });
 }
 
 export async function captureComprasMxDebugScreenshot(

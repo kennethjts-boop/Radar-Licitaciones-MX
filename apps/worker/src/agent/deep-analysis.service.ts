@@ -246,7 +246,7 @@ export async function analyzeSelectedLicitacion(
 
   for (const attachment of detail.attachmentUrls) {
     const text = await downloadPdfText(attachment.fileUrl).catch((err) => {
-      log.warn({ err, attachment }, "No se pudo leer PDF de adjunto");
+      log.warn({ err, attachment }, "No se pudo leer documento adjunto");
       return "";
     });
 

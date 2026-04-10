@@ -105,6 +105,7 @@ export function selectOptionByKey(
 export async function startActiveSearch(
   chatId: string,
   query: string,
+  onProgress?: (message: string) => void,
 ): Promise<AgentSearchSession> {
   const session: AgentSearchSession = {
     chatId,
@@ -120,6 +121,7 @@ export async function startActiveSearch(
     const options = await runActiveSearch({
       searchId: makeSessionId(chatId, query),
       query,
+      onProgress,
     });
 
     const finished: AgentSearchSession = {
@@ -132,7 +134,14 @@ export async function startActiveSearch(
     saveSearchSession(finished);
     return finished;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const rawMessage = err instanceof Error ? err.message : String(err);
+    const isEmergencyTimeout = /timed out after 45000ms/i.test(rawMessage);
+    const isTimeout = /timed out after \d+ms/i.test(rawMessage);
+    const message = isEmergencyTimeout
+      ? "❌ Error de conexión con el portal. Reintentando con ruta alterna..."
+      : isTimeout
+        ? "⚠️ El portal está tardando demasiado. Reintenta en un momento."
+        : rawMessage;
     log.error({ err, chatId, query }, "Active search failed");
 
     const failed: AgentSearchSession = {
