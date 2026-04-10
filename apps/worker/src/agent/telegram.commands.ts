@@ -5,6 +5,7 @@ import {
   selectOptionByKey,
   startActiveSearch,
 } from "./agent.service";
+import { AGENT_MANUAL_CAPUFE_LINK } from "./search.handler";
 
 const log = createModuleLogger("agent-telegram");
 
@@ -50,7 +51,19 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
         await bot
           .sendMessage(
             chatId,
-            `⚠️ /buscar activo y listo, pero no encontré licitaciones para '${query}' en este momento.`,
+            `No lo veo en el portal principal, pero aquí hay un enlace directo a las últimas de CAPUFE: ${AGENT_MANUAL_CAPUFE_LINK}. ¿Quieres que analice un ID específico?`,
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    {
+                      text: "🔎 Abrir últimas CAPUFE",
+                      url: AGENT_MANUAL_CAPUFE_LINK,
+                    },
+                  ],
+                ],
+              },
+            },
           )
           .catch(() => {});
         return;

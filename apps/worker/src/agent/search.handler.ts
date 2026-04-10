@@ -6,19 +6,39 @@ import type { AgentSearchResult } from "./agent.service";
 
 const log = createModuleLogger("agent-search-handler");
 
+const MAX_RESULTS = 5;
+const CAPUFE_LATEST_LINK =
+  "https://comprasmx.buengobierno.gob.mx/es/publico/Buscador";
+
 export interface ActiveSearchInput {
   searchId: string;
   query: string;
+}
+
+function dedupeByExpediente(
+  results: AgentSearchResult[],
+): AgentSearchResult[] {
+  const seen = new Set<string>();
+  const deduped: AgentSearchResult[] = [];
+
+  for (const row of results) {
+    const key = row.expedienteId.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(row);
+    if (deduped.length >= MAX_RESULTS) break;
+  }
+
+  return deduped;
 }
 
 async function applyKeywordFilterInComprasMx(
   page: any,
   query: string,
 ): Promise<void> {
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(1200);
 
   const filterApplied = await page.evaluate((keyword: string) => {
-    const lowered = keyword.toLowerCase();
     // @ts-ignore
     const candidates = Array.from(
       // @ts-ignore
@@ -45,71 +65,236 @@ async function applyKeywordFilterInComprasMx(
     target.dispatchEvent(new Event("input", { bubbles: true }));
     // @ts-ignore
     target.dispatchEvent(new Event("change", { bubbles: true }));
-
-    // algunos componentes PrimeNG filtran después de Enter.
     target.dispatchEvent(
       // @ts-ignore
       new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
     );
 
-    // fallback mínimo para triggers reactivos
-    target.setAttribute("data-agent-keyword", lowered);
     return true;
   }, query);
 
   log.info({ query, filterApplied }, "ComprasMX keyword filter execution");
+  await page.waitForTimeout(1200);
+}
+
+async function activateWideSearchMode(page: any): Promise<void> {
+  const modeApplied = await page.evaluate(() => {
+    const lower = (txt: string | null | undefined) => (txt ?? "").toLowerCase();
+
+    const clickByText = (needle: string): boolean => {
+      // @ts-ignore
+      const elements = Array.from(
+        // @ts-ignore
+        document.querySelectorAll('button, label, span, a, li, div, p-checkbox, p-radiobutton'),
+      ) as any[];
+      const found = elements.find((el) => lower(el.textContent).includes(needle));
+      if (!found) return false;
+      // @ts-ignore
+      found.click?.();
+      const input = found.querySelector?.('input[type="checkbox"], input[type="radio"]');
+      // @ts-ignore
+      input?.click?.();
+      return true;
+    };
+
+    const allYears = clickByText("todos los años") || clickByText("todos los años");
+    const vigentes = clickByText("anuncios vigentes") || clickByText("vigentes");
+    const planeacion = clickByText("planeación") || clickByText("planeacion");
+
+    return {
+      allYears,
+      vigentes,
+      planeacion,
+    };
+  });
+
+  log.info({ modeApplied }, "ComprasMX multi-extraction mode toggled");
   await page.waitForTimeout(1500);
 }
 
+function rowsToAgentResults(
+  rows: Array<{
+    externalId: string;
+    title: string | null;
+    dependency: string | null;
+    status: string | null;
+    sourceUrl: string;
+  }>,
+  prefix: string,
+  fallbackUrl: string,
+): AgentSearchResult[] {
+  return rows.map((row, index) => ({
+    id: `${prefix}-${index}`,
+    expedienteId: row.externalId || `SIN-ID-${index + 1}`,
+    licitacionNombre: row.title ?? "Sin título",
+    dependencia: row.dependency ?? "Sin dependencia",
+    sourceUrl: row.sourceUrl || fallbackUrl,
+    summary: row.status ?? "Sin estatus",
+  }));
+}
+
+async function extractPortalResults(
+  page: any,
+  navigator: ComprasMxNavigator,
+  baseUrl: string,
+  query: string,
+  mode: "default" | "multi",
+): Promise<AgentSearchResult[]> {
+  await page.goto(baseUrl, { waitUntil: "networkidle", timeout: 45_000 });
+
+  await applyKeywordFilterInComprasMx(page, query);
+  if (mode === "multi") {
+    await activateWideSearchMode(page);
+  }
+
+  const { rows, pagesScanned } = await navigator.scanListing(
+    page,
+    baseUrl,
+    mode === "multi" ? 3 : 1,
+  );
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtered = rows.filter((row) => {
+    const haystack = [row.externalId, row.title, row.dependency]
+      .map((v) => (v ?? "").toLowerCase())
+      .join(" ");
+    return haystack.includes(normalizedQuery);
+  });
+
+  const usable = (filtered.length > 0 ? filtered : rows).slice(0, MAX_RESULTS);
+
+  log.info(
+    {
+      mode,
+      query,
+      scannedRows: rows.length,
+      filteredRows: filtered.length,
+      pagesScanned,
+      returned: usable.length,
+    },
+    "ComprasMX extraction route completed",
+  );
+
+  return rowsToAgentResults(usable, `mx-${mode}`, page.url());
+}
+
+async function extractGoogleFallbackResults(
+  page: any,
+  query: string,
+): Promise<AgentSearchResult[]> {
+  const searchQuery = `${query} CAPUFE expediente licitación site:comprasmx.buengobierno.gob.mx`;
+  const googleUrl = `https://www.google.com/search?q=${encodeURIComponent(searchQuery)}`;
+
+  await page.goto(googleUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: 30_000,
+  });
+
+  await page.waitForTimeout(1500);
+
+  const fallbackRows = await page.evaluate(() => {
+    const extractExpediente = (text: string): string | null => {
+      const regexes = [
+        /[A-Z]{2,8}-[A-Z0-9-]{6,}/g,
+        /\b[A-Z0-9]{10,}\b/g,
+      ];
+
+      for (const re of regexes) {
+        const match = text.match(re);
+        if (match && match[0]) return match[0];
+      }
+
+      return null;
+    };
+
+    // @ts-ignore
+    const links = Array.from(document.querySelectorAll("a h3")).slice(0, 8) as any[];
+
+    return links.map((titleNode, idx) => {
+      const anchor = titleNode.closest("a") as any;
+      const block = titleNode.parentElement?.parentElement;
+      const snippet = (block?.textContent || "").replace(/\s+/g, " ").trim();
+      const title = (titleNode.textContent || "Resultado sin título").trim();
+      const expedienteId = extractExpediente(`${title} ${snippet}`) || `OSINT-${idx + 1}`;
+
+      return {
+        externalId: expedienteId,
+        title,
+        dependency: "Fuente externa (Google/OSINT)",
+        status: "Verificar en ComprasMX",
+        sourceUrl: anchor?.href || "",
+      };
+    });
+  });
+
+  const results = rowsToAgentResults(
+    fallbackRows.slice(0, MAX_RESULTS),
+    "osint-google",
+    googleUrl,
+  );
+
+  log.info(
+    { query, extracted: fallbackRows.length, returned: results.length },
+    "Google fallback route completed",
+  );
+
+  return results;
+}
+
 /**
- * Fase 1: búsqueda real en ComprasMX con navegación Playwright reutilizando
- * la infraestructura endurecida de BrowserManager + ComprasMxNavigator.
+ * Fase 1.1: búsqueda multi-extracción.
+ * Ruta 1: ComprasMX default.
+ * Ruta 2: ComprasMX ampliada (todos los años + vigentes + planeación).
+ * Ruta 3: fallback OSINT con Google.
  */
 export async function runActiveSearch(
   input: ActiveSearchInput,
 ): Promise<AgentSearchResult[]> {
   const config = getConfig();
   const navigator = new ComprasMxNavigator();
-  const normalizedQuery = input.query.trim().toLowerCase();
 
   return BrowserManager.withContext(async (page) => {
-    await page.goto(config.COMPRASMX_SEED_URL, {
-      waitUntil: "networkidle",
-      timeout: 45_000,
-    });
+    const route1 = await extractPortalResults(
+      page,
+      navigator,
+      config.COMPRASMX_SEED_URL,
+      input.query,
+      "default",
+    );
 
-    await applyKeywordFilterInComprasMx(page, input.query);
+    if (route1.length > 0) {
+      return dedupeByExpediente(route1);
+    }
 
-    const { rows } = await navigator.scanListing(page, config.COMPRASMX_SEED_URL, 1);
+    const route2 = await extractPortalResults(
+      page,
+      navigator,
+      config.COMPRASMX_SEED_URL,
+      input.query,
+      "multi",
+    );
 
-    const filtered = rows.filter((row) => {
-      const haystack = [row.externalId, row.title, row.dependency]
-        .map((v) => (v ?? "").toLowerCase())
-        .join(" ");
-      return haystack.includes(normalizedQuery);
-    });
+    if (route2.length > 0) {
+      return dedupeByExpediente(route2);
+    }
 
-    const selectedRows = (filtered.length > 0 ? filtered : rows).slice(0, 5);
+    const route3 = await extractGoogleFallbackResults(page, input.query);
 
-    const results = selectedRows.map((row, index) => ({
-      id: `opt-${index}`,
-      expedienteId: row.externalId,
-      licitacionNombre: row.title ?? "Sin título",
-      dependencia: row.dependency ?? "Sin dependencia",
-      sourceUrl: row.sourceUrl || page.url(),
-      summary: row.status ?? "Sin estatus",
-    }));
+    if (route3.length > 0) {
+      return dedupeByExpediente(route3);
+    }
 
-    log.info(
+    log.warn(
       {
         searchId: input.searchId,
         query: input.query,
-        extractedRows: rows.length,
-        returned: results.length,
+        capufeLatestLink: CAPUFE_LATEST_LINK,
       },
-      "Active search real extraction finished",
+      "All search routes returned empty",
     );
 
-    return results;
+    return [];
   });
 }
+
+export const AGENT_MANUAL_CAPUFE_LINK = CAPUFE_LATEST_LINK;
