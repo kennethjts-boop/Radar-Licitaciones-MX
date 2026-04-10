@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { unlink, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -28,11 +27,6 @@ export interface DeepAnalysisResult {
   title: string;
   expedienteId: string;
   report: DeepAnalysisReport;
-}
-
-export interface DeepAnalysisOptions {
-  onProgress?: (progress: number, message: string) => Promise<void> | void;
-  maxPdfPages?: number;
 }
 
 function getOpenAIClient(): any {
@@ -70,10 +64,7 @@ async function getCapufeHistoricalContext(): Promise<string> {
     .join("\n");
 }
 
-async function downloadPdfText(
-  url: string,
-  maxPages: number,
-): Promise<string> {
+async function downloadPdfText(url: string): Promise<string> {
   const tempPath = join(tmpdir(), `agent-${randomUUID()}.pdf`);
 
   try {
@@ -84,7 +75,7 @@ async function downloadPdfText(
 
     await writeFile(tempPath, Buffer.from(response.data));
     return await extractTextFromPdf(tempPath, {
-      maxPages,
+      maxPages: 60,
       maxChars: 150_000,
     });
   } finally {
@@ -246,22 +237,15 @@ async function runStrategicPrompt(input: {
 
 export async function analyzeSelectedLicitacion(
   expedienteId: string,
-  options: DeepAnalysisOptions = {},
 ): Promise<DeepAnalysisResult> {
-  const onProgress = options.onProgress;
-  const maxPdfPages = options.maxPdfPages ?? 40;
-
-  await onProgress?.(10, "🔎 Abriendo detalle de licitación (10%)...");
   const detail = await loadDetailByExpediente(expedienteId);
-  await onProgress?.(20, "📚 Consultando histórico CAPUFE (20%)...");
   const historicalContext = await getCapufeHistoricalContext();
 
   let convocatoriaText = "";
   let anexoText = "";
 
-  await onProgress?.(25, "📄 Leyendo anexos (25%)...");
   for (const attachment of detail.attachmentUrls) {
-    const text = await downloadPdfText(attachment.fileUrl, maxPdfPages).catch((err) => {
+    const text = await downloadPdfText(attachment.fileUrl).catch((err) => {
       log.warn({ err, attachment }, "No se pudo leer PDF de adjunto");
       return "";
     });
@@ -287,7 +271,6 @@ export async function analyzeSelectedLicitacion(
     throw new Error("No se pudieron descargar textos de Convocatoria/Anexo para el análisis");
   }
 
-  await onProgress?.(60, "🤖 Analizando con IA (60%)...");
   const report = await runStrategicPrompt({
     expedienteId: detail.expedienteId,
     title: detail.title,
@@ -296,7 +279,6 @@ export async function analyzeSelectedLicitacion(
     historicalContext,
   });
 
-  await onProgress?.(90, "🧾 Armando expediente final (90%)...");
   return {
     title: detail.title,
     expedienteId: detail.expedienteId,
@@ -306,27 +288,7 @@ export async function analyzeSelectedLicitacion(
 
 export async function analyzeLicitacionByUrl(
   url: string,
-  options: DeepAnalysisOptions = {},
 ): Promise<DeepAnalysisResult> {
   const expedienteFromUrl = (url.match(/[A-Z0-9-]{8,}/i)?.[0] ?? "manual-link").toUpperCase();
-  return analyzeSelectedLicitacion(expedienteFromUrl, options);
-}
-
-export function buildSimplifiedResult(
-  expedienteId: string,
-  title: string,
-): DeepAnalysisResult {
-  return {
-    title,
-    expedienteId,
-    report: {
-      resumen: "Documento pesado; se generó resumen simplificado con datos preliminares.",
-      fechas_criticas: ["Revisar cronograma directamente en la convocatoria."],
-      presupuesto_estimado: "No especificado (modo simplificado)",
-      requisitos_experiencia: ["Revisión manual recomendada en anexos técnicos."],
-      candados_detectados: ["Pendiente por limitación de tiempo de procesamiento."],
-      veredicto: "Oportunidad potencial; validar requisitos y plazos antes de ofertar.",
-      comparativo_capufe: "Comparativo resumido por timeout; ejecutar análisis completo en siguiente corrida.",
-    },
-  };
+  return analyzeSelectedLicitacion(expedienteFromUrl);
 }

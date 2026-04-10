@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { DeepAnalysisResult } from "./deep-analysis.service";
 
 function sanitizePdfText(input: string): string {

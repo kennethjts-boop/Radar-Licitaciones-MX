@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { getConfig } from "../config/env";
 import { createModuleLogger } from "../core/logger";
 import { BrowserManager } from "../collectors/comprasmx/browser.manager";
