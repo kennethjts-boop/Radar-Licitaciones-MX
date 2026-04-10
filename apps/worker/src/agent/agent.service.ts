@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createModuleLogger } from "../core/logger";
 import { runActiveSearch } from "./search.handler";
 

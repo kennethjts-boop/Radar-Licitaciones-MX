@@ -1,4 +1,3 @@
-// @ts-nocheck
 import TelegramBot from "node-telegram-bot-api";
 import { createModuleLogger } from "../core/logger";
 import {
@@ -9,21 +8,10 @@ import {
 import {
   AGENT_MANUAL_CAPUFE_LINK,
 } from "./search.handler";
-import {
-  analyzeLicitacionByUrl,
-  analyzeSelectedLicitacion,
-  buildSimplifiedResult,
-} from "./deep-analysis.service";
+import { analyzeLicitacionByUrl, analyzeSelectedLicitacion } from "./deep-analysis.service";
 import { generateIntelligencePdf } from "./pdf-report.util";
 
 const log = createModuleLogger("agent-telegram");
-const DEEP_ANALYSIS_TIMEOUT_MS = 3 * 60 * 1000;
-
-class DeepAnalysisTimeoutError extends Error {
-  constructor() {
-    super("Deep analysis timeout");
-  }
-}
 
 function shortLabel(input: string, max = 60): string {
   if (input.length <= max) return input;
@@ -50,7 +38,6 @@ function buildExecutiveMessage(payload: {
   title: string;
   expedienteId: string;
   report: {
-    semaforo: string;
     resumen: string;
     fechas_criticas: string[];
     presupuesto_estimado: string;
@@ -75,7 +62,6 @@ function buildExecutiveMessage(payload: {
     `<b>${payload.title}</b>`,
     "",
     `<b>Resumen:</b> ${payload.report.resumen}`,
-    `<b>Semáforo:</b> ${payload.report.semaforo}`,
     "",
     "<b>Fechas:</b>",
     fechas,
@@ -92,22 +78,6 @@ function buildExecutiveMessage(payload: {
     "",
     `<b>Veredicto:</b> ${payload.report.veredicto}`,
   ].join("\n");
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timeoutHandle: NodeJS.Timeout | null = null;
-
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutHandle = setTimeout(() => {
-      reject(new DeepAnalysisTimeoutError());
-    }, timeoutMs);
-  });
-
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
-  }
 }
 export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
   bot.onText(/\/buscar(?:\s+(.+))?/, async (msg, match) => {
@@ -228,15 +198,7 @@ ${detectedLink}`,
 
     void (async () => {
       try {
-        const analysis = await withTimeout(
-          analyzeLicitacionByUrl(detectedLink, {
-            onProgress: async (_progress, message) => {
-              await bot.sendMessage(chatId, message).catch(() => {});
-            },
-            maxPdfPages: 35,
-          }),
-          DEEP_ANALYSIS_TIMEOUT_MS,
-        );
+        const analysis = await analyzeLicitacionByUrl(detectedLink);
         await bot.sendMessage(chatId, buildExecutiveMessage(analysis), {
           parse_mode: "HTML",
         });
@@ -248,27 +210,6 @@ ${detectedLink}`,
           contentType: "application/pdf",
         });
       } catch (err) {
-        if (err instanceof DeepAnalysisTimeoutError) {
-          await bot
-            .sendMessage(
-              chatId,
-              "⚠️ El documento es demasiado pesado. Generando resumen simplificado...",
-            )
-            .catch(() => {});
-
-          const simplified = buildSimplifiedResult("manual-link", "Licitación por enlace manual");
-          await bot.sendMessage(chatId, buildExecutiveMessage(simplified), {
-            parse_mode: "HTML",
-          }).catch(() => {});
-          const simplePdf = generateIntelligencePdf(simplified);
-          await bot.sendDocument(chatId, simplePdf, {
-            caption: "📄 Expediente simplificado por timeout",
-          }, {
-            filename: "expediente-simplificado-timeout.pdf",
-            contentType: "application/pdf",
-          }).catch(() => {});
-          return;
-        }
         await bot
           .sendMessage(
             chatId,
@@ -320,15 +261,7 @@ ${detectedLink}`,
         .catch(() => {});
 
       try {
-        const analysis = await withTimeout(
-          analyzeSelectedLicitacion(selected.expedienteId, {
-            onProgress: async (_progress, message) => {
-              await bot.sendMessage(chatId, message).catch(() => {});
-            },
-            maxPdfPages: 35,
-          }),
-          DEEP_ANALYSIS_TIMEOUT_MS,
-        );
+        const analysis = await analyzeSelectedLicitacion(selected.expedienteId);
         await bot.sendMessage(chatId, buildExecutiveMessage(analysis), {
           parse_mode: "HTML",
         });
@@ -340,30 +273,6 @@ ${detectedLink}`,
           contentType: "application/pdf",
         });
       } catch (err) {
-        if (err instanceof DeepAnalysisTimeoutError) {
-          await bot
-            .sendMessage(
-              chatId,
-              "⚠️ El documento es demasiado pesado. Generando resumen simplificado...",
-            )
-            .catch(() => {});
-
-          const simplified = buildSimplifiedResult(
-            selected.expedienteId,
-            selected.licitacionNombre,
-          );
-          await bot.sendMessage(chatId, buildExecutiveMessage(simplified), {
-            parse_mode: "HTML",
-          }).catch(() => {});
-          const simplePdf = generateIntelligencePdf(simplified);
-          await bot.sendDocument(chatId, simplePdf, {
-            caption: `📄 Expediente simplificado: ${selected.expedienteId}`,
-          }, {
-            filename: `expediente-simplificado-${selected.expedienteId}.pdf`,
-            contentType: "application/pdf",
-          }).catch(() => {});
-          return;
-        }
         await bot
           .sendMessage(
             chatId,
