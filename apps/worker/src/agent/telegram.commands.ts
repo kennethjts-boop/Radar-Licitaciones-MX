@@ -8,12 +8,7 @@ import {
 import {
   AGENT_MANUAL_CAPUFE_LINK,
 } from "./search.handler";
-import {
-  analyzeLicitacionByUrl,
-  analyzeSelectedLicitacion,
-  buildSimplifiedResult,
-} from "./deep-analysis.service";
-import { generateIntelligencePdf } from "./pdf-report.util";
+import { analyzeLicitacionByUrl, analyzeSelectedLicitacion } from "./deep-analysis.service";
 
 const log = createModuleLogger("agent-telegram");
 const DEEP_ANALYSIS_TIMEOUT_MS = 3 * 60 * 1000;
@@ -45,9 +40,27 @@ function detectProcurementLink(text: string): string | null {
   return null;
 }
 
+function resolveSemaphore(veredicto: string): string {
+  const normalized = veredicto.toLowerCase();
+  if (normalized.includes("alto") || normalized.includes("alta")) return "🟢";
+  if (normalized.includes("medio") || normalized.includes("media")) return "🟡";
+  if (normalized.includes("bajo") || normalized.includes("baja")) return "🔴";
+  return "🟡";
+}
+
+function buildActionKeyboard(sourceUrl: string): TelegramBot.InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [{ text: "🔎 Ver enlace original", url: sourceUrl }],
+      [{ text: "🔄 Nueva búsqueda", callback_data: "agent:new_search" }],
+    ],
+  };
+}
+
 function buildExecutiveMessage(payload: {
   title: string;
   expedienteId: string;
+  sourceUrl: string;
   report: {
     resumen: string;
     fechas_criticas: string[];
@@ -58,36 +71,52 @@ function buildExecutiveMessage(payload: {
     comparativo_capufe: string;
   };
 }): string {
+  const semaforo = resolveSemaphore(payload.report.veredicto);
   const fechas = payload.report.fechas_criticas.length
-    ? payload.report.fechas_criticas.map((f) => `• ${f}`).join("\n")
-    : "• No especificadas";
+    ? payload.report.fechas_criticas.map((f) => `- ${f}`).join("\n")
+    : "- No especificadas";
   const requisitos = payload.report.requisitos_experiencia.length
-    ? payload.report.requisitos_experiencia.map((r) => `• ${r}`).join("\n")
-    : "• No especificados";
+    ? payload.report.requisitos_experiencia.map((r) => `- ${r}`).join("\n")
+    : "- No especificados";
   const candados = payload.report.candados_detectados.length
-    ? payload.report.candados_detectados.map((r) => `• ${r}`).join("\n")
-    : "• No detectados";
+    ? payload.report.candados_detectados.map((r) => `- ${r}`).join("\n")
+    : "- No detectados";
 
   return [
-    `🧠 <b>Deep Analysis — ${payload.expedienteId}</b>`,
-    `<b>${payload.title}</b>`,
+    `${semaforo} **VEREDICTO:** ${payload.report.veredicto}`,
     "",
-    `<b>Resumen:</b> ${payload.report.resumen}`,
+    `**Deep Analysis — ${payload.expedienteId}**`,
+    `**${payload.title}**`,
     "",
-    "<b>Fechas:</b>",
+    "---",
+    "",
+    "**Resumen Ejecutivo**",
+    payload.report.resumen,
+    "",
+    "---",
+    "",
+    "**Puntos Críticos**",
+    "**Fechas clave:**",
     fechas,
     "",
-    `<b>Presupuesto estimado:</b> ${payload.report.presupuesto_estimado}`,
+    `**Presupuesto estimado:** ${payload.report.presupuesto_estimado}`,
     "",
-    "<b>Requisitos de experiencia:</b>",
+    "**Requisitos clave:**",
     requisitos,
     "",
-    "<b>Candados detectados:</b>",
+    "---",
+    "",
+    '**Análisis de "Candados"**',
     candados,
     "",
-    `<b>Comparativo CAPUFE:</b> ${payload.report.comparativo_capufe}`,
+    "---",
     "",
-    `<b>Veredicto:</b> ${payload.report.veredicto}`,
+    "**Contexto RAG (Comparativa con datos previos)**",
+    payload.report.comparativo_capufe,
+    "",
+    "---",
+    "",
+    `Fuente: ${payload.sourceUrl}`,
   ].join("\n");
 }
 
@@ -143,7 +172,7 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
         await bot
           .sendMessage(
             chatId,
-            "Investigando a fondo... generando tu expediente PDF.",
+            "Investigando a fondo... te enviaré el expediente completo en texto.",
             {
               reply_markup: {
                 inline_keyboard: [
@@ -225,24 +254,12 @@ ${detectedLink}`,
 
     void (async () => {
       try {
-        const analysis = await withTimeout(
-          analyzeLicitacionByUrl(detectedLink, {
-            onProgress: async (_progress, message) => {
-              await bot.sendMessage(chatId, message).catch(() => {});
-            },
-            maxPdfPages: 40,
-          }),
-          DEEP_ANALYSIS_TIMEOUT_MS,
-        );
-        await bot.sendMessage(chatId, buildExecutiveMessage(analysis), {
-          parse_mode: "HTML",
-        });
-        const pdfBuffer = generateIntelligencePdf(analysis);
-        await bot.sendDocument(chatId, pdfBuffer, {
-          caption: `📄 Expediente de Inteligencia generado: ${analysis.expedienteId}`,
-        }, {
-          filename: `expediente-inteligencia-${analysis.expedienteId}.pdf`,
-          contentType: "application/pdf",
+        const analysis = await analyzeLicitacionByUrl(detectedLink);
+        await bot.sendMessage(chatId, buildExecutiveMessage({
+          ...analysis,
+          sourceUrl: detectedLink,
+        }), {
+          reply_markup: buildActionKeyboard(detectedLink),
         });
       } catch (err) {
         if (err instanceof DeepAnalysisTimeoutError) {
@@ -280,6 +297,16 @@ ${detectedLink}`,
     const message = callbackQuery.message;
     if (!message || String(message.chat.id) !== chatId) return;
     const selectionKey = callbackQuery.data;
+    if (selectionKey === "agent:new_search") {
+      await bot
+        .answerCallbackQuery(callbackQuery.id, {
+          text: "🔄 Envíame /buscar + términos para lanzar una nueva investigación.",
+          show_alert: false,
+        })
+        .catch(() => {});
+      return;
+    }
+
     if (!selectionKey?.startsWith("sel:")) return;
 
     const selected = selectOptionByKey(String(message.chat.id), selectionKey);
@@ -317,24 +344,12 @@ ${detectedLink}`,
         .catch(() => {});
 
       try {
-        const analysis = await withTimeout(
-          analyzeSelectedLicitacion(selected.expedienteId, {
-            onProgress: async (_progress, message) => {
-              await bot.sendMessage(chatId, message).catch(() => {});
-            },
-            maxPdfPages: 40,
-          }),
-          DEEP_ANALYSIS_TIMEOUT_MS,
-        );
-        await bot.sendMessage(chatId, buildExecutiveMessage(analysis), {
-          parse_mode: "HTML",
-        });
-        const pdfBuffer = generateIntelligencePdf(analysis);
-        await bot.sendDocument(chatId, pdfBuffer, {
-          caption: `📄 Expediente de Inteligencia generado: ${analysis.expedienteId}`,
-        }, {
-          filename: `expediente-inteligencia-${analysis.expedienteId}.pdf`,
-          contentType: "application/pdf",
+        const analysis = await analyzeSelectedLicitacion(selected.expedienteId);
+        await bot.sendMessage(chatId, buildExecutiveMessage({
+          ...analysis,
+          sourceUrl: selected.sourceUrl,
+        }), {
+          reply_markup: buildActionKeyboard(selected.sourceUrl),
         });
       } catch (err) {
         if (err instanceof DeepAnalysisTimeoutError) {
