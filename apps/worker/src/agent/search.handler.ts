@@ -385,7 +385,7 @@ export async function runActiveSearch(
     );
 
     return [];
-  });
+  }, { timeoutMs: 60_000 });
 }
 
 export async function captureComprasMxDebugScreenshot(

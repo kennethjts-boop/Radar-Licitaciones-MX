@@ -151,12 +151,15 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
 
     await bot.sendMessage(
       chatId,
-      `🛰️ Iniciando búsqueda activa para: '${query}'... Dame un momento.`,
+      "🛰️ Agente activo: Analizando licitación en modo texto...",
     );
 
     // Fire-and-forget para mantener el comando no bloqueante.
     void (async () => {
-      const session = await startActiveSearch(String(msg.chat.id), query);
+      const stopHeartbeat = startSearchHeartbeat(bot, chatId);
+      const session = await startActiveSearch(String(msg.chat.id), query).finally(() => {
+        stopHeartbeat();
+      });
 
       if (session.status === "error") {
         await bot
@@ -240,15 +243,14 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
     await bot
       .sendMessage(
         chatId,
-        "🔍 Detecté un enlace de licitación. Iniciando extracción forzada...",
+        "🛰️ Agente activo: Analizando licitación en modo texto...",
       )
       .catch(() => {});
 
     await bot
       .sendMessage(
         chatId,
-        `🚀 Fase 2 (Deep Analysis) activada en modo manual para:
-${detectedLink}`,
+        `🛰️ Agente activo: Analizando licitación en modo texto...\n${detectedLink}`,
       )
       .catch(() => {});
 
@@ -331,7 +333,7 @@ ${detectedLink}`,
     await bot
       .sendMessage(
         chatId,
-        `🎯 Selección guardada para Fase 2:\n${selected.licitacionNombre}\n🏢 ${selected.dependencia}\n🆔 ${selected.expedienteId}`,
+        `🛰️ Agente activo: Analizando licitación en modo texto...\n${selected.licitacionNombre}\n🏢 ${selected.dependencia}\n🆔 ${selected.expedienteId}`,
       )
       .catch(() => {});
 
@@ -339,7 +341,7 @@ ${detectedLink}`,
       await bot
         .sendMessage(
           chatId,
-          `🧠 Iniciando Deep Analysis estratégico para ${selected.expedienteId}...`,
+          "🛰️ Agente activo: Analizando licitación en modo texto...",
         )
         .catch(() => {});
 

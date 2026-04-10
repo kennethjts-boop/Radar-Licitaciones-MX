@@ -132,7 +132,11 @@ export async function startActiveSearch(
     saveSearchSession(finished);
     return finished;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const rawMessage = err instanceof Error ? err.message : String(err);
+    const isTimeout = /timed out after 60000ms/i.test(rawMessage);
+    const message = isTimeout
+      ? "⚠️ El portal está tardando demasiado. Reintenta en un momento."
+      : rawMessage;
     log.error({ err, chatId, query }, "Active search failed");
 
     const failed: AgentSearchSession = {
