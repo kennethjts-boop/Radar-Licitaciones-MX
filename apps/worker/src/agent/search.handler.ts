@@ -8,6 +8,7 @@ const log = createModuleLogger("agent-search-handler");
 
 const MAX_RESULTS = 5;
 const CAPUFE_LATEST_LINK = "https://comprasmx.hacienda.gob.mx/";
+const RESULT_TABLE_SELECTOR = ".p-datatable, .table, .p-datatable-tbody tr, .table tbody tr";
 
 export interface ActiveSearchInput {
   searchId: string;
@@ -34,7 +35,38 @@ function dedupeByExpediente(
 
 async function waitForDynamicResults(page: any): Promise<void> {
   await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
-  await page.waitForTimeout(7_000);
+  await page.waitForSelector(RESULT_TABLE_SELECTOR, { timeout: 15_000 }).catch(() => {});
+  await page.waitForTimeout(2_500);
+}
+
+async function triggerLazyLoadWithScroll(page: any): Promise<void> {
+  await page.evaluate(() => {
+    // @ts-ignore
+    window.scrollTo(0, 320);
+  }).catch(() => {});
+  await page.waitForTimeout(1_500);
+}
+
+async function ensureResultsTableReady(page: any): Promise<boolean> {
+  await triggerLazyLoadWithScroll(page);
+
+  const readyNow = await page
+    .waitForSelector(RESULT_TABLE_SELECTOR, { timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false);
+
+  if (readyNow) return true;
+
+  // Reintento único con reload antes de rendirse.
+  await page.reload({ waitUntil: "networkidle", timeout: 45_000 }).catch(() => {});
+  await triggerLazyLoadWithScroll(page);
+
+  const readyAfterReload = await page
+    .waitForSelector(RESULT_TABLE_SELECTOR, { timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false);
+
+  return readyAfterReload;
 }
 async function applyKeywordFilterInComprasMx(
   page: any,
@@ -151,7 +183,10 @@ async function extractPortalResults(
     await activateWideSearchMode(page);
   }
 
+  const tableReady = await ensureResultsTableReady(page);
   await waitForDynamicResults(page);
+
+  log.info({ mode, query, tableReady }, "Result table readiness check");
 
   let { rows, pagesScanned } = await navigator.scanListing(
     page,
@@ -272,6 +307,13 @@ export async function runActiveSearch(
   const navigator = new ComprasMxNavigator();
 
   return BrowserManager.withContext(async (page) => {
+    await page
+      .setExtraHTTPHeaders({
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      })
+      .catch(() => {});
+
     const route1 = await extractPortalResults(
       page,
       navigator,
@@ -327,7 +369,13 @@ export async function captureComprasMxDebugScreenshot(
         timeout: 45_000,
       });
 
+      await page.setExtraHTTPHeaders({
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      }).catch(() => {});
+
       await applyKeywordFilterInComprasMx(page, query);
+      await ensureResultsTableReady(page);
       await waitForDynamicResults(page);
 
       return await page.screenshot({ fullPage: true, type: "png" });

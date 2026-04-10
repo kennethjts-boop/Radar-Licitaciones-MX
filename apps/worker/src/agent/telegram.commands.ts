@@ -9,6 +9,7 @@ import {
   AGENT_MANUAL_CAPUFE_LINK,
   captureComprasMxDebugScreenshot,
 } from "./search.handler";
+import { analyzeLicitacionByUrl, analyzeSelectedLicitacion } from "./deep-analysis.service";
 
 const log = createModuleLogger("agent-telegram");
 
@@ -31,6 +32,52 @@ function detectProcurementLink(text: string): string | null {
   }
 
   return null;
+}
+
+function buildExecutiveMessage(payload: {
+  title: string;
+  expedienteId: string;
+  report: {
+    resumen: string;
+    fechas_criticas: string[];
+    presupuesto_estimado: string;
+    requisitos_experiencia: string[];
+    candados_detectados: string[];
+    veredicto: string;
+    comparativo_capufe: string;
+  };
+}): string {
+  const fechas = payload.report.fechas_criticas.length
+    ? payload.report.fechas_criticas.map((f) => `• ${f}`).join("\n")
+    : "• No especificadas";
+  const requisitos = payload.report.requisitos_experiencia.length
+    ? payload.report.requisitos_experiencia.map((r) => `• ${r}`).join("\n")
+    : "• No especificados";
+  const candados = payload.report.candados_detectados.length
+    ? payload.report.candados_detectados.map((r) => `• ${r}`).join("\n")
+    : "• No detectados";
+
+  return [
+    `🧠 <b>Deep Analysis — ${payload.expedienteId}</b>`,
+    `<b>${payload.title}</b>`,
+    "",
+    `<b>Resumen:</b> ${payload.report.resumen}`,
+    "",
+    "<b>Fechas:</b>",
+    fechas,
+    "",
+    `<b>Presupuesto estimado:</b> ${payload.report.presupuesto_estimado}`,
+    "",
+    "<b>Requisitos de experiencia:</b>",
+    requisitos,
+    "",
+    "<b>Candados detectados:</b>",
+    candados,
+    "",
+    `<b>Comparativo CAPUFE:</b> ${payload.report.comparativo_capufe}`,
+    "",
+    `<b>Veredicto:</b> ${payload.report.veredicto}`,
+  ].join("\n");
 }
 export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
   bot.onText(/\/buscar(?:\s+(.+))?/, async (msg, match) => {
@@ -158,6 +205,22 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
 ${detectedLink}`,
       )
       .catch(() => {});
+
+    void (async () => {
+      try {
+        const analysis = await analyzeLicitacionByUrl(detectedLink);
+        await bot.sendMessage(chatId, buildExecutiveMessage(analysis), {
+          parse_mode: "HTML",
+        });
+      } catch (err) {
+        await bot
+          .sendMessage(
+            chatId,
+            `❌ No pude completar el Deep Analysis para el link manual: ${err instanceof Error ? err.message : String(err)}`,
+          )
+          .catch(() => {});
+      }
+    })();
   });
 
   bot.on("callback_query", async (callbackQuery) => {
@@ -191,6 +254,29 @@ ${detectedLink}`,
         `🎯 Selección guardada para Fase 2:\n${selected.licitacionNombre}\n🏢 ${selected.dependencia}\n🆔 ${selected.expedienteId}`,
       )
       .catch(() => {});
+
+    void (async () => {
+      await bot
+        .sendMessage(
+          chatId,
+          `🧠 Iniciando Deep Analysis estratégico para ${selected.expedienteId}...`,
+        )
+        .catch(() => {});
+
+      try {
+        const analysis = await analyzeSelectedLicitacion(selected.expedienteId);
+        await bot.sendMessage(chatId, buildExecutiveMessage(analysis), {
+          parse_mode: "HTML",
+        });
+      } catch (err) {
+        await bot
+          .sendMessage(
+            chatId,
+            `❌ Error en Deep Analysis para ${selected.expedienteId}: ${err instanceof Error ? err.message : String(err)}`,
+          )
+          .catch(() => {});
+      }
+    })();
   });
 
   log.info("✅ Comando de agente registrado: /buscar + selección inline");
