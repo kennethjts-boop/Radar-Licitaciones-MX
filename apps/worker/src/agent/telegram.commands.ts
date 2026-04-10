@@ -7,9 +7,9 @@ import {
 } from "./agent.service";
 import {
   AGENT_MANUAL_CAPUFE_LINK,
-  captureComprasMxDebugScreenshot,
 } from "./search.handler";
 import { analyzeLicitacionByUrl, analyzeSelectedLicitacion } from "./deep-analysis.service";
+import { generateIntelligencePdf } from "./pdf-report.util";
 
 const log = createModuleLogger("agent-telegram");
 
@@ -113,12 +113,10 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
       }
 
       if (session.options.length === 0) {
-        const screenshot = await captureComprasMxDebugScreenshot(query);
-
         await bot
           .sendMessage(
             chatId,
-            `No lo veo en el portal principal, pero aquí hay un enlace directo a las últimas de CAPUFE: ${AGENT_MANUAL_CAPUFE_LINK}. ¿Quieres que analice un ID específico?`,
+            "Investigando a fondo... generando tu expediente PDF.",
             {
               reply_markup: {
                 inline_keyboard: [
@@ -133,14 +131,6 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
             },
           )
           .catch(() => {});
-
-        if (screenshot) {
-          await bot
-            .sendPhoto(chatId, screenshot, {
-              caption: `📸 Debug ComprasMX para '${query}' (última vista del scraper).`,
-            })
-            .catch(() => {});
-        }
 
         return;
       }
@@ -212,6 +202,13 @@ ${detectedLink}`,
         await bot.sendMessage(chatId, buildExecutiveMessage(analysis), {
           parse_mode: "HTML",
         });
+        const pdfBuffer = generateIntelligencePdf(analysis);
+        await bot.sendDocument(chatId, pdfBuffer, {
+          caption: `📄 Expediente de Inteligencia generado: ${analysis.expedienteId}`,
+        }, {
+          filename: `expediente-inteligencia-${analysis.expedienteId}.pdf`,
+          contentType: "application/pdf",
+        });
       } catch (err) {
         await bot
           .sendMessage(
@@ -267,6 +264,13 @@ ${detectedLink}`,
         const analysis = await analyzeSelectedLicitacion(selected.expedienteId);
         await bot.sendMessage(chatId, buildExecutiveMessage(analysis), {
           parse_mode: "HTML",
+        });
+        const pdfBuffer = generateIntelligencePdf(analysis);
+        await bot.sendDocument(chatId, pdfBuffer, {
+          caption: `📄 Expediente de Inteligencia generado: ${analysis.expedienteId}`,
+        }, {
+          filename: `expediente-inteligencia-${analysis.expedienteId}.pdf`,
+          contentType: "application/pdf",
         });
       } catch (err) {
         await bot

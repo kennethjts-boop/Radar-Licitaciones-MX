@@ -13,7 +13,7 @@ import { getSupabaseClient } from "../storage/client";
 
 const log = createModuleLogger("agent-deep-analysis");
 
-interface DeepAnalysisReport {
+export interface DeepAnalysisReport {
   resumen: string;
   fechas_criticas: string[];
   presupuesto_estimado: string;
@@ -23,7 +23,7 @@ interface DeepAnalysisReport {
   comparativo_capufe: string;
 }
 
-interface DeepAnalysisResult {
+export interface DeepAnalysisResult {
   title: string;
   expedienteId: string;
   report: DeepAnalysisReport;

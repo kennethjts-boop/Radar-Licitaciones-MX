@@ -47,6 +47,36 @@ async function triggerLazyLoadWithScroll(page: any): Promise<void> {
   await page.waitForTimeout(1_500);
 }
 
+async function closeBlockingPopups(page: any): Promise<void> {
+  await page.evaluate(() => {
+    const clickByText = (needle: string) => {
+      // @ts-ignore
+      const nodes = Array.from(document.querySelectorAll("button, a, span, div")) as any[];
+      const node = nodes.find((el) =>
+        String(el.textContent ?? "")
+          .toLowerCase()
+          .includes(needle),
+      );
+      // @ts-ignore
+      node?.click?.();
+    };
+
+    // @ts-ignore
+    const dialogs = Array.from(document.querySelectorAll(".modal, .dialog, [role='dialog']")) as any[];
+    dialogs.forEach((dialog) => {
+      const closeBtn =
+        dialog.querySelector("button.close, .close, [aria-label='Cerrar']") ??
+        null;
+      // @ts-ignore
+      closeBtn?.click?.();
+    });
+
+    clickByText("cerrar");
+    clickByText("aceptar");
+    clickByText("continuar");
+  }).catch(() => {});
+}
+
 async function ensureResultsTableReady(page: any): Promise<boolean> {
   await triggerLazyLoadWithScroll(page);
 
@@ -177,6 +207,7 @@ async function extractPortalResults(
   mode: "default" | "multi",
 ): Promise<AgentSearchResult[]> {
   await page.goto(baseUrl, { waitUntil: "networkidle", timeout: 45_000 });
+  await closeBlockingPopups(page);
 
   await applyKeywordFilterInComprasMx(page, query);
   if (mode === "multi") {
@@ -368,6 +399,7 @@ export async function captureComprasMxDebugScreenshot(
         waitUntil: "networkidle",
         timeout: 45_000,
       });
+      await closeBlockingPopups(page);
 
       await page.setExtraHTTPHeaders({
         "User-Agent":
