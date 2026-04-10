@@ -3,7 +3,7 @@
  * Arranca polling solo cuando se inicializa.
  *
  * /prueba  → Estado real del sistema con datos de DB
- * /buscar  → Búsqueda en expedientes
+ * /buscar  → Búsqueda activa (agente aislado)
  * /debug_resumen → Estado técnico detallado + telemetría Fase 2A
  */
 import TelegramBot from "node-telegram-bot-api";
@@ -12,7 +12,7 @@ import { createModuleLogger } from "../core/logger";
 import { healthTracker } from "../core/healthcheck";
 import { formatDuration, formatMexicoDate, nowISO } from "../core/time";
 import { getState, STATE_KEYS } from "../core/system-state";
-import { searchProcurements } from "../storage/procurement.repo";
+import { registerAgentCommands } from "../agent/telegram.commands";
 import { getActiveRadars } from "../radars/index";
 
 const log = createModuleLogger("commands");
@@ -152,61 +152,12 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     }
   });
 
-  // ── /buscar ──────────────────────────────────────────────────────────────
-  bot.onText(/\/buscar (.+)/, async (msg, match) => {
-    if (String(msg.chat.id) !== chatId) return;
-    const query = match?.[1]?.trim();
-    if (!query) {
-      await bot.sendMessage(
-        chatId,
-        "Uso: /buscar <texto o número de expediente>",
-      );
-      return;
-    }
-
-    log.info(
-      { query, from: msg.from?.username },
-      "📥 Comando /buscar recibido",
-    );
-
-    try {
-      const results = await searchProcurements(query, 5);
-
-      if (results.length === 0) {
-        await bot.sendMessage(
-          chatId,
-          `🔍 Sin resultados para: <b>${query}</b>\n\n<i>La base de datos puede estar vacía hasta Fase 2.</i>`,
-          { parse_mode: "HTML" },
-        );
-        return;
-      }
-
-      const lines = [
-        `🔍 <b>Resultados para: "${query}"</b>`,
-        `(${results.length} encontrados)\n`,
-      ];
-
-      for (const r of results) {
-        lines.push(`📋 <b>${r.title}</b>`);
-        lines.push(`   Exp: ${r.expediente_id ?? "N/D"} | ${r.status}`);
-        lines.push(`   ${r.dependency_name ?? "Sin dependencia"}`);
-        lines.push(`   <a href="${r.source_url}">Ver expediente</a>`);
-        lines.push("");
-      }
-
-      await bot.sendMessage(chatId, lines.join("\n"), {
-        parse_mode: "HTML",
-        disable_web_page_preview: true,
-      });
-
-      log.info({ query, count: results.length }, "✅ /buscar respondido");
-    } catch (err) {
-      log.error({ err, query }, "❌ Error en /buscar");
-      await bot
-        .sendMessage(chatId, "❌ Error ejecutando búsqueda")
-        .catch(() => {});
-    }
-  });
+  // ── Registro de comandos del Agente (aislado) ─────────────────────────────
+  try {
+    registerAgentCommands(bot, chatId);
+  } catch (err) {
+    log.error({ err }, "❌ Error registrando comandos del Agente — Radar continúa");
+  }
 
   // ── /debug_resumen ────────────────────────────────────────────────────────
   // Muestra telemetría completa de Fase 2A: pages_scanned, stop_reason, known_streak,
@@ -302,5 +253,5 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     }
   });
 
-  log.info("✅ Comandos registrados: /prueba, /buscar, /debug_resumen");
+  log.info("✅ Comandos registrados: /prueba, /buscar (agente), /debug_resumen");
 }
