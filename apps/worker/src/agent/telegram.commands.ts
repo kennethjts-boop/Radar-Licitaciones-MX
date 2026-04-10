@@ -5,7 +5,10 @@ import {
   selectOptionByKey,
   startActiveSearch,
 } from "./agent.service";
-import { AGENT_MANUAL_CAPUFE_LINK } from "./search.handler";
+import {
+  AGENT_MANUAL_CAPUFE_LINK,
+  captureComprasMxDebugScreenshot,
+} from "./search.handler";
 
 const log = createModuleLogger("agent-telegram");
 
@@ -14,6 +17,21 @@ function shortLabel(input: string, max = 60): string {
   return `${input.slice(0, max - 1)}…`;
 }
 
+
+function detectProcurementLink(text: string): string | null {
+  const urlRegex = /(https?:\/\/\S+)/gi;
+  const matches = text.match(urlRegex);
+  if (!matches) return null;
+
+  for (const rawUrl of matches) {
+    const url = rawUrl.trim();
+    if (/(comprasmx\.hacienda\.gob\.mx|comprasmx\.buengobierno\.gob\.mx|dof\.gob\.mx)/i.test(url)) {
+      return url;
+    }
+  }
+
+  return null;
+}
 export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
   bot.onText(/\/buscar(?:\s+(.+))?/, async (msg, match) => {
     if (String(msg.chat.id) !== chatId) return;
@@ -48,6 +66,8 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
       }
 
       if (session.options.length === 0) {
+        const screenshot = await captureComprasMxDebugScreenshot(query);
+
         await bot
           .sendMessage(
             chatId,
@@ -66,6 +86,15 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
             },
           )
           .catch(() => {});
+
+        if (screenshot) {
+          await bot
+            .sendPhoto(chatId, screenshot, {
+              caption: `📸 Debug ComprasMX para '${query}' (última vista del scraper).`,
+            })
+            .catch(() => {});
+        }
+
         return;
       }
 
@@ -103,6 +132,32 @@ export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
     })().catch((err) => {
       log.error({ err, query }, "Unhandled agent search execution error");
     });
+  });
+
+  bot.on("message", async (msg) => {
+    if (String(msg.chat.id) !== chatId) return;
+
+    const text = msg.text?.trim();
+    if (!text) return;
+    if (text.startsWith("/")) return;
+
+    const detectedLink = detectProcurementLink(text);
+    if (!detectedLink) return;
+
+    await bot
+      .sendMessage(
+        chatId,
+        "🔍 Detecté un enlace de licitación. Iniciando extracción forzada...",
+      )
+      .catch(() => {});
+
+    await bot
+      .sendMessage(
+        chatId,
+        `🚀 Fase 2 (Deep Analysis) activada en modo manual para:
+${detectedLink}`,
+      )
+      .catch(() => {});
   });
 
   bot.on("callback_query", async (callbackQuery) => {

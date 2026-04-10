@@ -7,8 +7,7 @@ import type { AgentSearchResult } from "./agent.service";
 const log = createModuleLogger("agent-search-handler");
 
 const MAX_RESULTS = 5;
-const CAPUFE_LATEST_LINK =
-  "https://comprasmx.buengobierno.gob.mx/es/publico/Buscador";
+const CAPUFE_LATEST_LINK = "https://comprasmx.hacienda.gob.mx/";
 
 export interface ActiveSearchInput {
   searchId: string;
@@ -32,11 +31,16 @@ function dedupeByExpediente(
   return deduped;
 }
 
+
+async function waitForDynamicResults(page: any): Promise<void> {
+  await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
+  await page.waitForTimeout(7_000);
+}
 async function applyKeywordFilterInComprasMx(
   page: any,
   query: string,
 ): Promise<void> {
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(2_500);
 
   const filterApplied = await page.evaluate((keyword: string) => {
     // @ts-ignore
@@ -74,7 +78,7 @@ async function applyKeywordFilterInComprasMx(
   }, query);
 
   log.info({ query, filterApplied }, "ComprasMX keyword filter execution");
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(3_500);
 }
 
 async function activateWideSearchMode(page: any): Promise<void> {
@@ -109,7 +113,7 @@ async function activateWideSearchMode(page: any): Promise<void> {
   });
 
   log.info({ modeApplied }, "ComprasMX multi-extraction mode toggled");
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(4_000);
 }
 
 function rowsToAgentResults(
@@ -147,11 +151,25 @@ async function extractPortalResults(
     await activateWideSearchMode(page);
   }
 
-  const { rows, pagesScanned } = await navigator.scanListing(
+  await waitForDynamicResults(page);
+
+  let { rows, pagesScanned } = await navigator.scanListing(
     page,
     baseUrl,
     mode === "multi" ? 3 : 1,
   );
+
+  if (rows.length === 0) {
+    await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
+    await page.waitForTimeout(6_000);
+    const retryScan = await navigator.scanListing(
+      page,
+      baseUrl,
+      mode === "multi" ? 2 : 1,
+    );
+    rows = retryScan.rows;
+    pagesScanned = Math.max(pagesScanned, retryScan.pagesScanned);
+  }
 
   const normalizedQuery = query.trim().toLowerCase();
   const filtered = rows.filter((row) => {
@@ -190,7 +208,7 @@ async function extractGoogleFallbackResults(
     timeout: 30_000,
   });
 
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(4_000);
 
   const fallbackRows = await page.evaluate(() => {
     const extractExpediente = (text: string): string | null => {
@@ -295,6 +313,29 @@ export async function runActiveSearch(
 
     return [];
   });
+}
+
+export async function captureComprasMxDebugScreenshot(
+  query: string,
+): Promise<Buffer | null> {
+  const config = getConfig();
+
+  try {
+    return await BrowserManager.withContext(async (page) => {
+      await page.goto(config.COMPRASMX_SEED_URL, {
+        waitUntil: "networkidle",
+        timeout: 45_000,
+      });
+
+      await applyKeywordFilterInComprasMx(page, query);
+      await waitForDynamicResults(page);
+
+      return await page.screenshot({ fullPage: true, type: "png" });
+    });
+  } catch (err) {
+    log.warn({ err, query }, "Could not capture ComprasMX debug screenshot");
+    return null;
+  }
 }
 
 export const AGENT_MANUAL_CAPUFE_LINK = CAPUFE_LATEST_LINK;
