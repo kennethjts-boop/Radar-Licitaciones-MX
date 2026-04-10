@@ -8,7 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "clean": "rm -rf dist",
-    "lint": "eslint src/",
+    "lint": "eslint src/ --quiet",
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "db:init": "ts-node-dev src/scripts/db-init.ts",
