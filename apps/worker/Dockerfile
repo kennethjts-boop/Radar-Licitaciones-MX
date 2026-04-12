@@ -19,6 +19,7 @@ COPY apps/worker/package*.json ./
 RUN npm ci
 
 # 3. Copiar código fuente real
+ARG CACHE_BUST=1
 COPY apps/worker/tsconfig.json ./
 COPY apps/worker/src ./src
 
