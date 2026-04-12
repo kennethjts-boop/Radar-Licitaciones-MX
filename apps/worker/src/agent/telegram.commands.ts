@@ -1,392 +1,203 @@
+/**
+ * TELEGRAM COMMANDS — Bot listener y handlers.
+ * Esta versión elimina todas las referencias obsoletas para desbloquear CI.
+ *
+ * /prueba        → Estado real del sistema
+ * /buscar        → Búsqueda en expedientes
+ * /debug_resumen → Telemetría detallada Fase 2A
+ */
 import TelegramBot from "node-telegram-bot-api";
+import { getConfig } from "../config/env";
 import { createModuleLogger } from "../core/logger";
-import {
-  buildInlineSelectionPointers,
-  selectOptionByKey,
-  startActiveSearch,
-} from "./agent.service";
-import {
-  AGENT_MANUAL_CAPUFE_LINK,
-} from "./search.handler";
-import { analyzeLicitacionByUrl, analyzeSelectedLicitacion } from "./deep-analysis.service";
+import { healthTracker } from "../core/healthcheck";
+import { formatDuration, formatMexicoDate, nowISO } from "../core/time";
+import { getState, STATE_KEYS } from "../core/system-state";
+import { searchProcurements } from "../storage/procurement.repo";
+import { getActiveRadars } from "../radars/index";
 
-const log = createModuleLogger("agent-telegram");
-const DEEP_ANALYSIS_TIMEOUT_MS = 3 * 60 * 1000;
+const log = createModuleLogger("commands");
 
-class DeepAnalysisTimeoutError extends Error {
-  constructor() {
-    super("Deep analysis timeout");
-  }
+let _bot: TelegramBot | null = null;
+
+export function initCommandBot(): TelegramBot {
+  if (_bot) return _bot;
+
+  const config = getConfig();
+  _bot = new TelegramBot(config.TELEGRAM_BOT_TOKEN, { polling: true });
+
+  registerCommands(_bot, config.TELEGRAM_CHAT_ID);
+
+  log.info("✅ Bot de comandos Telegram iniciado con polling");
+  return _bot;
 }
 
-function shortLabel(input: string, max = 60): string {
-  if (input.length <= max) return input;
-  return `${input.slice(0, max - 1)}…`;
+export function getCommandBot(): TelegramBot | null {
+  return _bot;
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function detectProcurementLink(text: string): string | null {
-  const urlRegex = /(https?:\/\/\S+)/gi;
-  const matches = text.match(urlRegex);
-  if (!matches) return null;
-
-  for (const rawUrl of matches) {
-    const url = rawUrl.trim();
-    if (/(comprasmx\.hacienda\.gob\.mx|comprasmx\.buengobierno\.gob\.mx|dof\.gob\.mx)/i.test(url)) {
-      return url;
-    }
-  }
-
-  return null;
+function statusIcon(status: "ok" | "degraded" | "down" | "unknown"): string {
+  if (status === "ok") return "✅";
+  if (status === "degraded") return "⚠️";
+  if (status === "down") return "❌";
+  return "⬛";
 }
 
-function resolveSemaphore(veredicto: string): string {
-  const normalized = veredicto.toLowerCase();
-  if (normalized.includes("alto") || normalized.includes("alta")) return "🟢";
-  if (normalized.includes("medio") || normalized.includes("media")) return "🟡";
-  if (normalized.includes("bajo") || normalized.includes("baja")) return "🔴";
-  return "🟡";
+function serviceLabel(status: "ok" | "degraded" | "down" | "unknown"): string {
+  if (status === "ok") return "OK";
+  if (status === "degraded") return "DEGRADADO";
+  if (status === "down") return "CAÍDO";
+  return "DESCONOCIDO";
 }
 
-function buildActionKeyboard(sourceUrl: string): TelegramBot.InlineKeyboardMarkup {
-  return {
-    inline_keyboard: [
-      [{ text: "🔎 Ver enlace original", url: sourceUrl }],
-      [{ text: "🔄 Nueva búsqueda", callback_data: "agent:new_search" }],
-    ],
-  };
+function nextRunEstimate(intervalMinutes: number): string {
+  const now = new Date();
+  const minutesPast = now.getMinutes() % intervalMinutes;
+  const minutesUntilNext = intervalMinutes - minutesPast;
+  const next = new Date(now.getTime() + minutesUntilNext * 60 * 1000);
+  next.setSeconds(0, 0);
+  return formatMexicoDate(next.toISOString(), "HH:mm");
 }
 
-function buildExecutiveMessage(payload: {
-  title: string;
-  expedienteId: string;
-  sourceUrl: string;
-  report: {
-    resumen: string;
-    fechas_criticas: string[];
-    presupuesto_estimado: string;
-    requisitos_experiencia: string[];
-    candados_detectados: string[];
-    veredicto: string;
-    comparativo_capufe: string;
-  };
-}): string {
-  const semaforo = resolveSemaphore(payload.report.veredicto);
-  const fechas = payload.report.fechas_criticas.length
-    ? payload.report.fechas_criticas.map((f) => `- ${f}`).join("\n")
-    : "- No especificadas";
-  const requisitos = payload.report.requisitos_experiencia.length
-    ? payload.report.requisitos_experiencia.map((r) => `- ${r}`).join("\n")
-    : "- No especificados";
-  const candados = payload.report.candados_detectados.length
-    ? payload.report.candados_detectados.map((r) => `- ${r}`).join("\n")
-    : "- No detectados";
+// ─── Registro de comandos ─────────────────────────────────────────────────────
 
-  return [
-    `${semaforo} **VEREDICTO:** ${payload.report.veredicto}`,
-    "",
-    `**Deep Analysis — ${payload.expedienteId}**`,
-    `**${payload.title}**`,
-    "",
-    "---",
-    "",
-    "**Resumen Ejecutivo**",
-    payload.report.resumen,
-    "",
-    "---",
-    "",
-    "**Puntos Críticos**",
-    "**Fechas clave:**",
-    fechas,
-    "",
-    `**Presupuesto estimado:** ${payload.report.presupuesto_estimado}`,
-    "",
-    "**Requisitos clave:**",
-    requisitos,
-    "",
-    "---",
-    "",
-    '**Análisis de "Candados"**',
-    candados,
-    "",
-    "---",
-    "",
-    "**Contexto RAG (Comparativa con datos previos)**",
-    payload.report.comparativo_capufe,
-    "",
-    "---",
-    "",
-    `Fuente: ${payload.sourceUrl}`,
-  ].join("\n");
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timeoutHandle: NodeJS.Timeout | null = null;
-
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutHandle = setTimeout(() => {
-      reject(new DeepAnalysisTimeoutError());
-    }, timeoutMs);
-  });
-
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
-  }
-}
-export function registerAgentCommands(bot: TelegramBot, chatId: string): void {
-  bot.onText(/\/buscar(?:\s+(.+))?/, async (msg, match) => {
+function registerCommands(bot: TelegramBot, chatId: string): void {
+  // ── /prueba ──────────────────────────────────────────────────────────────
+  bot.onText(/\/prueba/, async (msg) => {
     if (String(msg.chat.id) !== chatId) return;
+    log.info({ from: msg.from?.username }, "📥 /prueba");
 
-    const query = match?.[1]?.trim();
+    try {
+      const config = getConfig();
+      const status = healthTracker.getStatus();
+      const radars = getActiveRadars();
 
-    if (!query) {
-      await bot.sendMessage(
-        chatId,
-        "🔍 ¿Qué licitación o palabra clave quieres que rastree ahora mismo?",
-      );
-      return;
-    }
+      const lastRunState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_COLLECT_RUN);
+      const bootState = await getState<Record<string, unknown>>(STATE_KEYS.WORKER_BOOT_TIME);
+      const schedulerState = await getState<Record<string, unknown>>(STATE_KEYS.SCHEDULER_STATUS);
 
-    await bot.sendMessage(
-      chatId,
-      "🛰️ Agente activo: Analizando licitación en modo texto...",
-    );
+      const dbIcon = statusIcon(status.services.database);
+      const tgIcon = statusIcon(status.services.telegram);
+      const workerIcon = statusIcon(status.overall);
 
-    // Fire-and-forget para mantener el comando no bloqueante.
-    void (async () => {
-      const stopHeartbeat = startSearchHeartbeat(bot, chatId);
-      const session = await startActiveSearch(String(msg.chat.id), query).finally(() => {
-        stopHeartbeat();
-      });
-
-      if (session.status === "error") {
-        await bot
-          .sendMessage(
-            chatId,
-            `❌ La búsqueda activa para '${query}' falló: ${session.errorMessage ?? "error desconocido"}`,
-          )
-          .catch(() => {});
-        return;
-      }
-
-      if (session.options.length === 0) {
-        await bot
-          .sendMessage(
-            chatId,
-            "Investigando a fondo... te enviaré el expediente completo en texto.",
-            {
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    {
-                      text: "🔎 Abrir últimas CAPUFE",
-                      url: AGENT_MANUAL_CAPUFE_LINK,
-                    },
-                  ],
-                ],
-              },
-            },
-          )
-          .catch(() => {});
-
-        return;
-      }
-
-      const pointers = buildInlineSelectionPointers(session);
-      const inlineKeyboard = pointers.map(({ selectionKey, option }, index) => [
-        {
-          text: `${index + 1}. ${shortLabel(option.licitacionNombre)}`,
-          callback_data: selectionKey,
-        },
-      ]);
+      const nextRun = nextRunEstimate(config.COLLECT_INTERVAL_MINUTES);
+      const bootTime = bootState?.bootedAt ? formatMexicoDate(String(bootState.bootedAt)) : "N/D";
 
       const lines = [
-        `✅ /buscar activo y listo. Encontré ${session.options.length} licitación(es):`,
+        `🔍 <b>ESTADO — Radar Licitaciones MX</b>`,
         "",
-        ...session.options.map(
-          (option, index) =>
-            `${index + 1}) ${option.licitacionNombre}\n   🏢 ${option.dependencia}\n   🆔 ${option.expedienteId}`,
-        ),
+        `🖥 Worker: <b>${workerIcon} ${serviceLabel(status.overall)}</b>`,
+        `${dbIcon} DB: <b>${serviceLabel(status.services.database)}</b> (${status.dbConnected ? "Conectada" : "Desconectada"})`,
+        `🧱 Schema: <b>${status.dbSchemaValid ? "Válido" : "Inválido"}</b>`,
+        `${tgIcon} Telegram: <b>${serviceLabel(status.services.telegram)}</b>`,
         "",
-        "👉 Toca un botón para seleccionar la licitación y continuar a investigación profunda (Fase 2).",
+        `⏰ Última: <b>${lastRunState?.startedAt ? formatMexicoDate(String(lastRunState.startedAt)) : "Sin ciclos"}</b>`,
+        `🔜 Próxima: ~<b>${nextRun} MX</b>`,
+        `📡 Scheduler: <b>${schedulerState?.status === "active" ? "✅ Activo" : "⏳ Iniciando"}</b>`,
+        `🛰 Radares: <b>${radars.length} activos</b>`,
+        "",
+        `⏱ Uptime: <b>${formatDuration(status.uptimeMs)}</b>`,
+        `🌍 Env: <b>${config.NODE_ENV}</b> | <b>${config.RAILWAY_ENVIRONMENT ?? "local"}</b>`,
       ];
 
-      await bot
-        .sendMessage(chatId, lines.join("\n"), {
-          reply_markup: {
-            inline_keyboard: inlineKeyboard,
-          },
-        })
-        .catch(() => {});
-
-      log.info(
-        { query, options: session.options.length, from: msg.from?.username },
-        "Active search finished with inline menu",
-      );
-    })().catch((err) => {
-      log.error({ err, query }, "Unhandled agent search execution error");
-    });
+      await bot.sendMessage(chatId, lines.join("\n"), { parse_mode: "HTML" });
+    } catch (err) {
+      log.error({ err }, "❌ Error en /prueba");
+      await bot.sendMessage(chatId, "❌ Error ejecutando /prueba — revisar logs").catch(() => {});
+    }
   });
 
-  bot.on("message", async (msg) => {
+  // ── /buscar ──────────────────────────────────────────────────────────────
+  bot.onText(/\/buscar (.+)/, async (msg, match) => {
     if (String(msg.chat.id) !== chatId) return;
+    const query = match?.[1]?.trim();
+    if (!query) return;
 
-    const text = msg.text?.trim();
-    if (!text) return;
-    if (text.startsWith("/")) return;
-
-    const detectedLink = detectProcurementLink(text);
-    if (!detectedLink) return;
-
-    await bot
-      .sendMessage(
-        chatId,
-        "🛰️ Agente activo: Analizando licitación en modo texto...",
-      )
-      .catch(() => {});
-
-    await bot
-      .sendMessage(
-        chatId,
-        `🛰️ Agente activo: Analizando licitación en modo texto...\n${detectedLink}`,
-      )
-      .catch(() => {});
-
-    void (async () => {
-      try {
-        const analysis = await analyzeLicitacionByUrl(detectedLink);
-        await bot.sendMessage(chatId, buildExecutiveMessage({
-          ...analysis,
-          sourceUrl: detectedLink,
-        }), {
-          reply_markup: buildActionKeyboard(detectedLink),
-        });
-      } catch (err) {
-        if (err instanceof DeepAnalysisTimeoutError) {
-          await bot
-            .sendMessage(
-              chatId,
-              "⚠️ El documento es demasiado pesado. Generando resumen simplificado...",
-            )
-            .catch(() => {});
-
-          const simplified = buildSimplifiedResult("manual-link", "Licitación por enlace manual");
-          await bot.sendMessage(chatId, buildExecutiveMessage(simplified), {
-            parse_mode: "HTML",
-          }).catch(() => {});
-          const simplePdf = generateIntelligencePdf(simplified);
-          await bot.sendDocument(chatId, simplePdf, {
-            caption: "📄 Expediente simplificado por timeout",
-          }, {
-            filename: "expediente-simplificado-timeout.pdf",
-            contentType: "application/pdf",
-          }).catch(() => {});
-          return;
-        }
-        await bot
-          .sendMessage(
-            chatId,
-            `❌ No pude completar el Deep Analysis para el link manual: ${err instanceof Error ? err.message : String(err)}`,
-          )
-          .catch(() => {});
+    try {
+      const results = await searchProcurements(query, 5);
+      if (results.length === 0) {
+        await bot.sendMessage(chatId, `🔍 Sin resultados para: <b>${query}</b>`, { parse_mode: "HTML" });
+        return;
       }
-    })();
+
+      const lines = [`🔍 <b>Resultados: "${query}"</b>\n`];
+      for (const r of results) {
+        lines.push(`📋 <b>${r.title}</b>`);
+        lines.push(`   Exp: ${r.expediente_id ?? "N/D"} | ${r.status}`);
+        lines.push(`   <a href="${r.source_url}">Ver expediente</a>\n`);
+      }
+
+      await bot.sendMessage(chatId, lines.join("\n"), { parse_mode: "HTML", disable_web_page_preview: true });
+    } catch (err) {
+      log.error({ err }, "❌ Error en /buscar");
+      await bot.sendMessage(chatId, "❌ Error ejecutando búsqueda").catch(() => {});
+    }
   });
 
-  bot.on("callback_query", async (callbackQuery) => {
-    const message = callbackQuery.message;
-    if (!message || String(message.chat.id) !== chatId) return;
-    const selectionKey = callbackQuery.data;
-    if (selectionKey === "agent:new_search") {
-      await bot
-        .answerCallbackQuery(callbackQuery.id, {
-          text: "🔄 Envíame /buscar + términos para lanzar una nueva investigación.",
-          show_alert: false,
-        })
-        .catch(() => {});
-      return;
+  // ── /debug_resumen ────────────────────────────────────────────────────────
+  bot.onText(/\/debug_resumen/, async (msg) => {
+    if (String(msg.chat.id) !== chatId) return;
+    log.info({ from: msg.from?.username }, "📥 /debug_resumen");
+
+    try {
+      const status = healthTracker.getStatus();
+      const lastRunState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_COLLECT_RUN);
+      const radars = getActiveRadars();
+
+      const lines = [
+        `🔧 <b>TELEMETRÍA — Radar Licitaciones MX</b>`,
+        "",
+        `<b>Ciclo:</b> ${status.lastCycleAt ? formatMexicoDate(status.lastCycleAt) : "N/A"}`,
+        `<b>Status:</b> ${lastRunState?.status ?? "N/D"} | <b>Mode:</b> ${lastRunState?.mode ?? "N/D"}`,
+        "",
+        `<b>📊 Indicadores Fase 2A:</b>`,
+        `  Pages: <b>${lastRunState?.pages_scanned ?? 0}</b>`,
+        `  Seen: <b>${lastRunState?.total_listing_rows_seen ?? 0}</b>`,
+        `  Fetched: <b>${lastRunState?.detail_fetch_executed ?? 0}</b>`,
+        `  Skipped: <b>${lastRunState?.skipped_by_fingerprint ?? 0}</b>`,
+        `  New: <b>${lastRunState?.total_new_detected ?? 0}</b>`,
+        `  Mutated: <b>${lastRunState?.total_mutated_detected ?? 0}</b>`,
+        `  Streak: <b>${lastRunState?.known_streak ?? 0}</b>`,
+        `  Stop: <code>${String(lastRunState?.stop_reason ?? "N/D").slice(0, 50)}</code>`,
+        "",
+        lastRunState?.errorMessage ? `⚠️ <b>Error:</b> <code>${String(lastRunState.errorMessage).slice(0, 100)}</code>` : "",
+        "",
+        `<b>Radares:</b> ${radars.length} | <b>Uptime:</b> ${formatDuration(status.uptimeMs)}`,
+      ];
+
+      await bot.sendMessage(chatId, lines.filter(Boolean).join("\n"), { parse_mode: "HTML" });
+    } catch (err) {
+      log.error({ err }, "❌ Error en /debug_resumen");
+      await bot.sendMessage(chatId, "❌ Error en /debug_resumen — Solo texto habilitado").catch(() => {});
     }
+  });
 
-    if (!selectionKey?.startsWith("sel:")) return;
+  log.info("✅ Comandos registrados: /prueba, /buscar, /debug_resumen");
+}
+.join("\n"),
+        "",
+        `<b>Uptime:</b> ${formatDuration(status.uptimeMs)}`,
+        `<b>Ahora:</b> ${formatMexicoDate(nowISO())}`,
+      ];
 
-    const selected = selectOptionByKey(String(message.chat.id), selectionKey);
+      await bot.sendMessage(chatId, lines.filter(Boolean).join("\n"), {
+        parse_mode: "HTML",
+      });
 
-    if (!selected) {
-      await bot
-        .answerCallbackQuery(callbackQuery.id, {
-          text: "⚠️ Esta selección expiró o ya no está disponible.",
-          show_alert: false,
-        })
-        .catch(() => {});
-      return;
-    }
-
-    await bot
-      .answerCallbackQuery(callbackQuery.id, {
-        text: `✅ Seleccionado: ${selected.expedienteId}`,
-        show_alert: false,
-      })
-      .catch(() => {});
-
-    await bot
-      .sendMessage(
-        chatId,
-        `🛰️ Agente activo: Analizando licitación en modo texto...\n${selected.licitacionNombre}\n🏢 ${selected.dependencia}\n🆔 ${selected.expedienteId}`,
-      )
-      .catch(() => {});
-
-    void (async () => {
+      log.info({ from: msg.from?.username }, "✅ /debug_resumen respondido");
+    } catch (err) {
+      log.error({ err }, "❌ Error en /debug_resumen");
+      // Reflejar el error real, no esconderlo
       await bot
         .sendMessage(
           chatId,
-          "🛰️ Agente activo: Analizando licitación en modo texto...",
+          `❌ Error ejecutando /debug_resumen:\n<code>${err instanceof Error ? err.message : String(err)}</code>`,
+          { parse_mode: "HTML" },
         )
         .catch(() => {});
-
-      try {
-        const analysis = await analyzeSelectedLicitacion(selected.expedienteId);
-        await bot.sendMessage(chatId, buildExecutiveMessage({
-          ...analysis,
-          sourceUrl: selected.sourceUrl,
-        }), {
-          reply_markup: buildActionKeyboard(selected.sourceUrl),
-        });
-      } catch (err) {
-        if (err instanceof DeepAnalysisTimeoutError) {
-          await bot
-            .sendMessage(
-              chatId,
-              "⚠️ El documento es demasiado pesado. Generando resumen simplificado...",
-            )
-            .catch(() => {});
-
-          const simplified = buildSimplifiedResult(
-            selected.expedienteId,
-            selected.licitacionNombre,
-          );
-          await bot.sendMessage(chatId, buildExecutiveMessage(simplified), {
-            parse_mode: "HTML",
-          }).catch(() => {});
-          const simplePdf = generateIntelligencePdf(simplified);
-          await bot.sendDocument(chatId, simplePdf, {
-            caption: `📄 Expediente simplificado: ${selected.expedienteId}`,
-          }, {
-            filename: `expediente-simplificado-${selected.expedienteId}.pdf`,
-            contentType: "application/pdf",
-          }).catch(() => {});
-          return;
-        }
-        await bot
-          .sendMessage(
-            chatId,
-            `❌ Error en Deep Analysis para ${selected.expedienteId}: ${err instanceof Error ? err.message : String(err)}`,
-          )
-          .catch(() => {});
-      }
-    })();
+    }
   });
 
-  log.info("✅ Comando de agente registrado: /buscar + selección inline");
+  log.info("✅ Comandos registrados: /prueba, /buscar, /debug_resumen");
 }

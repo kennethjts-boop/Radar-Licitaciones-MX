@@ -41,8 +41,9 @@ export function buildListingFingerprint(row: ListingRow): string {
 }
 
 export const SELECTORS = {
-  // Listing selectors (PrimeNG)
-  LISTING_ROW: '.p-datatable-tbody tr',
+  // Listing selectors (PrimeNG / DataTables)
+  // Se añade soporte para .p-datatable-scrollable-body tr por cambios recientes en el portal.
+  LISTING_ROW: '.p-datatable-tbody tr, .p-datatable-scrollable-body tr',
   COL_ID: 'td.col-id',
   COL_TITLE: 'td.col-nom',
   COL_DEP: 'td.col-normal:nth-child(5)',
@@ -91,11 +92,17 @@ export class ComprasMxNavigator {
       log.info({ page: pagesScanned }, `📄 Escaneando página ${pagesScanned}`);
 
       try {
+        const htmlDump = await page.content();
+        log.info({ html: htmlDump.slice(0, 4000) }, "HTML dump (primeras 4000 chars)");
+
         await page.waitForSelector(SELECTORS.LISTING_ROW, { timeout: 10000 });
       } catch {
         log.warn("No se encontraron filas en la página.");
         break;
       }
+
+      const rowElements = await page.$$(SELECTORS.LISTING_ROW);
+      log.info({ selector: SELECTORS.LISTING_ROW, count: rowElements.length }, "Resultado del selector de filas");
 
       const rowsOnPage = await page.$$eval(
         SELECTORS.LISTING_ROW,
