@@ -95,6 +95,9 @@ export function getConfig(): AppConfig {
   }
 
   _config = result.data;
+  // Log crítico: permite verificar en Railway qué URL está usando realmente
+  console.log(`[CONFIG] COMPRASMX_SEED_URL = ${result.data.COMPRASMX_SEED_URL}`);
+  console.log(`[CONFIG] NODE_ENV = ${result.data.NODE_ENV} | RAILWAY_ENVIRONMENT = ${result.data.RAILWAY_ENVIRONMENT ?? "local"}`);
   return _config;
 }
 

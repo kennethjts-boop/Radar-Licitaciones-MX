@@ -97,6 +97,16 @@ export function startScheduler(): void {
     log.warn({ err }, "No se pudo registrar scheduler en system_state"),
   );
 
+  // Primer ciclo inmediato post-deploy — no esperar al próximo tick del cron
+  setTimeout(async () => {
+    log.info("🚀 Ejecutando primer ciclo inmediato post-deploy...");
+    try {
+      await runCollectJob();
+    } catch (err) {
+      log.error({ err }, "❌ Error en primer ciclo inmediato");
+    }
+  }, 10_000); // 10 s para que bootstrap termine antes de lanzar
+
   log.info(
     {
       mode1: {

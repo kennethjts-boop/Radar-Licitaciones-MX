@@ -79,10 +79,15 @@ export class ComprasMxNavigator {
     let pagesScanned = 0;
 
     try {
-      if (page.url() !== baseUrl) {
-        await page.goto(baseUrl, { waitUntil: "networkidle", timeout: 30000 });
-      }
-      await page.waitForTimeout(3000);
+      // Siempre navegar — no comparar page.url() porque Angular hash routing
+      // puede normalizar la URL de forma diferente a la string literal.
+      log.info({ baseUrl }, "🌐 Navegando al portal ComprasMX...");
+      await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+
+      // Esperar a que Angular renderice el botón "Buscar" — garantiza que la SPA
+      // terminó de inicializar antes de intentar cualquier interacción.
+      await page.waitForSelector('button:has-text("Buscar")', { timeout: 20000 });
+      await page.waitForTimeout(2000); // Margen extra para que la SPA termine de hidratarse
 
       // Portal SPA: requiere click en "Buscar" para cargar resultados en la tabla
       log.info("🔍 Activando búsqueda en el portal ComprasMX...");
@@ -95,7 +100,14 @@ export class ComprasMxNavigator {
         );
         log.info("✅ Tabla de procedimientos cargada con resultados");
       } catch (buscarErr) {
-        log.warn({ buscarErr }, "⚠️ No se pudo activar Buscar — continuando con la tabla actual");
+        // Fallo fatal — si "Buscar" no responde, el portal no cargó correctamente.
+        // Capturar HTML para diagnóstico y abortar (no continuar con tabla vacía).
+        const html = await page.content().catch(() => "(no se pudo obtener HTML)");
+        log.error(
+          { buscarErr, html: html.slice(0, 2000) },
+          "❌ FATAL: No se pudo activar Buscar — el portal no cargó correctamente"
+        );
+        return { rows: [], pagesScanned: 0 };
       }
     } catch (err) {
       log.error({ err, baseUrl }, "❌ Error cargando portal ComprasMX");
