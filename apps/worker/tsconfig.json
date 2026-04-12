@@ -30,6 +30,7 @@
       "@enrichers/*": ["src/enrichers/*"],
       "@alerts/*": ["src/alerts/*"],
       "@commands/*": ["src/commands/*"],
+      "@agent/*": ["src/agent/*"],
       "@storage/*": ["src/storage/*"],
       "@jobs/*": ["src/jobs/*"],
       "@types/*": ["src/types/*"],

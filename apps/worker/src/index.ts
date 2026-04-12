@@ -15,7 +15,7 @@ import { getLogger } from "./core/logger";
 import { bootstrap } from "./bootstrap";
 import { SchemaValidationError } from "./storage/schema-validator";
 import { startScheduler } from "./jobs/scheduler";
-import { initCommandBot } from "./commands/telegram.commands";
+import { initCommandBot } from "./agent/telegram.commands";
 import { setComprasMxSourceId } from "./jobs/collect.job";
 
 async function main(): Promise<void> {
