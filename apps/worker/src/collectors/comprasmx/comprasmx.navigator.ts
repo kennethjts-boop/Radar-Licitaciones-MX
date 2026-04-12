@@ -48,6 +48,7 @@ export const SELECTORS = {
   COL_TITLE: 'td.col-nom',
   COL_DEP: 'td.col-normal:nth-child(5)',
   COL_STATUS: 'td.col-normal:nth-child(6)',
+  COL_DATE: 'td.col-normal:nth-child(8)',
   PAGINATION_NEXT: 'button.p-paginator-next',
 
   // Detail labels
@@ -81,7 +82,21 @@ export class ComprasMxNavigator {
       if (page.url() !== baseUrl) {
         await page.goto(baseUrl, { waitUntil: "networkidle", timeout: 30000 });
       }
-      await page.waitForTimeout(3000); 
+      await page.waitForTimeout(3000);
+
+      // Portal SPA: requiere click en "Buscar" para cargar resultados en la tabla
+      log.info("🔍 Activando búsqueda en el portal ComprasMX...");
+      try {
+        await page.click('button:has-text("Buscar")', { timeout: 8000 });
+        // Esperar más de 1 fila: antes de buscar existe solo la fila de "sin resultados"
+        await page.waitForFunction(
+          `document.querySelectorAll(${JSON.stringify(SELECTORS.LISTING_ROW)}).length > 1`,
+          { timeout: 15000 }
+        );
+        log.info("✅ Tabla de procedimientos cargada con resultados");
+      } catch (buscarErr) {
+        log.warn({ buscarErr }, "⚠️ No se pudo activar Buscar — continuando con la tabla actual");
+      }
     } catch (err) {
       log.error({ err, baseUrl }, "❌ Error cargando portal ComprasMX");
       return { rows: [], pagesScanned: 0 };
@@ -121,7 +136,7 @@ export class ComprasMxNavigator {
               title: getText(sel.COL_TITLE),
               dependency: getText(sel.COL_DEP),
               status: getText(sel.COL_STATUS),
-              visibleDate: null, 
+              visibleDate: getText(sel.COL_DATE),
               sourceUrl: '',
               rowText: (el.textContent ?? '').replace(/\s+/g, ' ').trim()
             };

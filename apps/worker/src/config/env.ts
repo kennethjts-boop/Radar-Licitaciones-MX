@@ -53,7 +53,7 @@ const envSchema = z.object({
   COMPRASMX_SEED_URL: z
     .string()
     .url()
-    .default("https://comprasmx.buengobierno.gob.mx/"),
+    .default("https://comprasmx.buengobierno.gob.mx/sitiopublico/#/"),
   COMPRASMX_MAX_LIST_PAGES: z.string().default("5").transform(Number),
   COMPRASMX_STOP_AFTER_KNOWN_STREAK: z.string().default("15").transform(Number),
   COMPRASMX_INCREMENTAL_LOOKBACK_HOURS: z
