@@ -25,6 +25,118 @@ function getBot(): TelegramBot {
   return _bot;
 }
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+export interface AiVipAlertPayload {
+  categoryDetected: string;
+  relevanceJustification: string;
+  score: {
+    total: number;
+    technical: number;
+    commercial: number;
+    urgency: number;
+    viability: number;
+  };
+  licitacionRef: string;
+  contractType: string;
+  deadline: string;
+  risks: string[];
+  opportunities: string[];
+  opportunityEngine: {
+    winProbability: number;
+    competitorThreatLevel: "LOW" | "MEDIUM" | "HIGH";
+    implementationComplexity: "LOW" | "MEDIUM" | "HIGH";
+    redFlags: string[];
+  };
+  link: string;
+}
+
+function getAiVipIcon(totalScore: number): "🔥" | "🟡" | null {
+  if (totalScore >= 85) return "🔥";
+  if (totalScore >= 70) return "🟡";
+  return null;
+}
+
+function safeText(value: string | null | undefined, fallback: string): string {
+  if (!value || typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : fallback;
+}
+
+function safeScore(value: number | null | undefined): number {
+  return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value as number))) : 0;
+}
+
+function buildAiVipFallbackMessage(payload: Partial<AiVipAlertPayload>): string {
+  const reference = safeText(payload.licitacionRef, "Sin referencia");
+  const link = safeText(payload.link, "https://comprasmx.buengobierno.gob.mx");
+
+  const lines = [
+    "⚠️ <b>ALERTA VIP (MODO RESILIENTE)</b>",
+    "Se detectó una oportunidad, pero algunos campos de IA llegaron incompletos.",
+    `📄 <b>Ref:</b> ${escapeHtml(reference)}`,
+    `🔗 <a href="${escapeHtml(link)}">Ver Documento</a>`,
+  ];
+
+  return truncateForTelegram(lines.join("\n"));
+}
+
+export function formatAiVipAlertMessage(payload: AiVipAlertPayload): string | null {
+  try {
+    const totalScore = safeScore(payload?.score?.total);
+    const icon = getAiVipIcon(totalScore);
+    if (!icon) {
+      return null;
+    }
+
+    const riskPrincipal = safeText(
+      payload?.risks?.[0],
+      "Sin riesgo principal detectado",
+    );
+    const opportunityPrincipal = safeText(
+      payload?.opportunities?.[0],
+      "Sin oportunidad principal detectada",
+    );
+    const redFlagPrincipal = safeText(
+      payload?.opportunityEngine?.redFlags?.[0],
+      "Sin candados relevantes detectados",
+    );
+
+    const lines = [
+      `📂 <b>CATEGORÍA:</b> ${escapeHtml(safeText(payload?.categoryDetected, "NONE"))}`,
+      `🎯 <b>RELEVANCIA:</b> ${escapeHtml(safeText(payload?.relevanceJustification, "Sin justificación disponible"))}`,
+      `${icon} <b>SCORE: ${totalScore}/100</b>`,
+      `🎯 <b>Probabilidad de Ganar:</b> ${safeScore(payload?.opportunityEngine?.winProbability)}%`,
+      `🥷 <b>Amenaza de Competencia:</b> ${escapeHtml(safeText(payload?.opportunityEngine?.competitorThreatLevel, "MEDIUM"))}`,
+      `⚙️ <b>Complejidad:</b> ${escapeHtml(safeText(payload?.opportunityEngine?.implementationComplexity, "MEDIUM"))}`,
+      `🛑 <b>Red Flags (Candados):</b> ${escapeHtml(redFlagPrincipal)}`,
+      `📄 <b>Ref:</b> ${escapeHtml(safeText(payload?.licitacionRef, "Sin referencia"))}`,
+      `💰 <b>Tipo:</b> ${escapeHtml(safeText(payload?.contractType, "No especificado"))}`,
+      `⏳ <b>Cierre:</b> ${escapeHtml(safeText(payload?.deadline, "No especificado"))}`,
+      "",
+      `📊 <b>Desglose:</b> Tec:${safeScore(payload?.score?.technical)} | Com:${safeScore(payload?.score?.commercial)} | Urg:${safeScore(payload?.score?.urgency)} | Via:${safeScore(payload?.score?.viability)}`,
+      "",
+      `⚠️ <b>Riesgo Principal:</b> ${escapeHtml(riskPrincipal)}`,
+      `✅ <b>Oportunidad:</b> ${escapeHtml(opportunityPrincipal)}`,
+      "",
+      `🔗 <a href="${escapeHtml(safeText(payload?.link, "https://comprasmx.buengobierno.gob.mx"))}">Ver Documento</a>`,
+    ];
+
+    return truncateForTelegram(lines.join("\n"));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn({ err: message }, "Fallo construyendo mensaje VIP; usando fallback resiliente");
+    return buildAiVipFallbackMessage(payload);
+  }
+}
+
 // ─── Envío base ──────────────────────────────────────────────────────────────
 
 export async function sendTelegramMessage(
@@ -44,6 +156,43 @@ export async function sendTelegramMessage(
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ error: msg }, "Error enviando mensaje Telegram");
     throw new TelegramError(`Error enviando a Telegram: ${msg}`);
+  }
+}
+
+function chunkTextForTelegram(text: string, maxLen = 3500): string[] {
+  if (text.length <= maxLen) return [text];
+
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > maxLen) {
+    let splitIndex = remaining.lastIndexOf("\n", maxLen);
+    if (splitIndex < Math.floor(maxLen * 0.5)) {
+      splitIndex = maxLen;
+    }
+    chunks.push(remaining.slice(0, splitIndex));
+    remaining = remaining.slice(splitIndex).trimStart();
+  }
+
+  if (remaining.length > 0) {
+    chunks.push(remaining);
+  }
+
+  return chunks;
+}
+
+export async function sendTelegramLongReport(
+  header: string,
+  report: string,
+): Promise<void> {
+  const safeHeader = escapeHtml(header);
+  const chunks = chunkTextForTelegram(report, 3400);
+
+  await sendTelegramMessage(`🧠 <b>${safeHeader}</b>`, "HTML");
+
+  for (const chunk of chunks) {
+    const safeChunk = escapeHtml(chunk);
+    await sendTelegramMessage(`<pre>${safeChunk}</pre>`, "HTML");
   }
 }
 

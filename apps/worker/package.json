@@ -8,13 +8,14 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "clean": "rm -rf dist",
-    "lint": "eslint src/",
+    "lint": "eslint src/ --quiet",
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "db:init": "ts-node-dev src/scripts/db-init.ts",
     "db:verify": "ts-node-dev src/scripts/db-verify.ts",
     "db:migrate:fase2a": "ts-node-dev src/scripts/migrate-fase2a.ts",
-    "db:verify:fase2a": "ts-node-dev src/scripts/verify-fase2a.ts"
+    "db:verify:fase2a": "ts-node-dev src/scripts/verify-fase2a.ts",
+    "report:capufe:peaje": "ts-node-dev src/scripts/capufe-peaje-deep-report.ts"
   },
   "engines": {
     "node": ">=20.0.0"
@@ -27,6 +28,8 @@
     "dotenv": "^17.4.1",
     "node-cron": "^3.0.3",
     "node-telegram-bot-api": "^0.66.0",
+    "openai": "^5.12.2",
+    "pdf-parse": "^1.1.1",
     "pino": "^9.4.0",
     "pino-pretty": "^11.2.2",
     "playwright": "^1.48.0",

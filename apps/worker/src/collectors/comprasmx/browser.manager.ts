@@ -36,6 +36,9 @@ export class BrowserManager {
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage", // Crucial para evitar OOM crashes en Docker
         "--disable-gpu",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-infobars",
+        "--disable-features=IsolateOrigins,site-per-process",
         "--blink-settings=imagesEnabled=false", // Bloquea carga de imágenes para CPU/RAM
       ],
     });
@@ -88,6 +91,10 @@ export class BrowserManager {
       timezoneId: "America/Mexico_City",
       javaScriptEnabled: true,
       bypassCSP: true,
+      extraHTTPHeaders: {
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+        DNT: "1",
+      },
       proxy,
     });
 
@@ -122,13 +129,37 @@ export class BrowserManager {
    */
   static async withContext<T>(
     operation: (page: Page, context: BrowserContext) => Promise<T>,
+    options: { timeoutMs?: number } = {},
   ): Promise<T> {
     const manager = new BrowserManager();
     await manager.launch();
     try {
       const context = await manager.createContext();
       const page = await context.newPage();
-      return await operation(page, context);
+      const operationPromise = operation(page, context);
+
+      if (!options.timeoutMs || options.timeoutMs <= 0) {
+        return await operationPromise;
+      }
+
+      let timeoutHandle: NodeJS.Timeout | null = null;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(
+            new Error(
+              `Browser operation timed out after ${options.timeoutMs}ms`,
+            ),
+          );
+        }, options.timeoutMs);
+      });
+
+      try {
+        return await Promise.race([operationPromise, timeoutPromise]);
+      } finally {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+      }
     } finally {
       await manager.close();
     }

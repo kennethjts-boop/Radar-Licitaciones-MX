@@ -147,12 +147,17 @@ CREATE TABLE IF NOT EXISTS attachments (
   file_name       TEXT NOT NULL,
   file_type       TEXT,
   file_url        TEXT NOT NULL,
+  storage_path    TEXT,
+  file_size_bytes BIGINT,
   file_hash       TEXT,
+  source_url      TEXT,
   detected_text   TEXT,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_attachments_procurement ON attachments (procurement_id);
+CREATE UNIQUE INDEX uq_attachments_proc_file ON attachments (procurement_id, file_name);
+CREATE INDEX idx_attachments_file_hash ON attachments (file_hash);
 
 -- =============================================================================
 -- 7. RADARS — Configuración de radares
