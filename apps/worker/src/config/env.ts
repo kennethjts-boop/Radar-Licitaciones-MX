@@ -67,6 +67,10 @@ const envSchema = z.object({
   COLLECT_INTERVAL_MINUTES: z.string().default("30").transform(Number),
   DAILY_SUMMARY_HOUR: z.string().default("7").transform(Number),
 
+  // OpenAI
+  OPENAI_API_KEY: z.string().min(10, { message: "OPENAI_API_KEY requerido" }).optional(),
+  OPENAI_MODEL: z.string().default("gpt-4.1-mini"),
+
   // Railway / deploy
   RAILWAY_ENVIRONMENT: z.string().optional(),
 
