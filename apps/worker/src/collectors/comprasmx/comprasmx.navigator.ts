@@ -80,19 +80,46 @@ export class ComprasMxNavigator {
     let pagesScanned = 0;
 
     // ── Interceptar respuestas de la API para capturar externalId → detailUrl ──
-    // El portal ComprasMX es un Angular SPA: cuando carga el listado, llama a
-    // /whitney/sitiopublico/expedientes. La respuesta contiene el UUID interno
-    // de cada expediente, necesario para construir la URL de detalle directa.
     const externalIdToDetailUrl = new Map<string, string>();
 
-    const captureDetailUrls = (response: { url(): string; json(): Promise<unknown> }) => {
+    const captureDetailUrls = (response: { url(): string; text(): Promise<string>; status(): number }) => {
       const url = response.url();
-      if (!url.includes('/whitney/')) return;
+      const status = response.status();
 
-      response.json().then((json: unknown) => {
+      // DIAGNÓSTICO: loguear TODAS las respuestas que puedan ser de la API del listado
+      const isApiCandidate =
+        url.includes('/whitney/') ||
+        url.includes('expediente') ||
+        url.includes('procedimiento') ||
+        url.includes('buengobierno') ||
+        url.includes('upcp');
+
+      if (!isApiCandidate) return;
+
+      response.text().then((raw: string) => {
+        // Loguear la URL y los primeros 500 chars de la respuesta para diagnóstico
+        log.info(
+          { url, status, preview: raw.slice(0, 500) },
+          "🔎 DIAG API response interceptada"
+        );
+
+        let json: unknown;
+        try { json = JSON.parse(raw); } catch { return; }
+
         const j = json as Record<string, unknown>;
         const items = (j?.data ?? j?.content ?? j?.result ?? (Array.isArray(json) ? json : [])) as unknown[];
-        if (!Array.isArray(items) || items.length === 0) return;
+        if (!Array.isArray(items) || items.length === 0) {
+          log.info({ url, keys: Object.keys(j ?? {}).slice(0, 10) }, "🔎 DIAG respuesta JSON pero sin array de items reconocido");
+          return;
+        }
+
+        // Loguear las claves del primer item para identificar los campos correctos
+        if (items.length > 0) {
+          log.info(
+            { url, itemCount: items.length, firstItemKeys: Object.keys(items[0] as object).slice(0, 20) },
+            "🔎 DIAG primer item del array — keys disponibles"
+          );
+        }
 
         let count = 0;
         for (const item of items) {
@@ -113,7 +140,7 @@ export class ComprasMxNavigator {
         if (count > 0) {
           log.info({ count, total: externalIdToDetailUrl.size }, "🔗 URLs de detalle capturadas desde API");
         }
-      }).catch(() => { /* no JSON o estructura diferente — ignorar */ });
+      }).catch(() => { /* respuesta no legible */ });
     };
 
     page.on('response', captureDetailUrls);
@@ -217,8 +244,6 @@ export class ComprasMxNavigator {
     page.off('response', captureDetailUrls);
 
     // Poblar sourceUrl de cada fila con la URL de detalle capturada desde la API.
-    // Si la intercepción no capturó la URL (API no llamada o estructura diferente),
-    // sourceUrl queda vacío y extractDetail usará el fallback de re-navegar el listado.
     let urlsResolved = 0;
     for (const row of allRows) {
       const detailUrl = externalIdToDetailUrl.get(row.externalId);
@@ -227,11 +252,19 @@ export class ComprasMxNavigator {
         urlsResolved++;
       }
     }
+
+    // DIAGNÓSTICO: resumen del interceptor
+    const sampleUrls = Array.from(externalIdToDetailUrl.entries()).slice(0, 3).map(([id, url]) => ({ id, url }));
     log.info(
-      { urlsResolved, total: allRows.length, apiMapSize: externalIdToDetailUrl.size },
+      {
+        urlsResolved,
+        total: allRows.length,
+        apiMapSize: externalIdToDetailUrl.size,
+        sampleUrls,
+      },
       urlsResolved > 0
-        ? "🔗 Detail URLs resueltas desde API interceptada"
-        : "⚠️ No se capturaron detail URLs — extractDetail usará fallback de re-navegación"
+        ? `🔗 URLs capturadas del interceptor: ${urlsResolved} de ${allRows.length} total`
+        : `⚠️ URLs capturadas del interceptor: 0 de ${allRows.length} total — fallback activado`
     );
 
     return { rows: allRows, pagesScanned };
