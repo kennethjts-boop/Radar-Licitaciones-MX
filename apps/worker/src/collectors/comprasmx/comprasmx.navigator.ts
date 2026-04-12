@@ -107,29 +107,25 @@ export class ComprasMxNavigator {
         try { json = JSON.parse(raw); } catch { return; }
 
         const j = json as Record<string, unknown>;
-        const items = (j?.data ?? j?.content ?? j?.result ?? (Array.isArray(json) ? json : [])) as unknown[];
-        if (!Array.isArray(items) || items.length === 0) {
-          log.info({ url, keys: Object.keys(j ?? {}).slice(0, 10) }, "🔎 DIAG respuesta JSON pero sin array de items reconocido");
-          return;
-        }
 
-        // Loguear las claves del primer item para identificar los campos correctos
-        if (items.length > 0) {
-          log.info(
-            { url, itemCount: items.length, firstItemKeys: Object.keys(items[0] as object).slice(0, 20) },
-            "🔎 DIAG primer item del array — keys disponibles"
-          );
+        // Estructura real de la API: { success, data: [{ registros: [...], paginacion: {...} }] }
+        // Los expedientes están en data[0].registros[]
+        const dataArr = j?.data as unknown[] | undefined;
+        const registros = (Array.isArray(dataArr) && dataArr.length > 0)
+          ? ((dataArr[0] as Record<string, unknown>)?.registros as unknown[] | undefined)
+          : undefined;
+        const items = Array.isArray(registros) ? registros : [] as unknown[];
+
+        if (items.length === 0) {
+          log.info({ url, keys: Object.keys(j ?? {}).slice(0, 10) }, "🔎 DIAG respuesta JSON sin registros reconocidos");
+          return;
         }
 
         let count = 0;
         for (const item of items) {
           const it = item as Record<string, unknown>;
-          const extId = String(
-            it.numero_procedimiento ?? it.numeroProcedimiento ?? it.num_procedimiento ?? ''
-          );
-          const uuid = String(
-            it.uuid_procedimiento ?? it.uuidProcedimiento ?? it.procedimientoUuid ?? it.uuid ?? ''
-          );
+          const extId = String(it.numero_procedimiento ?? '');
+          const uuid  = String(it.uuid_procedimiento ?? '');
           if (extId && uuid && extId !== 'undefined' && uuid !== 'undefined') {
             externalIdToDetailUrl.set(extId,
               `https://comprasmx.buengobierno.gob.mx/sitiopublico/#/sitiopublico/detalle/${uuid}/procedimiento`
