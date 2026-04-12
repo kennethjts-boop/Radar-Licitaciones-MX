@@ -1,6 +1,7 @@
 /**
  * PROCUREMENT REPOSITORY — Operaciones de lectura/escritura de expedientes.
  */
+import { createHash } from "crypto";
 import { v4 as uuidv4 } from "uuid";
 import { getSupabaseClient } from "./client";
 import { StorageError } from "../core/errors";
@@ -60,13 +61,18 @@ export async function upsertProcurement(
   if (!existing) {
     const id = uuidv4();
 
-    // Insertar RAW
+    // Insertar RAW — columnas según schema: raw_json (no raw_data), source_url y fingerprint son NOT NULL
+    const rawFingerprint = createHash("sha256")
+      .update(JSON.stringify(normalized.rawJson ?? {}))
+      .digest("hex");
     const { data: rawData, error: rawError } = await db
       .from("raw_items")
       .insert({
         source_id: sourceId,
         external_id: normalized.externalId,
-        raw_data: normalized.rawJson,
+        source_url: normalized.sourceUrl || "",
+        raw_json: normalized.rawJson,
+        fingerprint: rawFingerprint,
         fetched_at: now,
       })
       .select("id")

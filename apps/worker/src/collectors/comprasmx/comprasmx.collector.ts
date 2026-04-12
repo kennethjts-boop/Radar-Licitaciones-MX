@@ -187,13 +187,14 @@ export async function collectComprasMx(
         }
 
         try {
-          // Para ComprasMX, el detalle se obtiene clickeando el ID en el listado
-          // o navegando a la URL guardada si ya la tenemos.
-          const rawInput = await navigator.extractDetail(
-            context,
-            row.externalId,
-            page,
-          );
+          // Usar la URL de detalle capturada por API interception durante el listing scan.
+          // Si no se capturó (sourceUrl vacío), extractDetail usará el fallback de re-navegación.
+          // Cada detail fetch usa su propia página nueva — NO se comparte la página del listado.
+          const urlToFetch = row.sourceUrl && row.sourceUrl.startsWith('http')
+            ? row.sourceUrl
+            : row.externalId;
+
+          const rawInput = await navigator.extractDetail(context, urlToFetch);
 
           if (rawInput) {
             const normalized = normalize(rawInput);
@@ -206,22 +207,13 @@ export async function collectComprasMx(
             }
 
             items.push(normalized);
-            
-            // Regresar al listado (en ComprasMX es un SPA, hay que volver atrás)
-            // Intentamos clickear el botón "Regresar" o usamos history back
-            log.info({ externalId: row.externalId }, "⬅️ returning to listing...");
-            await page.click('button:has-text("Regresar")').catch(() => page.goBack());
-            await page.waitForSelector(SELECTORS.LISTING_ROW, { timeout: 10000 }).catch(() => {});
           } else {
             errors.push(`No se pudo extraer detalle: ${row.externalId}`);
-            // Asegurar que volvemos al listado si falló la extracción pero navegó
-            await page.goto(baseUrl, { waitUntil: 'networkidle' }).catch(() => {});
           }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           errors.push(`Error en ID ${row.externalId}: ${msg}`);
           log.error({ err: e, id: row.externalId }, "❌ Error en detail fetch");
-          await page.goto(baseUrl, { waitUntil: 'networkidle' }).catch(() => {});
         }
       }
 

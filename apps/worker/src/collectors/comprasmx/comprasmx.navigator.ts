@@ -9,6 +9,7 @@ import { createHash } from "crypto";
 import { Page, BrowserContext } from "playwright";
 import { createModuleLogger } from "../../core/logger";
 import { RawProcurementInput } from "../../normalizers/procurement.normalizer";
+import { getConfig } from "../../config/env";
 
 const log = createModuleLogger("comprasmx-navigator");
 
@@ -78,6 +79,45 @@ export class ComprasMxNavigator {
     const allRows: ListingRow[] = [];
     let pagesScanned = 0;
 
+    // ── Interceptar respuestas de la API para capturar externalId → detailUrl ──
+    // El portal ComprasMX es un Angular SPA: cuando carga el listado, llama a
+    // /whitney/sitiopublico/expedientes. La respuesta contiene el UUID interno
+    // de cada expediente, necesario para construir la URL de detalle directa.
+    const externalIdToDetailUrl = new Map<string, string>();
+
+    const captureDetailUrls = (response: { url(): string; json(): Promise<unknown> }) => {
+      const url = response.url();
+      if (!url.includes('/whitney/')) return;
+
+      response.json().then((json: unknown) => {
+        const j = json as Record<string, unknown>;
+        const items = (j?.data ?? j?.content ?? j?.result ?? (Array.isArray(json) ? json : [])) as unknown[];
+        if (!Array.isArray(items) || items.length === 0) return;
+
+        let count = 0;
+        for (const item of items) {
+          const it = item as Record<string, unknown>;
+          const extId = String(
+            it.numero_procedimiento ?? it.numeroProcedimiento ?? it.num_procedimiento ?? ''
+          );
+          const uuid = String(
+            it.uuid_procedimiento ?? it.uuidProcedimiento ?? it.procedimientoUuid ?? it.uuid ?? ''
+          );
+          if (extId && uuid && extId !== 'undefined' && uuid !== 'undefined') {
+            externalIdToDetailUrl.set(extId,
+              `https://comprasmx.buengobierno.gob.mx/sitiopublico/#/sitiopublico/detalle/${uuid}/procedimiento`
+            );
+            count++;
+          }
+        }
+        if (count > 0) {
+          log.info({ count, total: externalIdToDetailUrl.size }, "🔗 URLs de detalle capturadas desde API");
+        }
+      }).catch(() => { /* no JSON o estructura diferente — ignorar */ });
+    };
+
+    page.on('response', captureDetailUrls);
+
     try {
       // Siempre navegar — no comparar page.url() porque Angular hash routing
       // puede normalizar la URL de forma diferente a la string literal.
@@ -107,10 +147,12 @@ export class ComprasMxNavigator {
           { buscarErr, html: html.slice(0, 2000) },
           "❌ FATAL: No se pudo activar Buscar — el portal no cargó correctamente"
         );
+        page.off('response', captureDetailUrls);
         return { rows: [], pagesScanned: 0 };
       }
     } catch (err) {
       log.error({ err, baseUrl }, "❌ Error cargando portal ComprasMX");
+      page.off('response', captureDetailUrls);
       return { rows: [], pagesScanned: 0 };
     }
 
@@ -119,9 +161,6 @@ export class ComprasMxNavigator {
       log.info({ page: pagesScanned }, `📄 Escaneando página ${pagesScanned}`);
 
       try {
-        const htmlDump = await page.content();
-        log.info({ html: htmlDump.slice(0, 4000) }, "HTML dump (primeras 4000 chars)");
-
         await page.waitForSelector(SELECTORS.LISTING_ROW, { timeout: 10000 });
       } catch {
         log.warn("No se encontraron filas en la página.");
@@ -173,6 +212,28 @@ export class ComprasMxNavigator {
       await page.waitForTimeout(3000);
     }
 
+    // Dar tiempo a que los handlers de response pendientes completen (microtasks)
+    await page.waitForTimeout(500);
+    page.off('response', captureDetailUrls);
+
+    // Poblar sourceUrl de cada fila con la URL de detalle capturada desde la API.
+    // Si la intercepción no capturó la URL (API no llamada o estructura diferente),
+    // sourceUrl queda vacío y extractDetail usará el fallback de re-navegar el listado.
+    let urlsResolved = 0;
+    for (const row of allRows) {
+      const detailUrl = externalIdToDetailUrl.get(row.externalId);
+      if (detailUrl) {
+        row.sourceUrl = detailUrl;
+        urlsResolved++;
+      }
+    }
+    log.info(
+      { urlsResolved, total: allRows.length, apiMapSize: externalIdToDetailUrl.size },
+      urlsResolved > 0
+        ? "🔗 Detail URLs resueltas desde API interceptada"
+        : "⚠️ No se capturaron detail URLs — extractDetail usará fallback de re-navegación"
+    );
+
     return { rows: allRows, pagesScanned };
   }
 
@@ -189,13 +250,28 @@ export class ComprasMxNavigator {
     
     try {
       if (urlOrId.startsWith('http')) {
-        await page.goto(urlOrId, { waitUntil: "networkidle", timeout: 30000 });
+        await page.goto(urlOrId, { waitUntil: "domcontentloaded", timeout: 30000 });
+        // Esperar a que Angular renderice el contenido del detalle
+        await page.waitForSelector('label', { timeout: 20000 });
       } else {
-        // Buscar en el listado y clickar
-        log.info({ externalId: urlOrId }, "Buscando expediente en listado para clickar...");
-        const row = await page.locator(SELECTORS.LISTING_ROW).filter({ hasText: urlOrId }).first();
+        // Fallback: la API interception no capturó la URL de detalle para este expediente.
+        // Navegar al listado en una página fresca, activar búsqueda y hacer click en la fila.
+        // Solo funciona para expedientes en página 1 del listado.
+        log.info({ externalId: urlOrId }, "🔄 Fallback: navegando al listado para buscar expediente...");
+        const config = getConfig();
+
+        await page.goto(config.COMPRASMX_SEED_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await page.waitForSelector('button:has-text("Buscar")', { timeout: 20000 });
+        await page.waitForTimeout(2000);
+        await page.click('button:has-text("Buscar")', { timeout: 8000 });
+        await page.waitForFunction(
+          `document.querySelectorAll(${JSON.stringify(SELECTORS.LISTING_ROW)}).length > 1`,
+          { timeout: 15000 }
+        );
+
+        const row = page.locator(SELECTORS.LISTING_ROW).filter({ hasText: urlOrId }).first();
         if (await row.count() === 0) {
-          log.warn({ externalId: urlOrId }, "No se encontró el expediente en la página actual");
+          log.warn({ externalId: urlOrId }, "⚠️ Expediente no encontrado en página 1 del listado (fallback)");
           return null;
         }
         await row.locator(SELECTORS.COL_ID).click();
