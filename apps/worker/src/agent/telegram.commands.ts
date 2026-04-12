@@ -175,29 +175,3 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
 
   log.info("✅ Comandos registrados: /prueba, /buscar, /debug_resumen");
 }
-.join("\n"),
-        "",
-        `<b>Uptime:</b> ${formatDuration(status.uptimeMs)}`,
-        `<b>Ahora:</b> ${formatMexicoDate(nowISO())}`,
-      ];
-
-      await bot.sendMessage(chatId, lines.filter(Boolean).join("\n"), {
-        parse_mode: "HTML",
-      });
-
-      log.info({ from: msg.from?.username }, "✅ /debug_resumen respondido");
-    } catch (err) {
-      log.error({ err }, "❌ Error en /debug_resumen");
-      // Reflejar el error real, no esconderlo
-      await bot
-        .sendMessage(
-          chatId,
-          `❌ Error ejecutando /debug_resumen:\n<code>${err instanceof Error ? err.message : String(err)}</code>`,
-          { parse_mode: "HTML" },
-        )
-        .catch(() => {});
-    }
-  });
-
-  log.info("✅ Comandos registrados: /prueba, /buscar, /debug_resumen");
-}

@@ -311,21 +311,3 @@ export async function analyzeLicitacionByUrl(
   return analyzeSelectedLicitacion(expedienteFromUrl, options);
 }
 
-export function buildSimplifiedResult(
-  expedienteId: string,
-  title: string,
-): DeepAnalysisResult {
-  return {
-    title,
-    expedienteId,
-    report: {
-      resumen: "Documento pesado; se generó resumen simplificado con datos preliminares.",
-      fechas_criticas: ["Revisar cronograma directamente en la convocatoria."],
-      presupuesto_estimado: "No especificado (modo simplificado)",
-      requisitos_experiencia: ["Revisión manual recomendada en anexos técnicos."],
-      candados_detectados: ["Pendiente por limitación de tiempo de procesamiento."],
-      veredicto: "Oportunidad potencial; validar requisitos y plazos antes de ofertar.",
-      comparativo_capufe: "Comparativo resumido por timeout; ejecutar análisis completo en siguiente corrida.",
-    },
-  };
-}
