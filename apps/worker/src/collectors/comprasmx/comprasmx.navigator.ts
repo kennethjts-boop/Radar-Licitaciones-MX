@@ -58,6 +58,10 @@ export function apiRegistroToRawInput(item: ApiRegistro): RawProcurementInput {
     ? `https://comprasmx.buengobierno.gob.mx/sitiopublico/#/sitiopublico/detalle/${uuid}/procedimiento`
     : '';
 
+  // fecha_publicacion es el campo canónico; fecha_aclaraciones como fallback
+  // si la API no incluye publicación explícita.
+  const publicationDate = item.fecha_publicacion ?? item.fecha_aclaraciones ?? null;
+
   return {
     source: 'comprasmx',
     sourceUrl,
@@ -70,11 +74,11 @@ export function apiRegistroToRawInput(item: ApiRegistro): RawProcurementInput {
     dependencyName: item.siglas?.trim() ?? null,
     buyingUnit: null,
     procedureType: item.tipo_procedimiento ?? null,
-    status: item.estatus_alterno ?? null,
-    publicationDate: item.fecha_publicacion ?? null,
-    openingDate: item.fecha_apertura ?? null,
+    status: item.estatus_alterno ?? null,           // → normalizeStatus() en normalizer
+    publicationDate,                                 // fecha_publicacion ?? fecha_aclaraciones
+    openingDate: item.fecha_apertura ?? null,        // fecha de apertura de propuestas
     awardDate: null,
-    state: item.caracter ?? null,
+    state: item.caracter ?? null,                    // NACIONAL / INTERNACIONAL
     municipality: null,
     amount: item.monto ?? null,
     currency: 'MXN',
@@ -158,6 +162,15 @@ export class ComprasMxNavigator {
           : undefined;
 
         if (!Array.isArray(registros) || registros.length === 0) return;
+
+        // DIAG: imprimir campos disponibles del primer registro (solo una vez)
+        if (apiRegistros.size === 0 && registros.length > 0) {
+          const first = registros[0] as Record<string, unknown>;
+          log.info(
+            { campos: Object.keys(first), muestra: first },
+            "🔬 DIAG campos del primer ApiRegistro"
+          );
+        }
 
         let count = 0;
         for (const item of registros) {

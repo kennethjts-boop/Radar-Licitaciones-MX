@@ -19,3 +19,7 @@
 - Siempre hacer typecheck y build antes de commit
 - Mensajes de commit en español, formato: "fix: descripción" o "feat: descripción"
 - Push directo a main después de cada fix
+
+## Reglas de alertas Telegram
+- MAX_ALERTS_PER_CYCLE = 10. Nunca enviar más de 10 alertas por ciclo a Telegram.
+- Los matches se guardan en DB siempre; solo se limita el envío a Telegram.

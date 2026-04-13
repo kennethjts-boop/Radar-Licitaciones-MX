@@ -24,6 +24,19 @@ const STATUS_MAP: Record<string, ProcurementStatus> = {
   cerrada: "cerrada",
   concluida: "cerrada",
   finalizada: "cerrada",
+  // Valores reales de la API comprasmx (normalizeText quita tildes/mayúsculas)
+  vigente: "activa",
+  "vigente sin acta": "activa",
+  "vigente pap": "activa",
+  "vigente ja": "activa",
+  "en aclaraciones": "activa",
+  "en atencion de preguntas": "activa",
+  "en repreguntas": "activa",
+  "pendiente de apertura": "en_proceso",
+  "en apertura": "en_proceso",
+  "en evaluacion": "en_proceso",
+  "en decision de fallo": "en_proceso",
+  suspendido: "en_proceso",
 };
 
 const PROCEDURE_TYPE_MAP: Record<string, ProcedureType> = {
