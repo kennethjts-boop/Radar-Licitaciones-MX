@@ -19,6 +19,7 @@ import { BrowserManager } from "./browser.manager";
 import {
   ComprasMxNavigator,
   buildListingFingerprint,
+  apiRegistroToRawInput,
   SELECTORS,
 } from "./comprasmx.navigator";
 import { normalize } from "../../normalizers/procurement.normalizer";
@@ -102,11 +103,11 @@ export async function collectComprasMx(
       .single();
     const sourceId = sourceData?.id ?? null;
 
-    await BrowserManager.withContext(async (page, context) => {
+    await BrowserManager.withContext(async (page, _context) => {
       const navigator = new ComprasMxNavigator();
 
       // ── A. Listing Scan ────────────────────────────────────────────────────
-      const { rows: listingRows, pagesScanned: scanned } =
+      const { rows: listingRows, apiRegistros, pagesScanned: scanned } =
         await navigator.scanListing(page, baseUrl, maxPages);
       pagesScanned = scanned;
       totalListingRowsSeen = listingRows.length;
@@ -178,7 +179,7 @@ export async function collectComprasMx(
 
         if (!needsDetail) continue;
 
-        // ── C. Detail Fetch (Nivel 2) ──────────────────────────────────────
+        // ── C. Construir desde datos API interceptados (sin detail fetch) ────
         detailFetchExecuted++;
         if (isMutation) {
           totalMutatedDetected++;
@@ -187,43 +188,34 @@ export async function collectComprasMx(
         }
 
         try {
-          // Usar la URL de detalle capturada por API interception durante el listing scan.
-          // Si no se capturó (sourceUrl vacío), extractDetail usará el fallback de re-navegación.
-          // Cada detail fetch usa su propia página nueva — NO se comparte la página del listado.
-          const urlToFetch = row.sourceUrl && row.sourceUrl.startsWith('http')
-            ? row.sourceUrl
-            : row.externalId;
+          const apiRegistro = apiRegistros.get(row.externalId);
+
+          if (!apiRegistro) {
+            // API data no disponible para este expediente — se omite.
+            // Los adjuntos se resolverán en una fase posterior vía extractDetail().
+            log.warn(
+              { externalId: row.externalId },
+              "⚠️ No se encontró ApiRegistro para el expediente — omitiendo"
+            );
+            errors.push(`Sin datos API para: ${row.externalId}`);
+            continue;
+          }
+
+          const rawInput = apiRegistroToRawInput(apiRegistro);
+          const normalized = normalize(rawInput);
+          // Inyectar el fingerprint superficial calculado en listing
+          normalized.lightweightFingerprint = lightweightFingerprint;
 
           log.info(
-            {
-              externalId: row.externalId,
-              sourceUrl: row.sourceUrl || '(vacío)',
-              urlToFetch,
-              isHttp: urlToFetch.startsWith('http'),
-            },
-            "🔎 DIAG detail fetch — URL seleccionada"
+            { externalId: row.externalId, sourceUrl: rawInput.sourceUrl },
+            "✅ Registro construido desde API — sin detail fetch"
           );
 
-          const rawInput = await navigator.extractDetail(context, urlToFetch);
-
-          if (rawInput) {
-            const normalized = normalize(rawInput);
-            // Inyectar el fingerprint superficial calculado en listing
-            normalized.lightweightFingerprint = lightweightFingerprint;
-
-            // ── D. Adjuntos — solo si hubo Detail Fetch ──────────────────
-            if (normalized.attachments.length > 0) {
-              totalAttachmentsChecked++;
-            }
-
-            items.push(normalized);
-          } else {
-            errors.push(`No se pudo extraer detalle: ${row.externalId}`);
-          }
+          items.push(normalized);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           errors.push(`Error en ID ${row.externalId}: ${msg}`);
-          log.error({ err: e, id: row.externalId }, "❌ Error en detail fetch");
+          log.error({ err: e, id: row.externalId }, "❌ Error procesando ApiRegistro");
         }
       }
 

@@ -2,8 +2,11 @@
  * COMPRASMX NAVIGATOR — Lógica real para el portal de Compras MX (Buen Gobierno).
  * Basado en PrimeNG Table y navegación por clicks.
  *
- * NIVEL 1: scanListing() → ListingRow[]
- * NIVEL 2+3: extractDetail() → RawProcurementInput
+ * NIVEL 1: scanListing() → ListingRow[] + Map<externalId, ApiRegistro>
+ *   Los datos completos del expediente vienen directamente de la API interceptada.
+ *   No se necesita navigación a la página de detalle para el flujo principal.
+ *
+ * NIVEL 2 (solo adjuntos): extractDetail() — usado únicamente para descargar documentos.
  */
 import { createHash } from "crypto";
 import { Page, BrowserContext } from "playwright";
@@ -21,6 +24,63 @@ export interface ListingRow {
   status: string | null;
   visibleDate: string | null;
   rowText: string;
+}
+
+/**
+ * Registro crudo tal como lo devuelve la API /whitney/sitiopublico/expedientes.
+ * Estructura: response.data[0].registros[]
+ */
+export interface ApiRegistro {
+  no?: number;
+  id_procedimiento?: number;
+  numero_procedimiento: string;
+  uuid_procedimiento?: string;
+  nombre_procedimiento?: string;
+  siglas?: string;
+  estatus_alterno?: string;
+  tipo_procedimiento?: string;
+  cod_expediente?: string;
+  fecha_apertura?: string;
+  fecha_publicacion?: string;
+  fecha_aclaraciones?: string;
+  monto?: number | string | null;
+  caracter?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Convierte un ApiRegistro (datos crudos de la API) a RawProcurementInput.
+ * Construye la URL de detalle directamente desde uuid_procedimiento.
+ */
+export function apiRegistroToRawInput(item: ApiRegistro): RawProcurementInput {
+  const uuid = item.uuid_procedimiento ?? '';
+  const sourceUrl = uuid
+    ? `https://comprasmx.buengobierno.gob.mx/sitiopublico/#/sitiopublico/detalle/${uuid}/procedimiento`
+    : '';
+
+  return {
+    source: 'comprasmx',
+    sourceUrl,
+    externalId: item.numero_procedimiento,
+    expedienteId: item.cod_expediente ?? null,
+    licitationNumber: item.numero_procedimiento ?? null,
+    procedureNumber: item.numero_procedimiento ?? null,
+    title: item.nombre_procedimiento?.trim() || 'Sin Título',
+    description: null,
+    dependencyName: item.siglas?.trim() ?? null,
+    buyingUnit: null,
+    procedureType: item.tipo_procedimiento ?? null,
+    status: item.estatus_alterno ?? null,
+    publicationDate: item.fecha_publicacion ?? null,
+    openingDate: item.fecha_apertura ?? null,
+    awardDate: null,
+    state: item.caracter ?? null,
+    municipality: null,
+    amount: item.monto ?? null,
+    currency: 'MXN',
+    attachments: [],
+    rawJson: item as Record<string, unknown>,
+  };
 }
 
 /**
@@ -74,109 +134,72 @@ export class ComprasMxNavigator {
     page: Page,
     baseUrl: string,
     maxPages: number,
-  ): Promise<{ rows: ListingRow[]; pagesScanned: number }> {
+  ): Promise<{ rows: ListingRow[]; apiRegistros: Map<string, ApiRegistro>; pagesScanned: number }> {
     log.info({ baseUrl, maxPages }, "📋 Iniciando scan de listado ComprasMX");
     const allRows: ListingRow[] = [];
     let pagesScanned = 0;
 
-    // ── Interceptar respuestas de la API para capturar externalId → detailUrl ──
-    const externalIdToDetailUrl = new Map<string, string>();
+    // ── Interceptar API del listado para capturar datos completos ──────────────
+    // La API devuelve: { success, data: [{ registros: [...], paginacion: {...} }] }
+    // Cada registro contiene todos los campos que necesitamos — no hace falta detail fetch.
+    const apiRegistros = new Map<string, ApiRegistro>();
 
-    const captureDetailUrls = (response: { url(): string; text(): Promise<string>; status(): number }) => {
-      const url = response.url();
-      const status = response.status();
-
-      // DIAGNÓSTICO: loguear TODAS las respuestas que puedan ser de la API del listado
-      const isApiCandidate =
-        url.includes('/whitney/') ||
-        url.includes('expediente') ||
-        url.includes('procedimiento') ||
-        url.includes('buengobierno') ||
-        url.includes('upcp');
-
-      if (!isApiCandidate) return;
+    const captureApiRegistros = (response: { url(): string; text(): Promise<string> }) => {
+      if (!response.url().includes('/whitney/')) return;
 
       response.text().then((raw: string) => {
-        // Loguear la URL y los primeros 500 chars de la respuesta para diagnóstico
-        log.info(
-          { url, status, preview: raw.slice(0, 500) },
-          "🔎 DIAG API response interceptada"
-        );
-
         let json: unknown;
         try { json = JSON.parse(raw); } catch { return; }
 
         const j = json as Record<string, unknown>;
-
-        // Estructura real de la API: { success, data: [{ registros: [...], paginacion: {...} }] }
-        // Los expedientes están en data[0].registros[]
         const dataArr = j?.data as unknown[] | undefined;
         const registros = (Array.isArray(dataArr) && dataArr.length > 0)
           ? ((dataArr[0] as Record<string, unknown>)?.registros as unknown[] | undefined)
           : undefined;
-        const items = Array.isArray(registros) ? registros : [] as unknown[];
 
-        if (items.length === 0) {
-          log.info({ url, keys: Object.keys(j ?? {}).slice(0, 10) }, "🔎 DIAG respuesta JSON sin registros reconocidos");
-          return;
-        }
+        if (!Array.isArray(registros) || registros.length === 0) return;
 
         let count = 0;
-        for (const item of items) {
-          const it = item as Record<string, unknown>;
-          const extId = String(it.numero_procedimiento ?? '');
-          const uuid  = String(it.uuid_procedimiento ?? '');
-          if (extId && uuid && extId !== 'undefined' && uuid !== 'undefined') {
-            externalIdToDetailUrl.set(extId,
-              `https://comprasmx.buengobierno.gob.mx/sitiopublico/#/sitiopublico/detalle/${uuid}/procedimiento`
-            );
+        for (const item of registros) {
+          const it = item as ApiRegistro;
+          if (it.numero_procedimiento) {
+            apiRegistros.set(it.numero_procedimiento, it);
             count++;
           }
         }
-        if (count > 0) {
-          log.info({ count, total: externalIdToDetailUrl.size }, "🔗 URLs de detalle capturadas desde API");
-        }
-      }).catch(() => { /* respuesta no legible */ });
+        log.info({ count, total: apiRegistros.size, url: response.url() }, "📡 Registros API capturados");
+      }).catch(() => {});
     };
 
-    page.on('response', captureDetailUrls);
+    page.on('response', captureApiRegistros);
 
     try {
-      // Siempre navegar — no comparar page.url() porque Angular hash routing
-      // puede normalizar la URL de forma diferente a la string literal.
       log.info({ baseUrl }, "🌐 Navegando al portal ComprasMX...");
       await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-
-      // Esperar a que Angular renderice el botón "Buscar" — garantiza que la SPA
-      // terminó de inicializar antes de intentar cualquier interacción.
       await page.waitForSelector('button:has-text("Buscar")', { timeout: 20000 });
-      await page.waitForTimeout(2000); // Margen extra para que la SPA termine de hidratarse
+      await page.waitForTimeout(2000);
 
-      // Portal SPA: requiere click en "Buscar" para cargar resultados en la tabla
       log.info("🔍 Activando búsqueda en el portal ComprasMX...");
       try {
         await page.click('button:has-text("Buscar")', { timeout: 8000 });
-        // Esperar más de 1 fila: antes de buscar existe solo la fila de "sin resultados"
         await page.waitForFunction(
           `document.querySelectorAll(${JSON.stringify(SELECTORS.LISTING_ROW)}).length > 1`,
           { timeout: 15000 }
         );
         log.info("✅ Tabla de procedimientos cargada con resultados");
       } catch (buscarErr) {
-        // Fallo fatal — si "Buscar" no responde, el portal no cargó correctamente.
-        // Capturar HTML para diagnóstico y abortar (no continuar con tabla vacía).
         const html = await page.content().catch(() => "(no se pudo obtener HTML)");
         log.error(
           { buscarErr, html: html.slice(0, 2000) },
           "❌ FATAL: No se pudo activar Buscar — el portal no cargó correctamente"
         );
-        page.off('response', captureDetailUrls);
-        return { rows: [], pagesScanned: 0 };
+        page.off('response', captureApiRegistros);
+        return { rows: [], apiRegistros, pagesScanned: 0 };
       }
     } catch (err) {
       log.error({ err, baseUrl }, "❌ Error cargando portal ComprasMX");
-      page.off('response', captureDetailUrls);
-      return { rows: [], pagesScanned: 0 };
+      page.off('response', captureApiRegistros);
+      return { rows: [], apiRegistros, pagesScanned: 0 };
     }
 
     while (pagesScanned < maxPages) {
@@ -190,21 +213,16 @@ export class ComprasMxNavigator {
         break;
       }
 
-      const rowElements = await page.$$(SELECTORS.LISTING_ROW);
-      log.info({ selector: SELECTORS.LISTING_ROW, count: rowElements.length }, "Resultado del selector de filas");
-
       const rowsOnPage = await page.$$eval(
         SELECTORS.LISTING_ROW,
         (elements, sel) => {
           return elements.map((el: any) => {
             const idCell = el.querySelector(sel.COL_ID);
             if (!idCell) return null;
-
             const getText = (s: string) => {
               const node = el.querySelector(s);
               return node ? (node.textContent ?? '').replace(/\s+/g, ' ').trim() : '';
             };
-
             return {
               externalId: idCell.textContent?.trim() || '',
               title: getText(sel.COL_TITLE),
@@ -219,8 +237,7 @@ export class ComprasMxNavigator {
         SELECTORS,
       );
 
-      // Deduplicar por externalId (evita filas duplicadas por frozen columns)
-      const uniqueOnPage = Array.from(new Map(rowsOnPage.map(r => [r.externalId, r])).values());
+      const uniqueOnPage = Array.from(new Map(rowsOnPage.map((r: ListingRow) => [r.externalId, r])).values());
       allRows.push(...uniqueOnPage);
       log.info({ count: uniqueOnPage.length, raw: rowsOnPage.length }, "Filas únicas extraídas en página");
 
@@ -235,35 +252,19 @@ export class ComprasMxNavigator {
       await page.waitForTimeout(3000);
     }
 
-    // Dar tiempo a que los handlers de response pendientes completen (microtasks)
+    // Dar tiempo a que los handlers de response pendientes completen
     await page.waitForTimeout(500);
-    page.off('response', captureDetailUrls);
+    page.off('response', captureApiRegistros);
 
-    // Poblar sourceUrl de cada fila con la URL de detalle capturada desde la API.
-    let urlsResolved = 0;
-    for (const row of allRows) {
-      const detailUrl = externalIdToDetailUrl.get(row.externalId);
-      if (detailUrl) {
-        row.sourceUrl = detailUrl;
-        urlsResolved++;
-      }
-    }
-
-    // DIAGNÓSTICO: resumen del interceptor
-    const sampleUrls = Array.from(externalIdToDetailUrl.entries()).slice(0, 3).map(([id, url]) => ({ id, url }));
+    const coverage = allRows.length > 0
+      ? Math.round((apiRegistros.size / allRows.length) * 100)
+      : 0;
     log.info(
-      {
-        urlsResolved,
-        total: allRows.length,
-        apiMapSize: externalIdToDetailUrl.size,
-        sampleUrls,
-      },
-      urlsResolved > 0
-        ? `🔗 URLs capturadas del interceptor: ${urlsResolved} de ${allRows.length} total`
-        : `⚠️ URLs capturadas del interceptor: 0 de ${allRows.length} total — fallback activado`
+      { domRows: allRows.length, apiRegistros: apiRegistros.size, coverage: `${coverage}%` },
+      "📊 Scan completado — cobertura API"
     );
 
-    return { rows: allRows, pagesScanned };
+    return { rows: allRows, apiRegistros, pagesScanned };
   }
 
   /**
