@@ -51,7 +51,7 @@ import { sanitizeForKeywordRegex } from "../core/text";
 import { sendCapufePeajeDeepReportToTelegram } from "../scripts/capufe-peaje-deep-report";
 
 const log = createModuleLogger("collect-job");
-const MAX_ALERTS_PER_CYCLE = 500;
+const MAX_ALERTS_PER_CYCLE = 9999;
 const AI_VIP_ALERT_SCORE_THRESHOLD = 70;
 const AI_VIP_ALERT_WIN_PROBABILITY_THRESHOLD = 50;
 const RAG_MATCH_THRESHOLD = 0.7;
