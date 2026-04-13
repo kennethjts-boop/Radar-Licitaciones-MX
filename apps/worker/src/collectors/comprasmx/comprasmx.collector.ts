@@ -194,6 +194,16 @@ export async function collectComprasMx(
             ? row.sourceUrl
             : row.externalId;
 
+          log.info(
+            {
+              externalId: row.externalId,
+              sourceUrl: row.sourceUrl || '(vacío)',
+              urlToFetch,
+              isHttp: urlToFetch.startsWith('http'),
+            },
+            "🔎 DIAG detail fetch — URL seleccionada"
+          );
+
           const rawInput = await navigator.extractDetail(context, urlToFetch);
 
           if (rawInput) {
