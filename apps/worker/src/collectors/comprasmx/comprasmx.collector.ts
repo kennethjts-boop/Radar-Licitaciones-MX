@@ -30,6 +30,23 @@ const log = createModuleLogger("collector-comprasmx");
 
 export const COMPRASMX_SOURCE_KEY = "comprasmx";
 
+/**
+ * Estatus que indican un expediente activo/vigente.
+ * Cualquier valor fuera de esta lista se descarta en el flujo principal.
+ */
+const ACTIVE_STATUSES = new Set([
+  "VIGENTE",
+  "EN ACLARACIONES",
+  "EN ATENCIÓN DE PREGUNTAS",
+  "EN REPREGUNTAS",
+  "PENDIENTE DE APERTURA",
+]);
+
+function isActiveStatus(estatus: string | undefined | null): boolean {
+  if (!estatus) return false;
+  return ACTIVE_STATUSES.has(estatus.trim().toUpperCase());
+}
+
 export interface ComprasMxCollectorOptions {
   maxPages?: number;
   headless?: boolean;
@@ -48,6 +65,8 @@ export interface ComprasMxCollectResult {
   totalListingRowsSeen: number;
   /** Expedientes saltados porque el fingerprint coincidió. */
   skippedByFingerprint: number;
+  /** Expedientes descartados por estatus no vigente (ADJUDICADO, CANCELADO, etc.). */
+  skippedByStatus: number;
   /** Veces que se ejecutó Detail Fetch (nuevo o mutado). */
   detailFetchExecuted: number;
   /** Filas nuevas detectadas (no existían en DB). */
@@ -86,6 +105,7 @@ export async function collectComprasMx(
   let pagesScanned = 0;
   let totalListingRowsSeen = 0;
   let skippedByFingerprint = 0;
+  let skippedByStatus = 0;
   let detailFetchExecuted = 0;
   let totalNewDetected = 0;
   let totalMutatedDetected = 0;
@@ -201,6 +221,16 @@ export async function collectComprasMx(
             continue;
           }
 
+          // ── Filtro de estatus: solo procesar expedientes vigentes/activos ──
+          if (!isActiveStatus(apiRegistro.estatus_alterno)) {
+            skippedByStatus++;
+            log.debug(
+              { externalId: row.externalId, estatus: apiRegistro.estatus_alterno },
+              "⏭ skipping — estatus no vigente"
+            );
+            continue;
+          }
+
           const rawInput = apiRegistroToRawInput(apiRegistro);
           const normalized = normalize(rawInput);
           // Inyectar el fingerprint superficial calculado en listing
@@ -237,6 +267,7 @@ export async function collectComprasMx(
       totalListingRowsSeen,
       detailFetchExecuted,
       skippedByFingerprint,
+      skippedByStatus,
       totalNewDetected,
       totalMutatedDetected,
       totalAttachmentsChecked,
@@ -252,6 +283,7 @@ export async function collectComprasMx(
     pagesScanned,
     totalListingRowsSeen,
     skippedByFingerprint,
+    skippedByStatus,
     detailFetchExecuted,
     totalNewDetected,
     totalMutatedDetected,
@@ -346,6 +378,7 @@ export async function recheckComprasMx(
     pagesScanned: 0,
     totalListingRowsSeen: 0,
     skippedByFingerprint: 0,
+    skippedByStatus: 0,
     detailFetchExecuted,
     totalNewDetected: 0,
     totalMutatedDetected: 0,
