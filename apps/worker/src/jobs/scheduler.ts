@@ -20,6 +20,7 @@ import { getConfig } from "../config/env";
 import { recordSchedulerStarted } from "../core/system-state";
 import { runCollectJob, runRecheckJob } from "./collect.job";
 import { runDailySummaryJob } from "./daily-summary.job";
+import { runCollectFondosJob } from "./collect-fondos.job";
 
 const log = createModuleLogger("scheduler");
 
@@ -92,6 +93,23 @@ export function startScheduler(): void {
     { timezone: "America/Mexico_City" },
   );
 
+  // ── FONDOS: Convocatorias internacionales para donatarias autorizadas ────────
+  // Corre cada 6 horas — estas fuentes no cambian tan frecuentemente.
+  const fondosCron = "0 */6 * * *";
+
+  cron.schedule(
+    fondosCron,
+    async () => {
+      log.info({ cron: fondosCron }, "Disparando colección de fondos internacionales");
+      try {
+        await runCollectFondosJob();
+      } catch (err) {
+        log.error({ err }, "Error no manejado en collect-fondos job");
+      }
+    },
+    { timezone: "America/Mexico_City" },
+  );
+
   // Registrar estado en system_state
   recordSchedulerStarted(collectCron, summaryCron).catch((err) =>
     log.warn({ err }, "No se pudo registrar scheduler en system_state"),
@@ -119,7 +137,8 @@ export function startScheduler(): void {
         hour: recheckHour,
       },
       summary: { cron: summaryCron, hour: summaryHour },
+      fondos: { cron: fondosCron, description: "Fondos internacionales donatarias" },
     },
-    `✅ Scheduler iniciado — Modo 1 cada ${intervalMinutes} min, Modo 2 a las ${recheckHour}:00, Resumen a las ${summaryHour}:00`,
+    `✅ Scheduler iniciado — Modo 1 cada ${intervalMinutes} min, Modo 2 a las ${recheckHour}:00, Resumen a las ${summaryHour}:00, Fondos cada 6h`,
   );
 }
