@@ -16,7 +16,8 @@
     "db:migrate:fase2a": "ts-node-dev src/scripts/migrate-fase2a.ts",
     "db:verify:fase2a": "ts-node-dev src/scripts/verify-fase2a.ts",
     "report:capufe:peaje": "ts-node-dev src/scripts/capufe-peaje-deep-report.ts",
-    "historico:capufe": "ts-node-dev src/scripts/historico-capufe-sipot.ts"
+    "historico:capufe": "ts-node-dev src/scripts/historico-capufe-sipot.ts",
+    "buscar:contratos:2024": "ts-node-dev src/scripts/buscar-contratos-capufe-2024.ts"
   },
   "engines": {
     "node": ">=20.0.0"
