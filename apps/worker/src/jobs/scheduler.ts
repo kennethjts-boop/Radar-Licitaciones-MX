@@ -97,18 +97,22 @@ export function startScheduler(): void {
   // Corre cada 6 horas — estas fuentes no cambian tan frecuentemente.
   const fondosCron = "0 */6 * * *";
 
-  cron.schedule(
-    fondosCron,
-    async () => {
-      log.info({ cron: fondosCron }, "Disparando colección de fondos internacionales");
-      try {
-        await runCollectFondosJob();
-      } catch (err) {
-        log.error({ err }, "Error no manejado en collect-fondos job");
-      }
-    },
-    { timezone: "America/Mexico_City" },
-  );
+  if (config.FONDOS_ENABLED) {
+    cron.schedule(
+      fondosCron,
+      async () => {
+        log.info({ cron: fondosCron }, "Disparando colección de fondos internacionales");
+        try {
+          await runCollectFondosJob();
+        } catch (err) {
+          log.error({ err }, "Error no manejado en collect-fondos job");
+        }
+      },
+      { timezone: "America/Mexico_City" },
+    );
+  } else {
+    log.warn("⏸️  FONDOS_ENABLED=false — collector de fondos internacionales PAUSADO (los demás scrapers siguen activos)");
+  }
 
   // Registrar estado en system_state
   recordSchedulerStarted(collectCron, summaryCron).catch((err) =>
@@ -137,7 +141,9 @@ export function startScheduler(): void {
         hour: recheckHour,
       },
       summary: { cron: summaryCron, hour: summaryHour },
-      fondos: { cron: fondosCron, description: "Fondos internacionales donatarias" },
+      fondos: config.FONDOS_ENABLED
+        ? { cron: fondosCron, description: "Fondos internacionales donatarias" }
+        : { status: "PAUSED", reason: "FONDOS_ENABLED=false" },
     },
     `✅ Scheduler iniciado — Modo 1 cada ${intervalMinutes} min, Modo 2 a las ${recheckHour}:00, Resumen a las ${summaryHour}:00, Fondos cada 6h`,
   );

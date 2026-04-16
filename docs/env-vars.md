@@ -56,6 +56,14 @@ DAILY_SUMMARY_HOUR=7
 APP_TIMEZONE=America/Mexico_City
 # No cambiar — toda la lógica temporal asume esta zona
 
+# ── Fondos Internacionales ───────────────────────────────────────────────────
+FONDOS_ENABLED=true
+# Valores: "true" | "false"
+# Default: "true" — el collector de fondos internacionales corre cada 6h
+# Setear en "false" para PAUSAR el collector de fondos sin redeploy.
+# No afecta comprasmx, dof, institutional_sites ni fallback_search.
+# Cambiar en Railway Variables UI → el scheduler detecta el valor al arrancar.
+
 # ── Railway (automático en deploy) ───────────────────────────────────────────
 RAILWAY_ENVIRONMENT=production
 # Railway inyecta esta variable automáticamente en producción
