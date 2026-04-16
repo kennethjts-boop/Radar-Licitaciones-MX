@@ -5,6 +5,7 @@
 import type { RadarConfig } from "../types/procurement";
 
 import { capufeEmergenciaRadar } from "./capufe-emergencia.radar";
+import { capufeMantenimientoEquiposRadar } from "./capufe-mantenimiento-equipos.radar";
 import { capufePeajeRadar } from "./capufe-peaje.radar";
 import { capufeOportunidadesRadar } from "./capufe-oportunidades.radar";
 import { isssteoOficinasCentralesRadar } from "./issste-oficinas-centrales.radar";
@@ -22,6 +23,7 @@ import { fondosCulturaRadar } from "./fondos-cultura.radar";
  */
 export const RADARS: RadarConfig[] = [
   capufeEmergenciaRadar,
+  capufeMantenimientoEquiposRadar,
   capufePeajeRadar,
   capufeOportunidadesRadar,
   isssteoOficinasCentralesRadar,
