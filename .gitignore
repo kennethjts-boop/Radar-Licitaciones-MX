@@ -47,3 +47,6 @@ playwright/.auth/
 
 # ── Railway / CI ──────────────────────────────────────────────────────────────
 .railway/
+
+# ── Datos de scripts manuales ─────────────────────────────────────────────────
+apps/worker/data/
