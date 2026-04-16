@@ -3,253 +3,271 @@ import axios from "axios";
 import * as fs from "fs/promises";
 import * as path from "path";
 import process from "process";
+import { chromium } from "playwright";
 import { createModuleLogger } from "../core/logger";
+import { sendTelegramDocument, sendTelegramMessage } from "../alerts/telegram.alerts";
 
 const log = createModuleLogger("historico-capufe-sipot");
 
-const DEPENDENCIA_NOMBRE = "Caminos y Puentes Federales de Ingresos y Servicios Conexos";
-const ARTICULO = "70";
-const FRACCIONES = ["XXVII", "XXVIIIb"];
-
-const KEYWORDS_DEFAULT = [
-  "control de transito", "señalizacion vial", "semaforos", "telepeaje", "iave", "televia", "tag",
-  "mantenimiento a equipo", "mantenimiento de equipo", "rollos termicos", "papel termico",
-  "comprobantes", "cctv caseta", "barreras vehiculares", "aforo vehicular", "sistema electronico de cobro",
-  "refacciones", "its", "plumas de caseta", "caseta", "plaza de cobro"
-];
-
-const YEARS_BACK_DEFAULT = 5;
 const OUTPUT_DIR = path.join(process.cwd(), "data");
 const RATE_LIMIT_MS = 1000;
+const ENDPOINT_URL = "https://backbuscadortematico.plataformadetransparencia.org.mx/api/tematico/buscador/consulta";
 
-interface SipotRecord {
-  año: string;
-  fraccion: string;
-  numero_contrato: string;
-  objeto: string;
+interface NormalizedResult {
+  contratoDetectado: string;
   proveedor: string;
+  objeto: string;
   monto: string;
-  fecha_adjudicacion: string;
-  url_contrato_pdf: string;
+  fecha: string;
+  dependencia: string;
+  rawRecord: any;
+  fuente: "SIPOT";
 }
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// TODO: validar endpoint SIPOT vigente
-// El endpoint de la PNT cambia frecuentemente. El usuario debe validar el endpoint actual capturando
-// una petición en https://consultapublicamx.plataformadetransparencia.org.mx/ y reemplazando esta función.
-async function fetchSipotPagina(año: string, fraccion: string, pagina: number): Promise<any[]> {
-  /*
+async function querySipotExact(queryString: string): Promise<any[]> {
   const payload = {
-    // Reemplazar con el payload capturado en DevTools
+    contenido: queryString,
+    cantidad: 50,
+    numeroPagina: 0,
+    coleccion: "CONTRATOS",
+    dePaginador: false,
+    filtroSeleccionado: "",
+    idCompartido: "",
+    organosGarantes: { seleccion: [], descartado: [] },
+    sujetosObligados: { seleccion: [], descartado: [] },
+    anioFechaInicio: { seleccion: [], descartado: [] },
+    tipoOrdenamiento: "COINCIDENCIA",
   };
-  
-  try {
-    const response = await axios.post("URL_ENDPOINT_CAPTURADO", payload, {
-      headers: {
-        // Headers necesarios (Tokens, Cookies, etc.)
-      },
-      timeout: 30000
-    });
-    return response.data; // Ajustar a la estructura real de la respuesta
-  } catch (err) {
-    if (axios.isAxiosError(err) && err.response?.status === 429) {
-      throw new Error("Rate limit");
-    }
-    throw err;
-  }
-  */
-  log.warn("Llamada SIPOT simulada - Reemplaza fetchSipotPagina con la implementación real validada.");
-  return []; // Modificar esto con la integración real
-}
 
-/*
-// Stub opcional si se requiere scrapear en lugar del API
-async function fetchSipotViaBuscadorWeb(año: string, fraccion: string, pagina: number): Promise<any[]> {
-  // Implementación de scraping
-  return [];
+  try {
+    const response = await axios.post(ENDPOINT_URL, payload, { timeout: 30000 });
+    const records = response.data?.payload?.datosSolr || response.data?.paylod?.datosSolr || [];
+    return Array.isArray(records) ? records : [];
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response) {
+      log.warn({ status: err.response.status, data: err.response.data }, "SIPOT HTTP error");
+    } else {
+      log.warn({ err: err instanceof Error ? err.message : String(err) }, "SIPOT request error");
+    }
+    return [];
+  }
 }
-*/
 
 function normalizeText(text: string): string {
-  return text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
 }
 
-function filtrarPorKeywords(registros: any[], keywords: string[]): SipotRecord[] {
-  const resultados: SipotRecord[] = [];
-  const normalizedKeywords = keywords.map(normalizeText);
+function detectContract(record: any, targetContracts: string[]): string | null {
+  const fieldsStr = JSON.stringify(record);
+  const normalizedStr = normalizeText(fieldsStr);
 
-  for (const reg of registros) {
-    // NOTA: Ajustar estos campos según la respuesta real de la API de SIPOT
-    const objetoContrato = String(reg.objetoContrato || reg.descripcion || reg.concepto || "").trim();
-    const textoNormalizado = normalizeText(objetoContrato);
-
-    const isMatch = normalizedKeywords.some(kw => textoNormalizado.includes(kw));
-
-    if (isMatch) {
-      resultados.push({
-        año: String(reg.ejercicio || "N/A"),
-        fraccion: String(reg.fraccion || "N/A"),
-        numero_contrato: String(reg.numeroContrato || reg.folio || "N/A"),
-        objeto: objetoContrato,
-        proveedor: String(reg.proveedor || reg.contratista || "N/A"),
-        monto: String(reg.monto || "N/A"),
-        fecha_adjudicacion: String(reg.fechaAdjudicacion || reg.fechaContrato || "N/A"),
-        url_contrato_pdf: String(reg.hipervinculoContrato || reg.urlContrato || "N/A"),
-      });
+  for (const contract of targetContracts) {
+    const normContract = normalizeText(contract);
+    if (normalizedStr.includes(normContract)) {
+      return contract;
     }
   }
-
-  return resultados;
+  return null;
 }
 
-async function escribirCSV(registros: SipotRecord[], ruta: string): Promise<void> {
-  await fs.mkdir(OUTPUT_DIR, { recursive: true });
+function normalizeResult(record: any, detected: string): NormalizedResult {
+  return {
+    contratoDetectado: detected,
+    proveedor: String(
+      record.proveedor || record.nombreContratista || record.nombreComercial || "N/A"
+    ),
+    objeto: String(record.objetoContrato || record.descripcion || record.concepto || record.titulo || "N/A"),
+    monto: String(record.montoContrato || record.montoMaximo || record.montoMinimo || record.montoTotal || "N/A"),
+    fecha: String(record.fechaContrato || record.fechaCelebracion || record.fechaInicio || "N/A"),
+    dependencia: String(record.nombreSujetoObligado || record.institucion || "N/A"),
+    rawRecord: record,
+    fuente: "SIPOT",
+  };
+}
 
-  const headers = ["año", "fraccion", "numero_contrato", "objeto", "proveedor", "monto", "fecha_adjudicacion", "url_contrato_pdf"];
-  const filas = [headers.join(",")];
-
-  for (const reg of registros) {
-    const fila = headers.map(h => {
-      let val = reg[h as keyof SipotRecord] || "";
-      // Escapar comillas dobles y envolver en comillas si hay comas, comillas o saltos de línea
+async function exportCSV(records: NormalizedResult[], filePath: string) {
+  const headers = [
+    "contrato_detectado",
+    "proveedor",
+    "objeto",
+    "monto",
+    "fecha",
+    "dependencia",
+    "fuente",
+  ];
+  const rows = [headers.join(",")];
+  for (const rec of records) {
+    const values = headers.map((h) => {
+      let val = String(rec[h as keyof NormalizedResult] || "");
+      if (typeof rec[h as keyof NormalizedResult] === "object") val = "";
       if (val.includes(",") || val.includes('"') || val.includes("\n")) {
         val = `"${val.replace(/"/g, '""')}"`;
       }
       return val;
     });
-    filas.push(fila.join(","));
+    rows.push(values.join(","));
   }
-
-  await fs.writeFile(ruta, filas.join("\n"), "utf-8");
+  await fs.writeFile(filePath, rows.join("\n"), "utf-8");
 }
 
-async function tryFetchWithRetry(año: string, fraccion: string, pagina: number): Promise<any[]> {
-  const maxRetries = 3;
-  let delay = 1000;
-
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      return await fetchSipotPagina(año, fraccion, pagina);
-    } catch (err) {
-      log.warn({ err: err instanceof Error ? err.message : String(err), attempt: i + 1 }, "Error fetching SIPOT, retrying...");
-      if (i < maxRetries - 1) {
-        await sleep(delay);
-        delay *= 2;
-      } else {
-        throw err;
-      }
-    }
-  }
-  return [];
+async function exportPDF(records: NormalizedResult[], targetContracts: string[], filePath: string) {
+  const html = `
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; font-size: 14px; }
+          .header { margin-bottom: 30px; }
+          .title { font-size: 20px; font-weight: bold; margin-bottom: 20px; color: #111; }
+          .subtitle { font-size: 13px; color: #444; margin-bottom: 8px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 12px; }
+          th, td { border: 1px solid #ccc; padding: 10px; text-align: left; vertical-align: top; }
+          th { background-color: #f5f5f5; font-weight: bold; }
+          td.objeto { min-width: 200px; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="title">Reporte de coincidencias SIPOT — Contratos CAPUFE/FONADIN</div>
+          <div class="subtitle"><strong>Fecha de generación:</strong> ${new Date().toLocaleString()}</div>
+          <div class="subtitle"><strong>Endpoint consultado:</strong> ${ENDPOINT_URL}</div>
+          <div class="subtitle"><strong>Contratos objetivo:</strong> ${targetContracts.join(", ")}</div>
+          <div class="subtitle"><strong>Total de coincidencias encontradas:</strong> ${records.length}</div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Contrato Detectado</th>
+              <th>Proveedor</th>
+              <th>Objeto/Descripción</th>
+              <th>Monto</th>
+              <th>Fecha</th>
+              <th>Dependencia</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${records
+              .map(
+                (r) => `
+              <tr>
+                <td>${r.contratoDetectado}</td>
+                <td>${r.proveedor}</td>
+                <td class="objeto">${r.objeto}</td>
+                <td>${r.monto}</td>
+                <td>${r.fecha}</td>
+                <td>${r.dependencia}</td>
+              </tr>
+            `
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </body>
+    </html>
+  `;
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  await page.setContent(html);
+  await page.pdf({ path: filePath, format: "A4", landscape: true });
+  await browser.close();
 }
 
 async function main() {
+  await fs.mkdir(OUTPUT_DIR, { recursive: true });
+
   const args = process.argv.slice(2);
-  let parsedYears = YEARS_BACK_DEFAULT;
-  let parsedYearId = null;
-  let parsedKeywords = [...KEYWORDS_DEFAULT];
-  let isDryRun = false;
+  let targetContracts = ["4500036766", "4500036767"];
+  const customContracts: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--years" && i + 1 < args.length) {
-      parsedYears = parseInt(args[++i], 10) || YEARS_BACK_DEFAULT;
-    } else if (args[i] === "--year" && i + 1 < args.length) {
-      parsedYearId = parseInt(args[++i], 10);
-    } else if (args[i] === "--keywords" && i + 1 < args.length) {
-      parsedKeywords = args[++i].split(",").map(k => k.trim());
-    } else if (args[i] === "--dry-run") {
-      isDryRun = true;
+    if (args[i] === "--contract" && i + 1 < args.length) {
+      customContracts.push(args[++i].trim());
     }
   }
 
-  const currentYear = new Date().getFullYear();
-  const targetYears = parsedYearId
-    ? [parsedYearId]
-    : Array.from({ length: parsedYears + 1 }, (_, i) => currentYear - i).sort();
+  if (customContracts.length > 0) {
+    targetContracts = customContracts;
+  }
 
-  log.info({ years: targetYears, variables: parsedKeywords.length, dryRun: isDryRun }, "Iniciando consulta histórica CAPUFE en SIPOT");
+  const queries = targetContracts.flatMap((c) => {
+    const list = [c, `"${c}"`];
+    if (c === "4500036766") list.push(`${c} CAPUFE`);
+    else if (c === "4500036767") list.push(`${c} FONADIN`);
+    else list.push(`${c} CAPUFE`);
+    return list;
+  });
 
-  const allFilteredRecords: SipotRecord[] = [];
-  const proveedorCount: Record<string, number> = {};
-  const yearDistribution: Record<string, number> = {};
+  const uniqueQueries = [...new Set(queries)];
 
-  for (const year of targetYears) {
-    yearDistribution[year] = 0;
-    for (const fraccion of FRACCIONES) {
-      let page = 1;
-      let hasMore = true;
+  log.info({ targetContracts, queriesToRun: uniqueQueries.length }, "Iniciando búsqueda exacta SIPOT");
 
-      log.info({ year, fraccion }, "Consultando fracción por año");
+  const allRawRecords: any[] = [];
+  const normalizedResults: NormalizedResult[] = [];
+  const uniqueSignatures = new Set<string>();
 
-      while (hasMore) {
-        try {
-          const registrosPagina = await tryFetchWithRetry(year.toString(), fraccion, page);
+  for (const q of uniqueQueries) {
+    log.info({ query: q }, "Ejecutando query exacta SIPOT");
+    const records = await querySipotExact(q);
 
-          if (!registrosPagina || registrosPagina.length === 0) {
-            hasMore = false;
-            break;
-          }
+    if (records.length === 0) {
+      log.debug({ query: q }, "Endpoint devolvió vacío, siguiente...");
+    }
 
-          const filtrados = filtrarPorKeywords(registrosPagina, parsedKeywords);
-          allFilteredRecords.push(...filtrados);
-          
-          for (const rec of filtrados) {
-             yearDistribution[year]++;
-             const provName = normalizeText(rec.proveedor || "Desconocido");
-             proveedorCount[provName] = (proveedorCount[provName] || 0) + 1;
-          }
-          
-          // NOTA: Implementar lógica real de paginación según la API.
-          // Si sabemos que devuelve P_SIZE, y registosPagina < P_SIZE, hasMore = false
-          hasMore = false; // Stub para evitar loop infinito en versión inicial
+    for (const record of records) {
+      allRawRecords.push(record);
 
-          await sleep(RATE_LIMIT_MS);
-          page++;
-        } catch (error) {
-           log.error({ err: error instanceof Error ? error.message : String(error), year, fraccion, page }, "Fallo permanente al consultar página");
-           hasMore = false; // Skip rest of this fraction on hard error
+      const detected = detectContract(record, targetContracts);
+      if (detected) {
+        const normalized = normalizeResult(record, detected);
+        const dedupeKey = `${normalized.contratoDetectado}-${normalized.proveedor}-${normalized.objeto}`;
+
+        if (!uniqueSignatures.has(dedupeKey)) {
+          uniqueSignatures.add(dedupeKey);
+          normalizedResults.push(normalized);
         }
       }
     }
+
+    await sleep(RATE_LIMIT_MS);
   }
 
-  // Deduplicar por número de contrato (mismo hash)
-  const uniqueRecordsMap = new Map<string, SipotRecord>();
-  for (const record of allFilteredRecords) {
-      const key = `${record.numero_contrato}-${record.proveedor}`;
-      if (!uniqueRecordsMap.has(key)) {
-         uniqueRecordsMap.set(key, record);
-      }
-  }
-  const deduplicatedRecords = Array.from(uniqueRecordsMap.values());
+  const jsonPath = path.join(OUTPUT_DIR, "historico-capufe-contratos-raw.json");
+  await fs.writeFile(jsonPath, JSON.stringify(allRawRecords, null, 2), "utf-8");
+  log.info({ jsonPath, rawCount: allRawRecords.length }, "JSON crudo exportado");
 
-  if (isDryRun) {
-    log.info("--- MODO DRY RUN ---");
-    console.table(deduplicatedRecords.slice(0, 10));
+  const csvPath = path.join(OUTPUT_DIR, "historico-capufe-contratos.csv");
+  await exportCSV(normalizedResults, csvPath);
+  log.info({ csvPath, normalizedCount: normalizedResults.length }, "CSV resumido exportado");
+
+  const pdfPath = path.join(OUTPUT_DIR, "historico-capufe-contratos.pdf");
+  await exportPDF(normalizedResults, targetContracts, pdfPath);
+  log.info({ pdfPath }, "PDF ejecutivo generado");
+
+  if (normalizedResults.length > 0) {
+    const telegramMsg = `📄 Coincidencias SIPOT detectadas para contratos ${targetContracts.join(" / ")} — total: ${
+      normalizedResults.length
+    }`;
+    try {
+      await sendTelegramMessage(telegramMsg, "HTML");
+      await sendTelegramDocument("Reporte Ejecutivo PDF", pdfPath);
+      await sendTelegramDocument("Datos Exportados CSV", csvPath);
+      log.info("Reportes enviados exitosamente por Telegram");
+    } catch (err) {
+      log.error({ err }, "Error enviando a Telegram");
+    }
   } else {
-    const defaultDate = new Date().toISOString().split("T")[0];
-    const outputFile = path.join(OUTPUT_DIR, `historico-capufe-${defaultDate}.csv`);
-    await escribirCSV(deduplicatedRecords, outputFile);
-    log.info({ outputFile, matches: deduplicatedRecords.length }, "Resultados guardados exitosamente");
+    log.info(`No hubo coincidencias SIPOT para contratos ${targetContracts.join(" y ")}`);
   }
-
-  const topProviders = Object.entries(proveedorCount)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
-    .map(([prov, count]) => `${prov} (${count})`);
-
-  log.info({
-    matchesTotales: deduplicatedRecords.length,
-    añosConsulta: targetYears,
-    distribucionPorAño: yearDistribution,
-    topProveedores: topProviders
-  }, "Resumen de ejecución de script histórico");
-
 }
 
 if (require.main === module) {
-  main().catch(err => {
+  main().catch((err) => {
     log.error({ err: err instanceof Error ? err.stack : String(err) }, "Error fatal en script histórico");
     process.exit(1);
   });

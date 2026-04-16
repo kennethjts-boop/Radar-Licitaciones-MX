@@ -159,6 +159,26 @@ export async function sendTelegramMessage(
   }
 }
 
+export async function sendTelegramDocument(
+  caption: string,
+  filePath: string,
+): Promise<number | null> {
+  const config = getConfig();
+  const bot = getBot();
+
+  try {
+    const msg = await bot.sendDocument(config.TELEGRAM_CHAT_ID, filePath, {
+      caption,
+      parse_mode: "HTML",
+    });
+    return msg.message_id;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error({ error: msg, filePath }, "Error enviando documento Telegram");
+    throw new TelegramError(`Error enviando documento a Telegram: ${msg}`);
+  }
+}
+
 function chunkTextForTelegram(text: string, maxLen = 3500): string[] {
   if (text.length <= maxLen) return [text];
 
