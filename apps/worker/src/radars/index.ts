@@ -16,6 +16,10 @@ import { habitatMorelosRadar } from "./habitat-morelos.radar";
 import { fondosSaludRadar } from "./fondos-salud.radar";
 import { fondosDeporteRadar } from "./fondos-deporte.radar";
 import { fondosCulturaRadar } from "./fondos-cultura.radar";
+import { subastasRadar } from "./subastas.radar";
+import { apuestasRadar } from "./apuestas.radar";
+import { petroleoRadar } from "./petroleo.radar";
+import { accionesRadar } from "./acciones.radar";
 
 /**
  * Lista canónica de todos los radares.
