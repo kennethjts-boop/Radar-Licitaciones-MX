@@ -5,7 +5,7 @@ import { runApuestasRadar } from "../radars/apuestas.radar";
 
 const log = createModuleLogger("daily-apuestas-job");
 
-export const DAILY_APUESTAS_CRON = "0 9,15 * * *";
+export const DAILY_APUESTAS_CRON = "0 8 * * *";
 
 export async function runDailyApuestasJob(): Promise<void> {
   try {
