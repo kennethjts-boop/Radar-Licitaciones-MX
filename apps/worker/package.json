@@ -42,8 +42,8 @@
     "postgres": "^3.4.9",
     "uuid": "^10.0.0",
     "zod": "^3.23.8",
-    "puppeteer": "24.9.0",
-    "xlsx": "0.18.5",
+    "puppeteer": "^24.9.0",
+    "xlsx": "^0.18.5",
     "pdfkit": "^0.17.1"
   },
   "devDependencies": {
