@@ -5,12 +5,21 @@ import { getSupabaseClient } from "../storage/client";
 export interface PetroleoOpportunity {
   tipo: "WTI" | "BRENT";
   precio: number;
-  cambioPct: number;
+  cambioDiarioPct: number;
+  cambioSemanalPct: number;
+  cambioMensualPct: number;
   precioSoporte: number;
   precioResistencia: number;
-  senal: "compra" | "venta" | "alerta" | "neutral";
-  evento: string;
+  tendencia: "alcista" | "bajista" | "lateral";
+  senal: "compra" | "venta" | "espera";
+  justificacionSenal: string;
   inventariosCambioPct: number | null;
+  inventariosEsperadoPct: number | null;
+  contextoGeopolitico: string;
+  objetivo30dMin: number;
+  objetivo30dMax: number;
+  riesgos: string[];
+  proximosEventos: Array<{ nombre: string; fecha: string }>;
   score: number;
   detectadoAt: string;
   alertaEnviada: boolean;
@@ -19,59 +28,27 @@ export interface PetroleoOpportunity {
 const ALPHA_URL = "https://www.alphavantage.co/query";
 const EIA_URL = "https://api.eia.gov/v2/petroleum/stoc/wstk/data";
 
-function scorePetroleo(item: {
-  cambioPct: number;
-  inventariosCambioPct: number | null;
-  eventoOpep: boolean;
-}): number {
-  let score = 0;
-  if (Math.abs(item.cambioPct) > 2) score += 40;
-  if (item.eventoOpep) score += 25;
-  if (item.inventariosCambioPct !== null && item.inventariosCambioPct <= -3) score += 35;
-  return Math.min(100, score);
-}
-
-function signalPetroleo(item: {
-  cambioPct: number;
-  inventariosCambioPct: number | null;
-  eventoOpep: boolean;
-}): "compra" | "venta" | "alerta" | "neutral" {
-  if (item.inventariosCambioPct !== null && item.inventariosCambioPct <= -3) return "compra";
-  if (Math.abs(item.cambioPct) > 2 || item.eventoOpep) return "alerta";
-  if (item.cambioPct < -2) return "venta";
-  return "neutral";
-}
-
-async function fetchCommodity(functionName: "WTI" | "BRENT", apiKey: string): Promise<{ precio: number; cambioPct: number } | null> {
-  const response = await axios.get<{ data?: Array<{ value?: string; date?: string }> }>(ALPHA_URL, {
-    params: {
-      function: functionName,
-      interval: "weekly",
-      apikey: apiKey,
-    },
+async function fetchCommoditySeries(functionName: "WTI" | "BRENT", apiKey: string): Promise<number[] | null> {
+  const response = await axios.get<{ data?: Array<{ value?: string }> }>(ALPHA_URL, {
+    params: { function: functionName, interval: "daily", apikey: apiKey },
     timeout: 20_000,
   });
 
-  const serie = response.data.data ?? [];
-  const latest = Number(serie[0]?.value ?? NaN);
-  const prev = Number(serie[1]?.value ?? NaN);
+  const values = (response.data.data ?? [])
+    .map((row) => Number(row.value ?? NaN))
+    .filter((v) => Number.isFinite(v));
 
-  if (!Number.isFinite(latest) || !Number.isFinite(prev) || prev === 0) {
-    return null;
-  }
-
-  const cambioPct = ((latest - prev) / prev) * 100;
-  return { precio: latest, cambioPct };
+  return values.length >= 22 ? values : null;
 }
 
-async function fetchInventoriesChangePct(apiKey: string): Promise<number | null> {
+async function fetchInventoriesChangePct(apiKey: string): Promise<{ actualPct: number | null; expectedPct: number | null }> {
   const response = await axios.get<{ response?: { data?: Array<{ value?: string }> } }>(EIA_URL, {
     params: {
       api_key: apiKey,
       frequency: "weekly",
       data: ["value"],
       sort: "[{'column':'period','direction':'desc'}]",
-      length: 2,
+      length: 3,
     },
     timeout: 20_000,
   });
@@ -79,56 +56,110 @@ async function fetchInventoriesChangePct(apiKey: string): Promise<number | null>
   const rows = response.data.response?.data ?? [];
   const latest = Number(rows[0]?.value ?? NaN);
   const prev = Number(rows[1]?.value ?? NaN);
-  if (!Number.isFinite(latest) || !Number.isFinite(prev) || prev === 0) return null;
+  const prev2 = Number(rows[2]?.value ?? NaN);
 
-  return ((latest - prev) / prev) * 100;
+  if (!Number.isFinite(latest) || !Number.isFinite(prev) || prev === 0) {
+    return { actualPct: null, expectedPct: null };
+  }
+
+  const actualPct = ((latest - prev) / prev) * 100;
+  const expectedPct = Number.isFinite(prev2) && prev2 > 0 ? ((prev - prev2) / prev2) * 100 : null;
+  return { actualPct, expectedPct };
+}
+
+function detectTrend(weeklyPct: number, monthlyPct: number): "alcista" | "bajista" | "lateral" {
+  if (weeklyPct > 1.5 && monthlyPct > 2.5) return "alcista";
+  if (weeklyPct < -1.5 && monthlyPct < -2.5) return "bajista";
+  return "lateral";
+}
+
+function buildSignal(cambioSemanalPct: number, inventariosCambioPct: number | null, tendencia: "alcista" | "bajista" | "lateral") {
+  if (tendencia === "alcista" && (inventariosCambioPct ?? 0) < 0) {
+    return { senal: "compra" as const, justificacion: "Tendencia alcista con caída de inventarios" };
+  }
+  if (tendencia === "bajista" && (inventariosCambioPct ?? 0) > 0) {
+    return { senal: "venta" as const, justificacion: "Debilidad de precio y acumulación de inventarios" };
+  }
+  if (Math.abs(cambioSemanalPct) < 1) {
+    return { senal: "espera" as const, justificacion: "Mercado lateral sin confirmación direccional" };
+  }
+  return { senal: "espera" as const, justificacion: "Señales mixtas; esperar confirmación" };
+}
+
+function scorePetroleo(tendencia: "alcista" | "bajista" | "lateral", inventariosCambioPct: number | null, signal: "compra" | "venta" | "espera"): number {
+  const trendScore = tendencia === "lateral" ? 20 : 35;
+  const invScore = inventariosCambioPct === null ? 10 : Math.abs(inventariosCambioPct) > 2 ? 30 : 18;
+  const signalScore = signal === "espera" ? 20 : 30;
+  return Math.min(100, trendScore + invScore + signalScore);
 }
 
 export async function runPetroleoRadar(): Promise<PetroleoOpportunity[]> {
   const alphaKey = process.env.ALPHA_VANTAGE_API_KEY ?? "";
   const eiaKey = process.env.EIA_API_KEY ?? "";
-
   const detectadoAt = new Date().toISOString();
-  const [wti, brent, inventariosCambioPct] = await Promise.all([
-    alphaKey ? fetchCommodity("WTI", alphaKey).catch(() => null) : Promise.resolve(null),
-    alphaKey ? fetchCommodity("BRENT", alphaKey).catch(() => null) : Promise.resolve(null),
-    eiaKey ? fetchInventoriesChangePct(eiaKey).catch(() => null) : Promise.resolve(null),
+
+  const [wtiSeries, brentSeries, inventories] = await Promise.all([
+    alphaKey ? fetchCommoditySeries("WTI", alphaKey).catch(() => null) : Promise.resolve(null),
+    alphaKey ? fetchCommoditySeries("BRENT", alphaKey).catch(() => null) : Promise.resolve(null),
+    eiaKey ? fetchInventoriesChangePct(eiaKey).catch(() => ({ actualPct: null, expectedPct: null })) : Promise.resolve({ actualPct: null, expectedPct: null }),
   ]);
 
-  const eventoOpep = false;
-  const evento = eventoOpep ? "Evento OPEP detectado" : "Sin evento OPEP";
+  const geopolitical = "Monitorear tensiones en Medio Oriente y cumplimiento de recortes OPEP+";
+  const upcoming = [
+    { nombre: "Reporte EIA inventarios", fecha: "Próximo miércoles 10:30 ET" },
+    { nombre: "Reunión OPEP+", fecha: "Siguiente reunión oficial programada" },
+    { nombre: "Datos macro USA (inflación/empleo)", fecha: "Esta y próxima semana" },
+  ];
 
-  const baseData: Array<{ tipo: "WTI" | "BRENT"; precio: number; cambioPct: number }> = [];
-  if (wti) baseData.push({ tipo: "WTI", precio: wti.precio, cambioPct: wti.cambioPct });
-  if (brent) baseData.push({ tipo: "BRENT", precio: brent.precio, cambioPct: brent.cambioPct });
+  const raw: Array<{ tipo: "WTI" | "BRENT"; series: number[] | null }> = [
+    { tipo: "WTI", series: wtiSeries },
+    { tipo: "BRENT", series: brentSeries },
+  ];
 
-  const opportunities: PetroleoOpportunity[] = baseData.map((entry) => {
-    const score = scorePetroleo({
-      cambioPct: entry.cambioPct,
-      inventariosCambioPct,
-      eventoOpep,
+  const opportunities: PetroleoOpportunity[] = raw
+    .filter((r): r is { tipo: "WTI" | "BRENT"; series: number[] } => Array.isArray(r.series) && r.series.length >= 22)
+    .map((entry) => {
+      const current = entry.series[0];
+      const prevDay = entry.series[1];
+      const prevWeek = entry.series[5];
+      const prevMonth = entry.series[21];
+
+      const cambioDiarioPct = prevDay > 0 ? ((current - prevDay) / prevDay) * 100 : 0;
+      const cambioSemanalPct = prevWeek > 0 ? ((current - prevWeek) / prevWeek) * 100 : 0;
+      const cambioMensualPct = prevMonth > 0 ? ((current - prevMonth) / prevMonth) * 100 : 0;
+      const soporte = Math.min(...entry.series.slice(0, 20));
+      const resistencia = Math.max(...entry.series.slice(0, 20));
+      const tendencia = detectTrend(cambioSemanalPct, cambioMensualPct);
+      const signal = buildSignal(cambioSemanalPct, inventories.actualPct, tendencia);
+      const score = scorePetroleo(tendencia, inventories.actualPct, signal.senal);
+
+      return {
+        tipo: entry.tipo,
+        precio: current,
+        cambioDiarioPct,
+        cambioSemanalPct,
+        cambioMensualPct,
+        precioSoporte: soporte,
+        precioResistencia: resistencia,
+        tendencia,
+        senal: signal.senal,
+        justificacionSenal: signal.justificacion,
+        inventariosCambioPct: inventories.actualPct,
+        inventariosEsperadoPct: inventories.expectedPct,
+        contextoGeopolitico: geopolitical,
+        objetivo30dMin: current * 0.96,
+        objetivo30dMax: current * 1.06,
+        riesgos: [
+          "Sorpresa en inventarios EIA",
+          "Cambio abrupto en política OPEP+",
+          "Desaceleración macro global y caída de demanda",
+        ],
+        proximosEventos: upcoming,
+        score,
+        detectadoAt,
+        alertaEnviada: false,
+      };
     });
-
-    const senal = signalPetroleo({
-      cambioPct: entry.cambioPct,
-      inventariosCambioPct,
-      eventoOpep,
-    });
-
-    return {
-      tipo: entry.tipo,
-      precio: entry.precio,
-      cambioPct: entry.cambioPct,
-      precioSoporte: entry.precio * 0.97,
-      precioResistencia: entry.precio * 1.03,
-      senal,
-      evento,
-      inventariosCambioPct,
-      score,
-      detectadoAt,
-      alertaEnviada: false,
-    };
-  });
 
   const db = getSupabaseClient();
   if (opportunities.length > 0) {
@@ -136,11 +167,11 @@ export async function runPetroleoRadar(): Promise<PetroleoOpportunity[]> {
       opportunities.map((item) => ({
         tipo: item.tipo,
         precio: item.precio,
-        cambio_pct: item.cambioPct,
+        cambio_pct: item.cambioSemanalPct,
         precio_soporte: item.precioSoporte,
         precio_resistencia: item.precioResistencia,
         "señal": item.senal,
-        evento: item.evento,
+        evento: item.contextoGeopolitico,
         inventarios_cambio_pct: item.inventariosCambioPct,
         score: item.score,
         detectado_at: item.detectadoAt,
@@ -152,25 +183,24 @@ export async function runPetroleoRadar(): Promise<PetroleoOpportunity[]> {
   return opportunities.sort((a, b) => b.score - a.score);
 }
 
-
 export const petroleoRadar: RadarConfig = {
   key: "inv_petroleo",
-  name: "Radar Petróleo",
-  description: "Monitorea WTI/Brent, inventarios EIA y eventos OPEP.",
+  name: "Radar Petróleo Ejecutivo",
+  description: "Briefing de inversión en energía con WTI/Brent, inventarios EIA y señal táctica.",
   isActive: false,
   priority: 5,
-  scheduleMinutes: 10080,
+  scheduleMinutes: 2880,
   minScore: 0,
-  includeTerms: ["petroleo", "wti", "brent", "eia", "opep"],
+  includeTerms: ["petroleo", "wti", "brent", "eia", "opep", "energia"],
   excludeTerms: [],
   geoTerms: [],
-  entityTerms: ["WTI", "BRENT", "EIA", "OPEP"],
+  entityTerms: ["WTI", "BRENT", "EIA", "OPEP+"],
   rules: [
     {
       ruleType: "keyword",
       fieldName: "canonical_text",
       operator: "any_of",
-      value: ["petroleo", "wti", "brent"],
+      value: ["petroleo", "wti", "brent", "inventarios"],
       weight: 1,
       isRequired: false,
     },
