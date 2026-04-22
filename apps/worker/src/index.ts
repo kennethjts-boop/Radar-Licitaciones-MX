@@ -17,6 +17,7 @@ import { SchemaValidationError } from "./storage/schema-validator";
 import { startScheduler } from "./jobs/scheduler";
 import { initCommandBot } from "./agent/telegram.commands";
 import { setComprasMxSourceId } from "./jobs/collect.job";
+import { runMaestrosScraper } from "./scripts/maestros-morelos";
 
 async function main(): Promise<void> {
   // ── 1. Configuración y logger ─────────────────────────────────────────────
@@ -24,6 +25,13 @@ async function main(): Promise<void> {
   const log = getLogger();
 
   log.info("Worker booting...");
+
+
+  if (process.env.RUN_MAESTROS === "true") {
+    log.info("RUN_MAESTROS=true detectado: ejecutando scraper de maestros (one-off)");
+    await runMaestrosScraper();
+    process.exit(0);
+  }
 
   log.info(
     {
