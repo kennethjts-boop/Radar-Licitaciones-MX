@@ -10,7 +10,7 @@ export const fondosSaludRadar: RadarConfig = {
   name: "Fondos Internacionales — Sector Salud",
   description:
     "Detecta convocatorias de donaciones y fondos internacionales orientados al sector salud para donatarias autorizadas en México.",
-  isActive: true,
+  isActive: false,
   priority: 2,
   scheduleMinutes: 360, // cada 6 horas, sincronizado con el job de fondos
   minScore: 0.2,

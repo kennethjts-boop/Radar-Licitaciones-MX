@@ -10,7 +10,7 @@ export const fondosDeporteRadar: RadarConfig = {
   name: "Fondos Internacionales — Sector Deporte",
   description:
     "Detecta convocatorias de donaciones y fondos internacionales orientados al sector deporte para donatarias autorizadas en México.",
-  isActive: true,
+  isActive: false,
   priority: 2,
   scheduleMinutes: 360,
   minScore: 0.2,

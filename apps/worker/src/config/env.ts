@@ -48,10 +48,10 @@ const envSchema = z.object({
   HTTP_PROXY: z.string().optional(),
   HTTPS_PROXY: z.string().optional(),
 
-  // Fondos internacionales — pausar collector sin redeploy
+  // Fondos internacionales — deshabilitado permanentemente
   FONDOS_ENABLED: z
     .string()
-    .default("true")
+    .default("false")
     .transform((v) => v === "true"),
 
   // Compras MX Incremental Strategy

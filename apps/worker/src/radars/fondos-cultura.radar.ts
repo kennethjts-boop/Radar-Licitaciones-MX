@@ -10,7 +10,7 @@ export const fondosCulturaRadar: RadarConfig = {
   name: "Fondos Internacionales — Sector Cultura",
   description:
     "Detecta convocatorias de donaciones y fondos internacionales orientados al sector cultura para donatarias autorizadas en México.",
-  isActive: true,
+  isActive: false,
   priority: 2,
   scheduleMinutes: 360,
   minScore: 0.2,
