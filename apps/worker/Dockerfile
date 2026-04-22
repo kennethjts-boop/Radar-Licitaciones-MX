@@ -16,7 +16,7 @@ WORKDIR /build
 COPY apps/worker/package*.json ./
 
 # 2. Instalar dependencias (incluyendo devDependencies para compilar)
-RUN npm ci
+RUN npm install
 
 # 3. Copiar código fuente real
 ARG CACHE_BUST=2
@@ -39,7 +39,7 @@ WORKDIR /app
 COPY apps/worker/package*.json ./
 
 # 2. Instalar exclusivamente dependencias de producción
-RUN npm ci --only=production
+RUN npm install --only=production
 
 # 2.1 Asegurar instalación de navegadores Playwright en deploy (Railway)
 RUN npx playwright install --with-deps chromium
