@@ -25,6 +25,7 @@ async function main(): Promise<void> {
 
   log.info("Worker booting...");
 
+
   log.info(
     {
       env: config.NODE_ENV,
