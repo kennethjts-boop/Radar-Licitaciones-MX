@@ -7,9 +7,9 @@ const log = createModuleLogger("daily-acciones-job");
 
 export const DAILY_ACCIONES_CRON = "0 9 * * 1-5";
 
-function asNum(value: number | null): string {
+function asNum(value: number | null, digits = 2): string {
   if (value === null) return "N/D";
-  return value.toFixed(2);
+  return value.toFixed(digits);
 }
 
 export async function runDailyAccionesJob(): Promise<void> {
@@ -17,22 +17,42 @@ export async function runDailyAccionesJob(): Promise<void> {
     const fecha = todayMexicoStr();
     const items = await runAccionesRadar();
 
+    const corto = items.filter((i) => i.horizonte === "corto").slice(0, 3);
+    const mediano = items.filter((i) => i.horizonte === "mediano").slice(0, 3);
+    const largo = items.filter((i) => i.horizonte === "largo").slice(0, 3);
+
     const lines: string[] = [`📈 RADAR ACCIONES — ${fecha}`, ""];
 
-    for (const item of items) {
-      lines.push(`📌 ${item.ticker} (${item.nombre})`);
-      lines.push(
-        `💰 ${item.precioActual.toFixed(2)} | Señal: ${item.senal.toUpperCase()} | Score: ${item.score}`,
-      );
-      lines.push(
-        `📊 RSI: ${asNum(item.rsi)} | MACD: ${asNum(item.macd)} | Vol. anómalo: ${item.volumenAnomalo ? "Sí" : "No"}`,
-      );
-      lines.push(`🏷️ Sector: ${item.sector} | Mercado: ${item.mercado}`);
-      lines.push("─────────────────");
-      lines.push("");
-    }
+    const renderSection = (title: string, sectionItems: typeof items) => {
+      lines.push(title);
+      if (sectionItems.length === 0) {
+        lines.push("Sin señales suficientes hoy.");
+        lines.push("");
+        return;
+      }
 
-    lines.push(`✅ ${items.length} oportunidades seleccionadas (Top 5)`);
+      for (const item of sectionItems) {
+        lines.push(`📊 ${item.ticker} | ${item.nombre} | ${item.sector} (${item.mercado})`);
+        lines.push(`💲 ${item.precioActual.toFixed(2)} | Día ${item.cambioDiaPct.toFixed(2)}% | Score ${item.score}`);
+        lines.push(`🎯 Objetivo ${item.targetPrice === null ? "N/D" : item.targetPrice.toFixed(2)} | Upside ${item.upsidePct === null ? "N/D" : `${item.upsidePct.toFixed(1)}%`}`);
+        lines.push(`🔍 ${item.razon}`);
+        lines.push(`⚠️ Riesgo ${item.riesgo}: ${item.riesgoRazon}`);
+        lines.push(`💡 ${item.accionSugerida}`);
+        lines.push(
+          `🌟 Desglose score — Técnico ${item.scoreDesglose.tecnico} | Tendencia ${item.scoreDesglose.tendencia} | Fundamental ${item.scoreDesglose.fundamental} | Riesgo ${item.scoreDesglose.riesgo}`,
+        );
+        if (item.noticias.length > 0) {
+          lines.push(`📰 Noticias: ${item.noticias.join(" | ")}`);
+        }
+        lines.push("─────────────────");
+      }
+      lines.push("");
+    };
+
+    renderSection("🚀 CORTO PLAZO — Top 3", corto);
+    renderSection("📅 MEDIANO PLAZO — Top 3", mediano);
+    renderSection("🌱 LARGO PLAZO — Top 3", largo);
+
     await sendTelegramMessage(lines.join("\n"), "HTML");
   } catch (err) {
     log.error({ err }, "Error en daily acciones job");
