@@ -6,6 +6,7 @@ const log = createModuleLogger("pdf-util");
 
 const DEFAULT_MAX_PAGES = 40;
 const DEFAULT_MAX_CHARS = 120_000;
+const PDF_PARSE_TIMEOUT_MS = 30_000;
 
 export interface ExtractPdfTextOptions {
   maxPages?: number;
@@ -25,7 +26,15 @@ export async function extractTextFromPdf(
 
   try {
     const fileBuffer = readFileSync(tempFilePath);
-    const parsed = await pdf(fileBuffer, { max: maxPages });
+    const parsed = await Promise.race([
+      pdf(fileBuffer, { max: maxPages }),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`PDF parse timeout after ${PDF_PARSE_TIMEOUT_MS}ms`)),
+          PDF_PARSE_TIMEOUT_MS,
+        ),
+      ),
+    ]);
 
     const rawText = (parsed.text ?? "").trim();
     if (!rawText) {
