@@ -267,7 +267,7 @@ export const apuestasRadar: RadarConfig = {
   key: "inv_apuestas",
   name: "Radar Apuestas Predictivo + Arbitraje",
   description: "Detecta value bets con modelo implícito y marca arbitrajes garantizados cuando existan.",
-  isActive: false,
+  isActive: true,
   priority: 5,
   scheduleMinutes: 1440,
   minScore: 0,

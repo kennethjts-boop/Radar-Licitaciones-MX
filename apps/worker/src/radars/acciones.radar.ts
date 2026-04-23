@@ -268,7 +268,7 @@ export const accionesRadar: RadarConfig = {
   key: "inv_acciones",
   name: "Radar Acciones por Horizonte",
   description: "Monitorea señales técnicas, momentum y upside con segmentación corto/mediano/largo plazo.",
-  isActive: false,
+  isActive: true,
   priority: 5,
   scheduleMinutes: 1440,
   minScore: 0,

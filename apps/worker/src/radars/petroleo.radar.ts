@@ -187,7 +187,7 @@ export const petroleoRadar: RadarConfig = {
   key: "inv_petroleo",
   name: "Radar Petróleo Ejecutivo",
   description: "Briefing de inversión en energía con WTI/Brent, inventarios EIA y señal táctica.",
-  isActive: false,
+  isActive: true,
   priority: 5,
   scheduleMinutes: 2880,
   minScore: 0,
