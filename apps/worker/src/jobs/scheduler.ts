@@ -24,7 +24,6 @@ import { runCollectFondosJob } from "./collect-fondos.job";
 import { runDailyAccionesJob, DAILY_ACCIONES_CRON } from "./daily-acciones.job";
 import { runDailyApuestasJob, DAILY_APUESTAS_CRON } from "./daily-apuestas.job";
 import { runDailyPetroleoJob, DAILY_PETROLEO_CRON } from "./daily-petroleo.job";
-import { runDailySubastasJob, DAILY_SUBASTAS_CRON } from "./daily-subastas.job";
 
 const log = createModuleLogger("scheduler");
 
@@ -123,16 +122,6 @@ export function startScheduler(): void {
     async () => {
       log.info({ cron: DAILY_PETROLEO_CRON }, "🛢️ Disparando reporte diario de petróleo");
       await runDailyPetroleoJob();
-    },
-    { timezone: "America/Mexico_City" },
-  );
-
-  // Subastas (Diario 8am)
-  cron.schedule(
-    DAILY_SUBASTAS_CRON,
-    async () => {
-      log.info({ cron: DAILY_SUBASTAS_CRON }, "🏗️ Disparando reporte diario de subastas");
-      await runDailySubastasJob();
     },
     { timezone: "America/Mexico_City" },
   );

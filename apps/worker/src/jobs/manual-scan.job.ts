@@ -14,22 +14,23 @@ export async function runFullManualScan(): Promise<void> {
   await sendTelegramMessage("🚀 <b>Iniciando Escaneo Manual Completo...</b>\n(Licitaciones + Inversión)", "HTML");
 
   try {
-    // 1. Licitaciones
+    // 1. Licitaciones (Incluye CAPUFE)
     log.info("🔍 Escaneando Licitaciones (ComprasMX)...");
     await runCollectJob();
     
     // 2. Especializados
     log.info("📊 Ejecutando radares especializados...");
     
+    // Ejecutar en paralelo pero con manejo individual para reportes
     await Promise.allSettled([
       runDailyAccionesJob(),
-      runDailyApuestasJob(),
+      // El usuario quiere las "3 muy buenas" para el scaneo manual
+      runDailyApuestasJob(3), 
       runDailyPetroleoJob(),
-      runDailySubastasJob(),
     ]);
 
     log.info("✅ Escaneo manual completado");
-    await sendTelegramMessage("✅ <b>Escaneo Manual Completado</b>\nLos resultados han sido enviados si se encontraron matches.", "HTML");
+    await sendTelegramMessage("✅ <b>Escaneo Manual Completado</b>\nLos resultados de CAPUFE e Inversión han sido enviados si se encontraron coincidencias.", "HTML");
   } catch (err) {
     log.error({ err }, "Error en escaneo manual");
     await sendTelegramMessage("❌ <b>Error en Escaneo Manual</b>\nRevisar logs del sistema.", "HTML");

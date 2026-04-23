@@ -7,10 +7,11 @@ const log = createModuleLogger("daily-apuestas-job");
 
 export const DAILY_APUESTAS_CRON = "0 8 * * *";
 
-export async function runDailyApuestasJob(): Promise<void> {
+export async function runDailyApuestasJob(limit: number = 10): Promise<void> {
   try {
     const fecha = todayMexicoStr();
-    const items = await runApuestasRadar();
+    const allItems = await runApuestasRadar();
+    const items = allItems.slice(0, limit);
 
     const lines: string[] = [`🎯 RADAR APUESTAS — ${fecha}`, ""];
 
