@@ -324,9 +324,6 @@ export async function runApuestasRadar(): Promise<ApuestasResult> {
     }
   }
 
-    }
-  }
-
   const top = found.sort((a, b) => b.score - a.score).slice(0, 15);
 
   const db = getSupabaseClient();

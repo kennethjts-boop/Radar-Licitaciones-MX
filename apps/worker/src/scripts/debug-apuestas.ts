@@ -27,7 +27,8 @@ async function debugApuestas() {
   // 2. Ejecutar radar completo
   console.log("\n2. Ejecutando runApuestasRadar()...");
   try {
-    const results = await runApuestasRadar();
+    const response = await runApuestasRadar();
+    const results = response.items;
     console.log(`\n--- RESULTADOS ---`);
     console.log(`Total oportunidades encontradas: ${results.length}`);
     
