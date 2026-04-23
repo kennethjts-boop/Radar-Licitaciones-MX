@@ -182,12 +182,12 @@ export async function runApuestasRadar(): Promise<ApuestaOpportunity[]> {
           }
           if (market.key === "corners") {
             for (const outcome of market.outcomes ?? []) {
-              cornersRows.push({ team: outcome.name, price: outcome.price, book: bookmaker.title });
+              cornersRows.push({ name: outcome.name, price: outcome.price, book: bookmaker.title });
             }
           }
           if (market.key === "cards") {
             for (const outcome of market.outcomes ?? []) {
-              cardsRows.push({ team: outcome.name, price: outcome.price, book: bookmaker.title });
+              cardsRows.push({ name: outcome.name, price: outcome.price, book: bookmaker.title });
             }
           }
         }
@@ -244,17 +244,17 @@ export async function runApuestasRadar(): Promise<ApuestaOpportunity[]> {
       const totalProb = totalsNormalized ? Math.max(totalsNormalized[0], totalsNormalized[1]) * 100 : null;
 
       // Córners (Over/Under)
-      const overCorners = cornersRows.find((r) => /over/i.test(r.team));
-      const underCorners = cornersRows.find((r) => /under/i.test(r.team));
+      const overCorners = cornersRows.find((r) => /over/i.test(r.name));
+      const underCorners = cornersRows.find((r) => /under/i.test(r.name));
       const cornersNormalized = overCorners && underCorners ? normalizeProbs([overCorners.price, underCorners.price]) : null;
-      const cornersPick = cornersNormalized ? (cornersNormalized[0] >= cornersNormalized[1] ? `${overCorners?.team}` : `${underCorners?.team}`) : "N/D";
+      const cornersPick = cornersNormalized ? (cornersNormalized[0] >= cornersNormalized[1] ? `${overCorners?.name}` : `${underCorners?.name}`) : "N/D";
       const cornersProb = cornersNormalized ? Math.max(cornersNormalized[0], cornersNormalized[1]) * 100 : null;
 
       // Tarjetas (Over/Under)
-      const overCards = cardsRows.find((r) => /over/i.test(r.team));
-      const underCards = cardsRows.find((r) => /under/i.test(r.team));
+      const overCards = cardsRows.find((r) => /over/i.test(r.name));
+      const underCards = cardsRows.find((r) => /under/i.test(r.name));
       const cardsNormalized = overCards && underCards ? normalizeProbs([overCards.price, underCards.price]) : null;
-      const cardsPick = cardsNormalized ? (cardsNormalized[0] >= cardsNormalized[1] ? `${overCards?.team}` : `${underCards?.team}`) : "N/D";
+      const cardsPick = cardsNormalized ? (cardsNormalized[0] >= cardsNormalized[1] ? `${overCards?.name}` : `${underCards?.name}`) : "N/D";
       const cardsProb = cardsNormalized ? Math.max(cardsNormalized[0], cardsNormalized[1]) * 100 : null;
 
       const arb = calculateArbitrage(bestHome.price, bestAway.price);
