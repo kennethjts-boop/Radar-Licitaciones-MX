@@ -3,7 +3,6 @@ import { runCollectJob } from "./collect.job";
 import { runDailyAccionesJob } from "./daily-acciones.job";
 import { runDailyApuestasJob } from "./daily-apuestas.job";
 import { runDailyPetroleoJob } from "./daily-petroleo.job";
-import { runDailySubastasJob } from "./daily-subastas.job";
 import { sendTelegramMessage } from "../alerts/telegram.alerts";
 
 const log = createModuleLogger("manual-scan-job");
