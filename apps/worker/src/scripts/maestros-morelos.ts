@@ -8,7 +8,6 @@ import { getSupabaseClient } from "../storage/client";
 import { getLogger } from "../core/logger";
 
 const XLSX: any = require("xlsx");
-const PDFDocument = require("pdfkit") as any;
 
 type EscuelaBase = {
   cct: string;
@@ -294,58 +293,87 @@ function createExcel(maestros: MaestroRegistro[], escuelasSinDirector: EscuelaBa
 }
 
 async function createPdf(maestros: MaestroRegistro[]): Promise<void> {
-  const doc = new PDFDocument({ margin: 40 });
-  const chunks: Buffer[] = [];
-
-  doc.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
-
-  doc.fontSize(20).text("Directorio Docente Telesecundaria Morelos 2026", { align: "center" });
-  doc.moveDown();
-
   const municipios = Array.from(new Set(maestros.map((m) => m.municipio))).sort();
-
-  doc.addPage();
-  doc.fontSize(14).text("Índice por municipio");
-  municipios.forEach((m, i) => doc.fontSize(11).text(`${i + 1}. ${m}`));
-
   const bySchool = new Map<string, MaestroRegistro[]>();
+
   maestros.forEach((m) => {
     const key = `${m.municipio}::${m.cct}::${m.escuela}`;
     bySchool.set(key, [...(bySchool.get(key) ?? []), m]);
   });
 
-  for (const [key, lista] of bySchool.entries()) {
-    const [municipio, cct, escuela] = key.split("::");
-    const first = lista[0];
+  const cards = Array.from(bySchool.entries())
+    .map(([key, lista]) => {
+      const [municipio, cct, escuela] = key.split("::");
+      const first = lista[0];
+      const docentes = lista
+        .map(
+          (t) => `
+            <div class="docente">
+              <strong>${escapeHtml(t.nombre)}</strong> — ${escapeHtml(t.funcion)}<br/>
+              Horas: ${t.horas_asignadas} | Antigüedad: ${escapeHtml(t.antiguedad)}<br/>
+              Email: ${escapeHtml(t.email_institucional)} | Zona: ${escapeHtml(t.zona_escolar)} | Supervisor: ${escapeHtml(t.supervisor_zona)}<br/>
+              Menciones: ${escapeHtml(t.menciones_publicas.join(" | ") || "N/D")}
+            </div>
+          `,
+        )
+        .join("\n");
 
-    doc.addPage();
-    doc.fontSize(13).text(`${escuela} (${cct})`);
-    doc.fontSize(11).text(`Municipio: ${municipio}`);
-    doc.text(`Dirección: ${first.direccion_escuela}`);
-    doc.text(`Teléfono: ${first.telefono_escuela}`);
-    doc.moveDown(0.5);
+      return `
+        <section class="escuela">
+          <h3>${escapeHtml(escuela)} (${escapeHtml(cct)})</h3>
+          <p><b>Municipio:</b> ${escapeHtml(municipio)}</p>
+          <p><b>Dirección:</b> ${escapeHtml(first.direccion_escuela)}</p>
+          <p><b>Teléfono:</b> ${escapeHtml(first.telefono_escuela)}</p>
+          ${docentes}
+        </section>
+      `;
+    })
+    .join("\n");
 
-    for (const t of lista) {
-      doc.fontSize(11).text(`• ${t.nombre} — ${t.funcion}`);
-      doc.text(`  Horas: ${t.horas_asignadas} | Antigüedad: ${t.antiguedad}`);
-      doc.text(`  Email: ${t.email_institucional} | Zona: ${t.zona_escolar} | Supervisor: ${t.supervisor_zona}`);
-      doc.text(`  Menciones: ${t.menciones_publicas.join(" | ") || "N/D"}`);
-    }
-  }
+  const html = `
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <style>
+          body { font-family: Arial, sans-serif; color: #111; font-size: 12px; }
+          h1 { text-align: center; margin-bottom: 8px; }
+          h2 { margin-top: 24px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+          h3 { margin-bottom: 4px; }
+          .index li { margin: 2px 0; }
+          .escuela { page-break-inside: avoid; margin-bottom: 20px; border: 1px solid #ddd; padding: 10px; border-radius: 6px; }
+          .docente { margin-top: 8px; padding-top: 6px; border-top: 1px dashed #ccc; }
+        </style>
+      </head>
+      <body>
+        <h1>Directorio Docente Telesecundaria Morelos 2026</h1>
+        <p>Generado: ${new Date().toISOString()}</p>
 
-  doc.end();
+        <h2>Índice por municipio</h2>
+        <ul class="index">
+          ${municipios.map((m) => `<li>${escapeHtml(m)}</li>`).join("\n")}
+        </ul>
 
-  await new Promise<void>((resolve, reject) => {
-    doc.on("end", async () => {
-      try {
-        await fsp.writeFile(OUT_PDF, Buffer.concat(chunks));
-        resolve();
-      } catch (err) {
-        reject(err);
-      }
-    });
-    doc.on("error", reject);
-  });
+        <h2>Detalle por escuela y docente</h2>
+        ${cards}
+      </body>
+    </html>
+  `;
+
+  const puppeteer = require("puppeteer") as any;
+  const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox"] });
+  const page = await browser.newPage();
+  await page.setContent(html, { waitUntil: "networkidle0" });
+  await page.pdf({ path: OUT_PDF, format: "A4", printBackground: true, margin: { top: "18mm", right: "12mm", bottom: "18mm", left: "12mm" } });
+  await browser.close();
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 async function sendTelegramSummaryAndFiles(maestros: MaestroRegistro[], failedSources: Set<string>): Promise<void> {

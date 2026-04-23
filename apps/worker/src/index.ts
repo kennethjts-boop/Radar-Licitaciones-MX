@@ -28,9 +28,18 @@ async function main(): Promise<void> {
 
 
   if (process.env.RUN_MAESTROS === "true") {
-    log.info("RUN_MAESTROS=true detectado: ejecutando scraper de maestros (one-off)");
-    await runMaestrosScraper();
-    process.exit(0);
+    log.info("RUN_MAESTROS=true detectado: ejecutando scraper de maestros");
+    // Si estamos en local o el usuario lo pide explícitamente como tarea única
+    if (config.NODE_ENV === "development" || process.env.MAESTROS_ONLY === "true") {
+      await runMaestrosScraper();
+      log.info("Scraper de maestros finalizado (modo tarea única) — saliendo");
+      process.exit(0);
+    } else {
+      // En producción/worker, lo corremos en background o al inicio pero NO salimos
+      runMaestrosScraper()
+        .then(() => log.info("Scraper de maestros finalizado (background)"))
+        .catch((err) => log.error({ err }, "Error en scraper de maestros (background)"));
+    }
   }
 
   log.info(

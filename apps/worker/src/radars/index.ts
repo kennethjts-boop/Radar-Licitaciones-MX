@@ -17,6 +17,9 @@ import { fondosSaludRadar } from "./fondos-salud.radar";
 import { fondosDeporteRadar } from "./fondos-deporte.radar";
 import { fondosCulturaRadar } from "./fondos-cultura.radar";
 import { subastasRadar } from "./subastas.radar";
+import { accionesRadar } from "./acciones.radar";
+import { apuestasRadar } from "./apuestas.radar";
+import { petroleoRadar } from "./petroleo.radar";
 
 /**
  * Lista canónica de todos los radares.
@@ -32,6 +35,11 @@ export const RADARS: RadarConfig[] = [
   imssMorelosRadar,
   imssBienestarMorelosRadar,
   habitatMorelosRadar,
+  // Inversión y Oportunidades Especiales
+  subastasRadar,
+  accionesRadar,
+  apuestasRadar,
+  petroleoRadar,
   // Fondos internacionales para donatarias autorizadas
   fondosSaludRadar,
   fondosDeporteRadar,

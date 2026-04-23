@@ -1,0 +1,26 @@
+{
+  "name": "scraper-maestros",
+  "version": "1.0.0",
+  "description": "Scraper for Maestros in Morelos",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.104.0",
+    "axios": "^1.6.8",
+    "cheerio": "^1.0.0-rc.12",
+    "csv-parse": "^5.5.5",
+    "dotenv": "^16.3.1",
+    "exceljs": "^4.4.0",
+    "puppeteer": "^22.6.5",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "tsx": "^4.7.2",
+    "typescript": "^5.4.5"
+  }
+}

@@ -173,5 +173,22 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     }
   });
 
-  log.info("✅ Comandos registrados: /prueba, /buscar, /debug_resumen");
+  // ── /scan ──────────────────────────────────────────────────────────────
+  bot.onText(/\/scan/, async (msg) => {
+    if (String(msg.chat.id) !== chatId) return;
+    log.info({ from: msg.from?.username }, "📥 /scan");
+
+    try {
+      const { runFullManualScan } = await import("../jobs/manual-scan.job");
+      // Ejecutar en background para no bloquear el bot
+      runFullManualScan().catch((err) => {
+        log.error({ err }, "Error en ejecución de /scan");
+      });
+    } catch (err) {
+      log.error({ err }, "❌ Error inicializando /scan");
+      await bot.sendMessage(chatId, "❌ Error iniciando escaneo manual").catch(() => {});
+    }
+  });
+
+  log.info("✅ Comandos registrados: /prueba, /buscar, /debug_resumen, /scan");
 }
