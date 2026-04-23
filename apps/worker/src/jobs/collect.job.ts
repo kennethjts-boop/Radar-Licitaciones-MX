@@ -700,6 +700,14 @@ export async function runCollectJob(): Promise<void> {
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : String(err);
       log.error({ err }, "Error en ciclo de colección");
+      // Notificar a Telegram cuando hay falla crítica del collector
+      await sendTelegramMessage(
+        `🚨 <b>ERROR CRÍTICO EN COLLECTOR</b>\n\n` +
+        `El ciclo de colección falló con un error no recuperable:\n` +
+        `<code>${(errorMessage ?? "Error desconocido").slice(0, 200)}</code>\n\n` +
+        `Revisar logs de Railway para más detalles.`,
+        "HTML",
+      ).catch(() => {});
     } finally {
       const finishedAt = nowISO();
 
