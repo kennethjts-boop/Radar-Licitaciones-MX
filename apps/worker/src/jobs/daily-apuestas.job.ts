@@ -23,8 +23,10 @@ export async function runDailyApuestasJob(limit: number = 10): Promise<void> {
       if (isSoccer) {
         lines.push(`📊 BTTS: ${item.bttsPick} (${item.bttsProbPct === null ? "N/D" : `${item.bttsProbPct.toFixed(1)}%`})`);
         lines.push(`📊 Total goles: ${item.totalPick} (${item.totalProbPct === null ? "N/D" : `${item.totalProbPct.toFixed(1)}%`})`);
+        lines.push(`🚩 Tiros de esquina: ${item.cornersPick} (${item.cornersProbPct === null ? "N/D" : `${item.cornersProbPct.toFixed(1)}%`})`);
+        lines.push(`🟨 Tarjetas: ${item.cardsPick} (${item.cardsProbPct === null ? "N/D" : `${item.cardsProbPct.toFixed(1)}%`})`);
       } else {
-        lines.push(`📊 Total carreras: ${item.totalPick} (${item.totalProbPct === null ? "N/D" : `${item.totalProbPct.toFixed(1)}%`})`);
+        lines.push(`📊 Totales: ${item.totalPick} (${item.totalProbPct === null ? "N/D" : `${item.totalProbPct.toFixed(1)}%`})`);
       }
       lines.push(`💡 Value bet: ${item.valueBet ? "Sí" : "No"} | Edge ${(item.probabilidadModeladaPct - item.probabilidadImplicitaPct).toFixed(1)} pts`);
       lines.push(`📈 Top 3 casas: ${item.topCasas.slice(0, 3).map((b) => `${b.casa} ${b.cuota.toFixed(2)}`).join(" | ")}`);

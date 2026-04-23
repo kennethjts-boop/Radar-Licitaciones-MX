@@ -20,6 +20,10 @@ export interface ApuestaOpportunity {
   bttsProbPct: number | null;
   totalPick: string;
   totalProbPct: number | null;
+  cornersPick: string;
+  cornersProbPct: number | null;
+  cardsPick: string;
+  cardsProbPct: number | null;
   resultado1X2: string;
   valueBet: boolean;
   arbitrajeGarantizado: boolean;
@@ -134,7 +138,7 @@ export async function runApuestasRadar(): Promise<ApuestaOpportunity[]> {
           params: {
             apiKey,
             regions: "us,eu",
-            markets: "h2h,btts,totals",
+            markets: "h2h,btts,totals,corners,cards",
             oddsFormat: "decimal",
           },
           timeout: 30_000,
@@ -156,6 +160,8 @@ export async function runApuestasRadar(): Promise<ApuestaOpportunity[]> {
       const h2hRows: Array<{ team: string; price: number; book: string }> = [];
       const bttsRows: Array<{ name: string; price: number; book: string }> = [];
       const totalsRows: Array<{ name: string; price: number; book: string }> = [];
+      const cornersRows: Array<{ name: string; price: number; book: string }> = [];
+      const cardsRows: Array<{ name: string; price: number; book: string }> = [];
 
       for (const bookmaker of event.bookmakers ?? []) {
         for (const market of bookmaker.markets ?? []) {
@@ -174,36 +180,82 @@ export async function runApuestasRadar(): Promise<ApuestaOpportunity[]> {
               totalsRows.push({ name: outcome.name, price: outcome.price, book: bookmaker.title });
             }
           }
+          if (market.key === "corners") {
+            for (const outcome of market.outcomes ?? []) {
+              cornersRows.push({ team: outcome.name, price: outcome.price, book: bookmaker.title });
+            }
+          }
+          if (market.key === "cards") {
+            for (const outcome of market.outcomes ?? []) {
+              cardsRows.push({ team: outcome.name, price: outcome.price, book: bookmaker.title });
+            }
+          }
         }
       }
 
       const homeOdds = h2hRows.filter((r) => r.team === event.home_team).sort((a, b) => b.price - a.price).slice(0, 3);
       const awayOdds = h2hRows.filter((r) => r.team === event.away_team).sort((a, b) => b.price - a.price).slice(0, 3);
+      const drawOdds = h2hRows.filter((r) => /draw|empate/i.test(r.team)).sort((a, b) => b.price - a.price).slice(0, 3);
+      
       if (homeOdds.length === 0 || awayOdds.length === 0) continue;
 
       const bestHome = homeOdds[0];
       const bestAway = awayOdds[0];
-      const twoWay = normalizeProbs([bestHome.price, bestAway.price]);
+      const bestDraw = drawOdds[0];
 
-      const modelHomePct = twoWay[0] * 100;
-      const modelAwayPct = twoWay[1] * 100;
-      const predWinner = modelHomePct >= modelAwayPct ? event.home_team : event.away_team;
-      const predWinnerPct = Math.max(modelHomePct, modelAwayPct);
-      const bestWinnerRow = predWinner === event.home_team ? bestHome : bestAway;
+      // Normalizar probabilidades (soporte 3-way si hay empate)
+      const prices = bestDraw ? [bestHome.price, bestAway.price, bestDraw.price] : [bestHome.price, bestAway.price];
+      const normalized = normalizeProbs(prices);
+
+      const modelHomePct = normalized[0] * 100;
+      const modelAwayPct = normalized[1] * 100;
+      const modelDrawPct = bestDraw ? normalized[2] * 100 : 0;
+
+      // Ganador sugerido (el de mayor probabilidad modelada)
+      let predWinner = event.home_team;
+      let predWinnerPct = modelHomePct;
+      let bestWinnerRow = bestHome;
+
+      if (modelAwayPct > modelHomePct && modelAwayPct > modelDrawPct) {
+        predWinner = event.away_team;
+        predWinnerPct = modelAwayPct;
+        bestWinnerRow = bestAway;
+      } else if (modelDrawPct > modelHomePct && modelDrawPct > modelAwayPct) {
+        predWinner = "Empate";
+        predWinnerPct = modelDrawPct;
+        bestWinnerRow = bestDraw!;
+      }
+
       const impliedWinnerPct = impliedProbability(bestWinnerRow.price) * 100;
       const edgePct = predWinnerPct - impliedWinnerPct;
 
+      // BTTS
       const bttsBestYes = bttsRows.filter((r) => /^yes$/i.test(r.name)).sort((a, b) => b.price - a.price)[0];
       const bttsBestNo = bttsRows.filter((r) => /^no$/i.test(r.name)).sort((a, b) => b.price - a.price)[0];
       const bttsNormalized = bttsBestYes && bttsBestNo ? normalizeProbs([bttsBestYes.price, bttsBestNo.price]) : null;
       const bttsPick = bttsNormalized ? (bttsNormalized[0] >= bttsNormalized[1] ? "Sí" : "No") : "N/D";
       const bttsProb = bttsNormalized ? Math.max(bttsNormalized[0], bttsNormalized[1]) * 100 : null;
 
+      // Totales (Over/Under 2.5)
       const over25 = totalsRows.find((r) => /over/i.test(r.name) && /2\.?5/.test(r.name));
       const under25 = totalsRows.find((r) => /under/i.test(r.name) && /2\.?5/.test(r.name));
       const totalsNormalized = over25 && under25 ? normalizeProbs([over25.price, under25.price]) : null;
       const totalPick = totalsNormalized ? (totalsNormalized[0] >= totalsNormalized[1] ? "Over 2.5" : "Under 2.5") : "N/D";
       const totalProb = totalsNormalized ? Math.max(totalsNormalized[0], totalsNormalized[1]) * 100 : null;
+
+      // Córners (Over/Under)
+      const overCorners = cornersRows.find((r) => /over/i.test(r.team));
+      const underCorners = cornersRows.find((r) => /under/i.test(r.team));
+      const cornersNormalized = overCorners && underCorners ? normalizeProbs([overCorners.price, underCorners.price]) : null;
+      const cornersPick = cornersNormalized ? (cornersNormalized[0] >= cornersNormalized[1] ? `${overCorners?.team}` : `${underCorners?.team}`) : "N/D";
+      const cornersProb = cornersNormalized ? Math.max(cornersNormalized[0], cornersNormalized[1]) * 100 : null;
+
+      // Tarjetas (Over/Under)
+      const overCards = cardsRows.find((r) => /over/i.test(r.team));
+      const underCards = cardsRows.find((r) => /under/i.test(r.team));
+      const cardsNormalized = overCards && underCards ? normalizeProbs([overCards.price, underCards.price]) : null;
+      const cardsPick = cardsNormalized ? (cardsNormalized[0] >= cardsNormalized[1] ? `${overCards?.team}` : `${underCards?.team}`) : "N/D";
+      const cardsProb = cardsNormalized ? Math.max(cardsNormalized[0], cardsNormalized[1]) * 100 : null;
 
       const arb = calculateArbitrage(bestHome.price, bestAway.price);
       const confidence = confidenceFromEdge(edgePct, event.bookmakers?.length ?? 0);
@@ -221,7 +273,7 @@ export async function runApuestasRadar(): Promise<ApuestaOpportunity[]> {
         mercadoRecomendado: isSoccer ? `1X2 — ${predWinner}` : `Moneyline — ${predWinner}`,
         cuotaRecomendada: bestWinnerRow.price,
         casaRecomendada: bestWinnerRow.book,
-        topCasas: [bestWinnerRow, ...(predWinner === event.home_team ? homeOdds.slice(1) : awayOdds.slice(1))].map((x) => ({
+        topCasas: [bestWinnerRow, ...(predWinner === event.home_team ? homeOdds.slice(1) : predWinner === event.away_team ? awayOdds.slice(1) : drawOdds.slice(1))].map((x) => ({
           casa: x.book,
           cuota: x.price,
         })),
@@ -232,7 +284,11 @@ export async function runApuestasRadar(): Promise<ApuestaOpportunity[]> {
         bttsProbPct: bttsProb,
         totalPick,
         totalProbPct: totalProb,
-        resultado1X2: `${event.home_team} ${modelHomePct.toFixed(1)}% vs ${event.away_team} ${modelAwayPct.toFixed(1)}%`,
+        cornersPick,
+        cornersProbPct: cornersProb,
+        cardsPick,
+        cardsProbPct: cardsProb,
+        resultado1X2: `${event.home_team} ${modelHomePct.toFixed(1)}% | ${event.away_team} ${modelAwayPct.toFixed(1)}% ${bestDraw ? '| Empate ' + modelDrawPct.toFixed(1) + '%' : ''}`,
         valueBet: edgePct > 0,
         arbitrajeGarantizado: arb.isArb,
         gananciaGarantizadaPct: arb.profitPct,
