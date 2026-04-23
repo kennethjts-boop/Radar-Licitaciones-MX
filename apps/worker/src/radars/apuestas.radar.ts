@@ -126,10 +126,25 @@ function scoreOpportunity(edgePct: number, confidence: "Alto" | "Medio" | "Bajo"
   return Math.min(100, confScore + liqScore + edgeScore + arbScore);
 }
 
-export async function runApuestasRadar(): Promise<ApuestaOpportunity[]> {
-  const apiKey = process.env.ODDS_API_KEY ?? "";
-  if (!apiKey) return [];
+export interface ApuestasResult {
+  items: ApuestaOpportunity[];
+  diagnostics: {
+    totalEventsSeen: number;
+    errors: string[];
+    apiKeyStatus: "missing" | "present";
+  };
+}
 
+export async function runApuestasRadar(): Promise<ApuestasResult> {
+  const apiKey = process.env.ODDS_API_KEY ?? "";
+  if (!apiKey) {
+    return {
+      items: [],
+      diagnostics: { totalEventsSeen: 0, errors: ["Falta ODDS_API_KEY"], apiKeyStatus: "missing" }
+    };
+  }
+
+  const errors: string[] = [];
   const detectadoAt = new Date().toISOString();
   const responses = await Promise.all(
     SPORTS.map((sport) =>
@@ -145,7 +160,8 @@ export async function runApuestasRadar(): Promise<ApuestaOpportunity[]> {
         })
         .then((res) => ({ events: res.data }))
         .catch((err) => {
-          console.warn(`[APUESTAS] Falló fetch para ${sport}: ${err.message}`);
+          const msg = err.response?.data?.message || err.message;
+          errors.push(`${sport}: ${msg}`);
           return { events: [] as OddsEvent[] };
         }),
     ),
@@ -308,7 +324,10 @@ export async function runApuestasRadar(): Promise<ApuestaOpportunity[]> {
     }
   }
 
-  const top = found.sort((a, b) => b.score - a.score).slice(0, 10);
+    }
+  }
+
+  const top = found.sort((a, b) => b.score - a.score).slice(0, 15);
 
   const db = getSupabaseClient();
   if (top.length > 0) {
@@ -335,7 +354,14 @@ export async function runApuestasRadar(): Promise<ApuestaOpportunity[]> {
     );
   }
 
-  return top;
+  return {
+    items: top,
+    diagnostics: {
+      totalEventsSeen,
+      errors,
+      apiKeyStatus: "present"
+    }
+  };
 }
 
 export const apuestasRadar: RadarConfig = {

@@ -10,10 +10,24 @@ export const DAILY_APUESTAS_CRON = "0 8 * * *";
 export async function runDailyApuestasJob(limit: number = 10): Promise<void> {
   try {
     const fecha = todayMexicoStr();
-    const allItems = await runApuestasRadar();
-    const items = allItems.slice(0, limit);
+    const result = await runApuestasRadar();
+    const items = result.items.slice(0, limit);
 
     const lines: string[] = [`🎯 RADAR APUESTAS — ${fecha}`, ""];
+
+    if (items.length === 0) {
+      lines.push("⚠️ No se encontraron oportunidades recomendadas en este momento.");
+      lines.push("");
+      lines.push("🔍 <b>DIAGNÓSTICO:</b>");
+      lines.push(`• Eventos analizados: ${result.diagnostics.totalEventsSeen}`);
+      lines.push(`• Estado API Key: ${result.diagnostics.apiKeyStatus === "present" ? "✅ OK" : "❌ Faltante"}`);
+      
+      if (result.diagnostics.errors.length > 0) {
+        lines.push(`• Errores detectados: ${[...new Set(result.diagnostics.errors)].slice(0, 3).join(", ")}`);
+      } else if (result.diagnostics.totalEventsSeen === 0) {
+        lines.push("• Nota: La API respondió correctamente pero no reportó juegos hoy en las ligas seleccionadas.");
+      }
+    }
 
     for (const item of items) {
       const isSoccer = item.deporte.startsWith("soccer_");
