@@ -190,5 +190,23 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     }
   });
 
-  log.info("✅ Comandos registrados: /prueba, /buscar, /debug_resumen, /scan");
+  // ── /recuperar ──────────────────────────────────────────────────────────
+  bot.onText(/\/recuperar/, async (msg) => {
+    if (String(msg.chat.id) !== chatId) return;
+    log.info({ from: msg.from?.username }, "📥 /recuperar");
+
+    try {
+      // Importar dinámicamente para no cargar el script al inicio
+      // Usaremos una función exportada para que sea más limpio
+      const { runBackfill } = await import("../scripts/backfill-capufe-logic");
+      runBackfill().catch((err) => {
+        log.error({ err }, "Error en ejecución de /recuperar");
+      });
+    } catch (err) {
+      log.error({ err }, "❌ Error inicializando /recuperar");
+      await bot.sendMessage(chatId, "❌ Error iniciando recuperación de datos").catch(() => {});
+    }
+  });
+
+  log.info("✅ Comandos registrados: /prueba, /buscar, /debug_resumen, /scan, /recuperar");
 }
