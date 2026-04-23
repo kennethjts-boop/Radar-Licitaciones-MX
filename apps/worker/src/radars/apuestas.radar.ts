@@ -60,7 +60,21 @@ interface OddsEvent {
   bookmakers: OddsBookmaker[];
 }
 
-const SPORTS = ["soccer_mexico_ligamx", "soccer_spain_la_liga", "soccer_epl", "baseball_mlb"];
+const SPORTS = [
+  "soccer_mexico_ligamx",
+  "soccer_spain_la_liga",
+  "soccer_epl",
+  "soccer_uefa_champs_league",
+  "soccer_uefa_europa_league",
+  "soccer_italy_serie_a",
+  "soccer_germany_bundesliga",
+  "soccer_france_ligue1",
+  "soccer_portugal_primeira_liga",
+  "soccer_usa_mls",
+  "basketball_nba",
+  "baseball_mlb",
+  "icehockey_nhl",
+];
 const ODDS_API_BASE = "https://api.the-odds-api.com/v4";
 const BANKROLL = 1000;
 
@@ -123,14 +137,19 @@ export async function runApuestasRadar(): Promise<ApuestaOpportunity[]> {
             markets: "h2h,btts,totals",
             oddsFormat: "decimal",
           },
-          timeout: 20_000,
+          timeout: 30_000,
         })
         .then((res) => ({ events: res.data }))
-        .catch(() => ({ events: [] as OddsEvent[] })),
+        .catch((err) => {
+          console.warn(`[APUESTAS] Falló fetch para ${sport}: ${err.message}`);
+          return { events: [] as OddsEvent[] };
+        }),
     ),
   );
 
   const found: ApuestaOpportunity[] = [];
+  const totalEventsSeen = responses.reduce((acc, r) => acc + r.events.length, 0);
+  console.log(`[APUESTAS] Eventos brutos encontrados en ${SPORTS.length} ligas: ${totalEventsSeen}`);
 
   for (const { events } of responses) {
     for (const event of events) {
