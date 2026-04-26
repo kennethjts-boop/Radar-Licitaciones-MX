@@ -13,12 +13,6 @@ import { conaviFederalRadar } from "./conavi-federal.radar";
 import { imssMorelosRadar } from "./imss-morelos.radar";
 import { imssBienestarMorelosRadar } from "./imss-bienestar-morelos.radar";
 import { habitatMorelosRadar } from "./habitat-morelos.radar";
-import { fondosSaludRadar } from "./fondos-salud.radar";
-import { fondosDeporteRadar } from "./fondos-deporte.radar";
-import { fondosCulturaRadar } from "./fondos-cultura.radar";
-import { accionesRadar } from "./acciones.radar";
-import { apuestasRadar } from "./apuestas.radar";
-import { petroleoRadar } from "./petroleo.radar";
 
 /**
  * Lista canónica de todos los radares.
@@ -34,14 +28,6 @@ export const RADARS: RadarConfig[] = [
   imssMorelosRadar,
   imssBienestarMorelosRadar,
   habitatMorelosRadar,
-  // Inversión y Oportunidades Especiales
-  accionesRadar,
-  apuestasRadar,
-  petroleoRadar,
-  // Fondos internacionales para donatarias autorizadas
-  fondosSaludRadar,
-  fondosDeporteRadar,
-  fondosCulturaRadar,
 ];
 
 /**

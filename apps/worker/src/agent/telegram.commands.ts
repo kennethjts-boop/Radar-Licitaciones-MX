@@ -179,11 +179,12 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     log.info({ from: msg.from?.username }, "📥 /scan");
 
     try {
-      const { runFullManualScan } = await import("../jobs/manual-scan.job");
+      const { runCollectJob } = await import("../jobs/collect.job");
       // Ejecutar en background para no bloquear el bot
-      runFullManualScan().catch((err) => {
+      runCollectJob().catch((err: unknown) => {
         log.error({ err }, "Error en ejecución de /scan");
       });
+      await bot.sendMessage(chatId, "🚀 Escaneo manual de ComprasMX iniciado...").catch(() => {});
     } catch (err) {
       log.error({ err }, "❌ Error inicializando /scan");
       await bot.sendMessage(chatId, "❌ Error iniciando escaneo manual").catch(() => {});
