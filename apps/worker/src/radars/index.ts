@@ -13,6 +13,7 @@ import { conaviFederalRadar } from "./conavi-federal.radar";
 import { imssMorelosRadar } from "./imss-morelos.radar";
 import { imssBienestarMorelosRadar } from "./imss-bienestar-morelos.radar";
 import { habitatMorelosRadar } from "./habitat-morelos.radar";
+import { morelosGeneralRadar } from "./morelos-general.radar";
 
 /**
  * Lista canónica de todos los radares.
@@ -28,6 +29,7 @@ export const RADARS: RadarConfig[] = [
   imssMorelosRadar,
   imssBienestarMorelosRadar,
   habitatMorelosRadar,
+  morelosGeneralRadar,
 ];
 
 /**
