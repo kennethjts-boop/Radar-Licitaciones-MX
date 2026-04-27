@@ -51,6 +51,7 @@ export function buildCanonicalText(params: {
   description?: string | null;
   dependencyName?: string | null;
   buyingUnit?: string | null;
+  state?: string | null;
   attachmentTexts?: string[];
 }): string {
   const parts = [
@@ -58,6 +59,7 @@ export function buildCanonicalText(params: {
     params.description ?? "",
     params.dependencyName ?? "",
     params.buyingUnit ?? "",
+    params.state ?? "",
     ...(params.attachmentTexts ?? []),
   ];
   return parts

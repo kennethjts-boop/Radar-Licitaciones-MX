@@ -78,7 +78,7 @@ export function apiRegistroToRawInput(item: ApiRegistro): RawProcurementInput {
     publicationDate,                                 // fecha_publicacion ?? fecha_aclaraciones
     openingDate: item.fecha_apertura ?? null,        // fecha de apertura de propuestas
     awardDate: null,
-    state: item.caracter ?? null,                    // NACIONAL / INTERNACIONAL
+    state: (item["entidad_federativa_contratacion"] as string | null) ?? null,
     municipality: null,
     amount: item.monto ?? null,
     currency: 'MXN',
