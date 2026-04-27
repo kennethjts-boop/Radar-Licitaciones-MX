@@ -93,7 +93,7 @@ async function main(): Promise<void> {
   // ── 4. Bot de comandos Telegram ───────────────────────────────────────────
   if (bootResult.telegramOk) {
     try {
-      initCommandBot();
+      await initCommandBot();
       log.info("🤖 Bot Telegram iniciado con polling");
     } catch (err) {
       log.warn({ err }, "⚠️ Error iniciando bot — continuando sin comandos");

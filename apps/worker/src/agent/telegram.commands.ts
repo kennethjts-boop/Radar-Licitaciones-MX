@@ -12,18 +12,38 @@ import { createModuleLogger } from "../core/logger";
 import { healthTracker } from "../core/healthcheck";
 import { formatDuration, formatMexicoDate, nowISO } from "../core/time";
 import { getState, STATE_KEYS } from "../core/system-state";
-import { searchProcurements } from "../storage/procurement.repo";
 import { getActiveRadars } from "../radars/index";
 
 const log = createModuleLogger("commands");
 
 let _bot: TelegramBot | null = null;
 
-export function initCommandBot(): TelegramBot {
+export async function initCommandBot(): Promise<TelegramBot> {
   if (_bot) return _bot;
 
   const config = getConfig();
-  _bot = new TelegramBot(config.TELEGRAM_BOT_TOKEN, { polling: true });
+
+  // Crear instancia sin polling primero para poder llamar deleteWebhook
+  _bot = new TelegramBot(config.TELEGRAM_BOT_TOKEN, { polling: false });
+
+  // Eliminar webhook si existía — evita 409 Conflict en getUpdates
+  try {
+    await _bot.deleteWebHook();
+    log.info("Webhook eliminado (si existía)");
+  } catch (err) {
+    log.warn({ err }, "No se pudo eliminar webhook — continuando");
+  }
+
+  // Registrar handlers de error antes de iniciar polling
+  _bot.on("polling_error", (err: Error) => {
+    log.error({ code: (err as NodeJS.ErrnoException).code, msg: err.message }, "❌ Telegram polling_error");
+  });
+  _bot.on("error", (err: Error) => {
+    log.error({ msg: err.message }, "❌ Telegram bot error");
+  });
+
+  // Iniciar polling
+  _bot.startPolling({ restart: true });
 
   registerCommands(_bot, config.TELEGRAM_CHAT_ID);
 

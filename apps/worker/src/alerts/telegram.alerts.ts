@@ -4,6 +4,7 @@
  */
 import TelegramBot from "node-telegram-bot-api";
 import { getConfig } from "../config/env";
+import { getCommandBot } from "../agent/telegram.commands";
 import { createModuleLogger } from "../core/logger";
 import { truncateForTelegram, formatCurrency } from "../core/text";
 import { formatMexicoDate } from "../core/time";
@@ -19,6 +20,10 @@ const log = createModuleLogger("telegram-alerts");
 let _bot: TelegramBot | null = null;
 
 function getBot(): TelegramBot {
+  // Reusar el bot de comandos (polling) si ya fue inicializado, para evitar
+  // instancias duplicadas con el mismo token que provocan 409 Conflict.
+  const cmdBot = getCommandBot();
+  if (cmdBot) return cmdBot;
   if (_bot) return _bot;
   const config = getConfig();
   _bot = new TelegramBot(config.TELEGRAM_BOT_TOKEN, { polling: false });
