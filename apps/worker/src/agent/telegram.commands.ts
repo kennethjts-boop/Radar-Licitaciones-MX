@@ -115,17 +115,38 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     if (!query) return;
 
     try {
-      const results = await searchProcurements(query, 5);
-      if (results.length === 0) {
+      const { getSupabaseClient } = await import("../storage/client");
+      const db = getSupabaseClient();
+      const { data: results, error } = await db
+        .from("procurements")
+        .select("title,dependency_name,expediente_id,status,source_url,publication_date")
+        .or(
+          `title.ilike.%${query}%,` +
+          `dependency_name.ilike.%${query}%,` +
+          `canonical_text.ilike.%${query}%,` +
+          `expediente_id.ilike.%${query}%`
+        )
+        .order("last_seen_at", { ascending: false })
+        .limit(5);
+
+      if (error) throw error;
+
+      if (!results || results.length === 0) {
         await bot.sendMessage(chatId, `🔍 Sin resultados para: <b>${query}</b>`, { parse_mode: "HTML" });
         return;
       }
 
-      const lines = [`🔍 <b>Resultados: "${query}"</b>\n`];
+      const lines = [`🔍 <b>Resultados para "${query}" (${results.length})</b>\n`];
       for (const r of results) {
-        lines.push(`📋 <b>${r.title}</b>`);
-        lines.push(`   Exp: ${r.expediente_id ?? "N/D"} | ${r.status}`);
-        lines.push(`   <a href="${r.source_url}">Ver expediente</a>\n`);
+        const nombre = (r.title ?? "Sin título").slice(0, 80);
+        const dep = r.dependency_name ?? "N/D";
+        const estatus = r.status ?? "desconocido";
+        const exp = r.expediente_id ?? "N/D";
+        lines.push(`📋 <b>${nombre}</b>`);
+        lines.push(`   🏛 ${dep}`);
+        lines.push(`   Exp: <code>${exp}</code> | Estado: ${estatus}`);
+        if (r.source_url) lines.push(`   <a href="${r.source_url}">Ver expediente</a>`);
+        lines.push("");
       }
 
       await bot.sendMessage(chatId, lines.join("\n"), { parse_mode: "HTML", disable_web_page_preview: true });

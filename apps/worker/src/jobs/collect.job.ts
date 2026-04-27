@@ -38,7 +38,8 @@ import {
   sendTelegramMessage,
   formatAiVipAlertMessage,
 } from "../alerts/telegram.alerts";
-import type { ProcurementStatus } from "../types/procurement";
+import type { ProcurementStatus, NormalizedProcurement, ProcedureType } from "../types/procurement";
+import type { DbProcurement } from "../types/database";
 import { getSupabaseClient } from "../storage/client";
 import { BrowserManager } from "../collectors/comprasmx/browser.manager";
 import { ComprasMxNavigator } from "../collectors/comprasmx/comprasmx.navigator";
@@ -774,177 +775,193 @@ export async function runCollectJob(): Promise<void> {
   });
 }
 
+// ── Helper: DbProcurement → NormalizedProcurement (Modo 2 DB-only recheck) ──
+function dbRowToNormalized(row: DbProcurement): NormalizedProcurement {
+  return {
+    source: "comprasmx",
+    sourceUrl: row.source_url,
+    externalId: row.external_id,
+    expedienteId: row.expediente_id,
+    licitationNumber: row.licitation_number,
+    procedureNumber: row.procedure_number,
+    title: row.title,
+    description: row.description,
+    dependencyName: row.dependency_name,
+    buyingUnit: row.buying_unit,
+    procedureType: (row.procedure_type as ProcedureType) ?? "unknown",
+    status: (row.status as ProcurementStatus) ?? "unknown",
+    publicationDate: row.publication_date,
+    openingDate: row.opening_date,
+    awardDate: row.award_date,
+    state: row.state,
+    municipality: row.municipality,
+    amount: row.amount,
+    currency: (row.currency as "MXN" | "USD" | null) ?? null,
+    attachments: [],
+    canonicalText: row.canonical_text,
+    canonicalFingerprint: row.canonical_fingerprint,
+    lightweightFingerprint: row.lightweight_fingerprint,
+    rawJson: {},
+    fetchedAt: row.last_seen_at,
+  };
+}
+
 /**
- * RE-CHECK JOB (MODO 2) — Para la iteración de Activos diariamente
+ * RE-CHECK JOB (MODO 2) — Escaneo diario puro DB: evalúa TODOS los procurements
+ * contra radares activos sin usar Playwright. Envía alertas solo para matches
+ * que no hayan sido alertados en las últimas 48h.
  */
 export async function runRecheckJob(): Promise<void> {
-  log.info(
-    "🔄 daily direct recheck started — MODO 2: Daily Direct Recheck de expedientes activos",
-  );
+  log.info("🔄 MODO 2 — DB recheck diario iniciado: evaluando todos los procurements");
   const cycleStart = Date.now();
 
   await withLock("recheck-job", "daily-recheck", async () => {
     if (!_comprasMxSourceId) {
-      log.error("No source_id for comprasmx available. Cannot recheck.");
+      log.error("No source_id for comprasmx disponible. No se puede hacer recheck.");
       return;
     }
     const sourceId = _comprasMxSourceId;
-    const runId = await startCollectRun(
-      sourceId,
-      COMPRASMX_SOURCE_KEY + "_recheck",
-    );
+    const runId = await startCollectRun(sourceId, COMPRASMX_SOURCE_KEY + "_recheck");
 
-    let itemsSeen = 0;
-    let itemsCreated = 0;
-    let itemsUpdated = 0;
+    let totalSeen = 0;
     let totalMatches = 0;
     let alertsSentThisCycle = 0;
     let alertsOverflowNotified = false;
     let errorMessage: string | null = null;
 
     try {
-      const db = (await import("../storage/client")).getSupabaseClient();
-
-      // Obtener expedientes activos o en proceso
-      const { data: actives } = await db
-        .from("procurements")
-        .select("source_url")
-        .eq("source_id", sourceId)
-        .in("status", [
-          "Vigente",
-          "activa",
-          "en_proceso",
-          "Publicado",
-          "Por Adjudicar",
-        ]);
-
-      if (!actives || actives.length === 0) {
-        log.info("No hay expedientes activos para re-checar");
-        return;
-      }
-
-      const urls = actives.map((a) => a.source_url).filter(Boolean);
-      log.info(`Procediendo a re-checar ${urls.length} URLs activas`);
-
-      const collectResult = await recheckComprasMx(urls);
-      itemsSeen = collectResult.items.length;
-
+      const db = getSupabaseClient();
       const radars = getActiveRadars();
 
-      for (const item of collectResult.items) {
-        try {
-          const upsertResult = await upsertProcurement(item, sourceId);
-          if (upsertResult.isNew) itemsCreated++;
-          else if (upsertResult.isUpdated) itemsUpdated++;
+      // Obtener mensajes de alertas enviadas en las últimas 48h para dedup
+      const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+      const { data: recentAlerts } = await db
+        .from("alerts")
+        .select("telegram_message")
+        .eq("status", "sent")
+        .gte("sent_at", cutoff);
 
-          if (!upsertResult.isNew && !upsertResult.isUpdated) continue;
+      const recentMessages = new Set<string>(
+        (recentAlerts ?? []).map((a: { telegram_message: string | null }) => a.telegram_message ?? "")
+      );
 
-          const previousStatus =
-            upsertResult.isUpdated && upsertResult.changedFields["status"]
-              ? (upsertResult.changedFields["status"].prev as ProcurementStatus)
-              : null;
+      // Paginar todos los procurements del source
+      const PAGE_SIZE = 100;
+      let page = 0;
+      let hasMore = true;
 
-          const matches = evaluateAllRadars(
-            item,
-            radars,
-            upsertResult.isNew,
-            previousStatus,
-          );
-          totalMatches += matches.length;
+      while (hasMore) {
+        const { data: rows, error } = await db
+          .from("procurements")
+          .select("*")
+          .eq("source_id", sourceId)
+          .order("created_at", { ascending: false })
+          .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
-          for (const match of matches) {
-            try {
-              const enrichableMatch = {
-                ...match,
-                procurementId: upsertResult.procurementId,
-              };
-              const enriched = await enrichMatch(item, enrichableMatch);
-              const alertId = await createAlert(enriched);
+        if (error) throw new Error(`DB error paginando procurements: ${error.message}`);
+        if (!rows || rows.length === 0) { hasMore = false; break; }
 
-              if (alertsSentThisCycle >= MAX_ALERTS_PER_CYCLE) {
-                if (!alertsOverflowNotified) {
-                  alertsOverflowNotified = true;
-                  const overflowMsg =
-                    `⚠️ Límite de alertas alcanzado: se detectaron más matches que no se enviaron. ` +
-                    `Revisa Supabase para ver todos.`;
-                  await sendTelegramMessage(overflowMsg, "HTML").catch(() => {});
+        totalSeen += rows.length;
+        hasMore = rows.length === PAGE_SIZE;
+        log.info({ page, count: rows.length, totalSeen }, "MODO 2 — evaluando página");
+
+        for (const row of rows) {
+          try {
+            const normalized = dbRowToNormalized(row as DbProcurement);
+            const matches = evaluateAllRadars(normalized, radars, false, null);
+
+            for (const match of matches) {
+              // Dedup: skip si el externalId ya aparece en mensajes recientes de Telegram
+              const extId = normalized.externalId ?? "";
+              if (extId && [...recentMessages].some(msg => msg.includes(extId))) continue;
+
+              totalMatches++;
+
+              try {
+                const enrichableMatch = { ...match, procurementId: (row as DbProcurement).id };
+                const enriched = await enrichMatch(normalized, enrichableMatch);
+                const alertId = await createAlert(enriched);
+
+                if (alertsSentThisCycle >= MAX_ALERTS_PER_CYCLE) {
+                  if (!alertsOverflowNotified) {
+                    alertsOverflowNotified = true;
+                    await sendTelegramMessage(
+                      `⚠️ Límite de ${MAX_ALERTS_PER_CYCLE} alertas alcanzado en recheck diario. Hay más matches en Supabase.`,
+                      "HTML"
+                    ).catch(() => {});
+                  }
+                  await markAlertFailed(alertId);
+                  continue;
                 }
-                await markAlertFailed(alertId);
-                continue;
-              }
 
-              const msgId = await sendMatchAlert(enriched);
-              if (msgId) {
-                alertsSentThisCycle++;
-                await markAlertSent(alertId, msgId);
-              } else {
-                await markAlertFailed(alertId);
+                const msgId = await sendMatchAlert(enriched);
+                if (msgId) {
+                  alertsSentThisCycle++;
+                  await markAlertSent(alertId, msgId);
+                  // Añadir al set en-memoria para evitar duplicados en el mismo ciclo
+                  if (enriched.telegramMessage) recentMessages.add(enriched.telegramMessage);
+                } else {
+                  await markAlertFailed(alertId);
+                }
+              } catch (err) {
+                log.error({ err }, "Error procesando match en recheck DB");
               }
-            } catch (err) {
-              log.error({ err }, "Error procesando match en Recheck");
             }
+          } catch (e) {
+            log.error({ e, rowId: (row as DbProcurement).id }, "Error evaluando procurement en recheck");
           }
-        } catch (e) {
-          log.error(
-            { e, url: item.sourceUrl },
-            "Error upserting rechecked item",
-          );
         }
-      }
 
-      if (collectResult.errors.length > 0) {
-        errorMessage = collectResult.errors.join("; ");
+        page++;
       }
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : String(err);
-      log.error({ err }, "❌ Error en ciclo recheck");
+      log.error({ err }, "❌ Error en ciclo recheck DB");
     } finally {
       const finishedAt = nowISO();
       await finishCollectRun(runId, {
         finishedAt,
         status: errorMessage ? "error" : "success",
-        itemsSeen,
-        itemsCreated,
-        itemsUpdated,
+        itemsSeen: totalSeen,
+        itemsCreated: 0,
+        itemsUpdated: 0,
         errorMessage,
-        metadata: { totalMatches, mode: "daily_recheck" },
+        metadata: { totalMatches, alertsSent: alertsSentThisCycle, mode: "daily_recheck_db" },
       });
 
-      // Guardar telemetría del Modo 2 en system_state
       const { setState, STATE_KEYS: SK } = await import("../core/system-state");
       await setState(SK.LAST_COLLECT_RUN, {
-        collectorKey: "comprasmx_playwright",
-        mode: "daily_recheck",
+        collectorKey: "comprasmx_db_recheck",
+        mode: "daily_recheck_db",
         startedAt: cycleStart,
         finishedAt,
         status: errorMessage ? "error" : "success",
         errorMessage: errorMessage ?? null,
         pages_scanned: 0,
-        stop_reason: `daily direct recheck completed`,
+        stop_reason: `DB recheck completado: ${totalSeen} procurements evaluados`,
         known_streak: 0,
-        detail_fetch_executed: itemsSeen > 0 ? itemsSeen : 0, // In recheck, itemsSeen is conceptually the fetches
+        detail_fetch_executed: 0,
         skipped_by_fingerprint: 0,
-        total_listing_rows_seen: 0,
-        total_new_detected: itemsCreated,
-        total_mutated_detected: itemsUpdated,
-        total_attachments_checked: itemsSeen > 0 ? itemsSeen : 0,
-        itemsSeen,
-        itemsCreated,
-        itemsUpdated,
+        total_listing_rows_seen: totalSeen,
+        total_new_detected: 0,
+        total_mutated_detected: 0,
+        total_attachments_checked: 0,
+        itemsSeen: totalSeen,
+        itemsCreated: 0,
+        itemsUpdated: 0,
       }).catch(() => {});
 
       const durationMs = Date.now() - cycleStart;
       log.info(
         {
-          mode: "daily_recheck",
+          mode: "daily_recheck_db",
           duration: formatDuration(durationMs),
-          itemsSeen,
-          itemsCreated,
-          itemsUpdated,
+          totalSeen,
           totalMatches,
+          alertsSent: alertsSentThisCycle,
           status: errorMessage ? "error" : "success",
         },
-        "🏁 daily direct recheck completed",
+        "🏁 MODO 2 — DB recheck completado",
       );
     }
   });
