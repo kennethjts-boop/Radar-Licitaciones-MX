@@ -28,6 +28,14 @@ export function formatMexicoDate(
   date: Date | string,
   fmt = "dd/MM/yyyy HH:mm",
 ): string {
+  // Si es string solo-fecha (YYYY-MM-DD), interpretar como fecha local sin
+  // conversión de timezone para evitar desfase de un día (parseISO la trataría
+  // como medianoche UTC → día anterior en México UTC-6).
+  if (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    const d = parseISO(date + "T12:00:00");
+    if (!isValid(d)) return "Fecha inválida";
+    return formatInTimeZone(d, MX_TIMEZONE, fmt);
+  }
   const d = typeof date === "string" ? parseISO(date) : date;
   if (!isValid(d)) return "Fecha inválida";
   return formatInTimeZone(d, MX_TIMEZONE, fmt);
