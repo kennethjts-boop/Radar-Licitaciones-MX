@@ -56,13 +56,13 @@ const envSchema = z.object({
     .url()
     .default("https://comprasmx.buengobierno.gob.mx/sitiopublico/#/"),
   COMPRASMX_MAX_LIST_PAGES: z.string().default("5").transform(Number),
-  COMPRASMX_STOP_AFTER_KNOWN_STREAK: z.string().default("50").transform(Number),
+  COMPRASMX_STOP_AFTER_KNOWN_STREAK: z.string().default("200").transform(Number),
   COMPRASMX_INCREMENTAL_LOOKBACK_HOURS: z
     .string()
     .default("72")
     .transform(Number),
   // Hora (0-23 en America/Mexico_City) en que se dispara el Modo 2 (Daily Recheck directo).
-  COMPRASMX_DAILY_RECHECK_HOUR: z.string().default("7").transform(Number),
+  COMPRASMX_DAILY_RECHECK_HOUR: z.string().default("6").transform(Number),
 
   // Scheduler
   COLLECT_INTERVAL_MINUTES: z.string().default("30").transform(Number),
