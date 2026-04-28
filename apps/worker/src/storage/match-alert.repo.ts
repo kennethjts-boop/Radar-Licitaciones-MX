@@ -86,6 +86,8 @@ export async function getMatchesByRadar(
 
 export async function createAlert(
   enrichedAlert: EnrichedAlert,
+  dbProcurementId?: string,
+  radarDbId?: string,
 ): Promise<string> {
   const db = getSupabaseClient();
   const id = uuidv4();
@@ -93,8 +95,8 @@ export async function createAlert(
 
   const record: DbAlert = {
     id,
-    radar_id: null, // se setea en fase 2 cuando existen IDs en DB
-    procurement_id: null,
+    radar_id: radarDbId ?? null,
+    procurement_id: dbProcurementId ?? null, // UUID de DB cuando está disponible
     alert_type: enrichedAlert.alertType,
     telegram_message: enrichedAlert.telegramMessage,
     telegram_status: "pending",
@@ -112,6 +114,23 @@ export async function createAlert(
   }
 
   return id;
+}
+
+/**
+ * Retorna true si ya existe una alerta enviada (telegram_status = 'sent')
+ * para este procurement (por UUID de DB).
+ * Usado en runRecheckJob para evitar re-alertar registros sin cambios.
+ */
+export async function hasExistingAlert(dbProcurementId: string): Promise<boolean> {
+  const { data, error } = await getSupabaseClient()
+    .from("alerts")
+    .select("id")
+    .eq("procurement_id", dbProcurementId)
+    .eq("telegram_status", "sent")
+    .limit(1);
+
+  if (error) return false; // en caso de error, no suprimir (seguro)
+  return (data ?? []).length > 0;
 }
 
 export async function markAlertSent(

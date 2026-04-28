@@ -14,7 +14,7 @@
 import { createModuleLogger } from "../core/logger";
 import { withLock } from "../core/lock";
 import { withTimeout } from "../core/errors";
-import { nowISO, formatDuration } from "../core/time";
+import { nowISO, formatDuration, isDateExpired } from "../core/time";
 import { healthTracker } from "../core/healthcheck";
 import { existsSync, readFileSync, unlinkSync } from "fs";
 import {
@@ -29,6 +29,8 @@ import {
   createAlert,
   markAlertSent,
   markAlertFailed,
+  hasExistingAlert,
+  upsertMatch,
 } from "../storage/match-alert.repo";
 import { getActiveRadars } from "../radars/index";
 import { evaluateAllRadars } from "../matchers/matcher";
@@ -51,7 +53,6 @@ import { sanitizeForKeywordRegex } from "../core/text";
 import { sendCapufePeajeDeepReportToTelegram } from "../scripts/capufe-peaje-deep-report";
 
 const log = createModuleLogger("collect-job");
-const MAX_ALERTS_PER_CYCLE = 10;
 const AI_VIP_ALERT_SCORE_THRESHOLD = 70;
 const AI_VIP_ALERT_WIN_PROBABILITY_THRESHOLD = 50;
 const RAG_MATCH_THRESHOLD = 0.7;
@@ -549,8 +550,6 @@ export async function runCollectJob(): Promise<void> {
     let itemsCreated = 0;
     let itemsUpdated = 0;
     let totalMatches = 0;
-    let alertsSentThisCycle = 0;
-    let alertsOverflowNotified = false;
     const capufeDeepReportsSent = new Set<string>();
     let errorMessage: string | null = null;
     let collectResult: ComprasMxCollectResult | null = null;
@@ -567,6 +566,17 @@ export async function runCollectJob(): Promise<void> {
       log.info({ itemsSeen }, "Items colectados");
 
       const radars = getActiveRadars();
+
+      // Precargar IDs de radar de DB para persistir FK correctamente
+      const radarDbIds = new Map<string, string>();
+      {
+        const { data: radarRows } = await getSupabaseClient()
+          .from("radars")
+          .select("id, key");
+        for (const row of radarRows ?? []) {
+          radarDbIds.set(row.key, row.id);
+        }
+      }
 
       // 2. Procesar cada item
       for (const item of collectResult.items) {
@@ -590,6 +600,15 @@ export async function runCollectJob(): Promise<void> {
               { err: attErr, externalId: item.externalId },
               "Fallo en pipeline de adjuntos; se continúa con match/alertas",
             );
+          }
+
+          // Filtrar licitaciones vencidas: no generar alertas si ya pasó la fecha de apertura
+          if (isDateExpired(item.openingDate)) {
+            log.debug(
+              { externalId: item.externalId, openingDate: item.openingDate },
+              "Licitación con fecha de apertura vencida, omitiendo match",
+            );
+            continue;
           }
 
           // Determinar estatus anterior para detectar cambio
@@ -649,27 +668,19 @@ export async function runCollectJob(): Promise<void> {
                 procurementId: upsertResult.procurementId,
               };
 
-              const enriched = await enrichMatch(item, enrichableMatch);
-              const alertId = await createAlert(enriched);
+              const radarDbId = radarDbIds.get(match.radarKey);
 
-              // ── Anti-spam: máximo MAX_ALERTS_PER_CYCLE alertas por ciclo ──
-              if (alertsSentThisCycle >= MAX_ALERTS_PER_CYCLE) {
-                if (!alertsOverflowNotified) {
-                  alertsOverflowNotified = true;
-                  const overflowMsg =
-                    `⚠️ Límite de alertas alcanzado: se detectaron más matches que no se enviaron. ` +
-                    `Revisa Supabase para ver todos.`;
-                  await sendTelegramMessage(overflowMsg, "HTML").catch(() => {});
-                  log.warn({ alertsSentThisCycle, MAX_ALERTS_PER_CYCLE }, "Límite de alertas por ciclo alcanzado");
-                }
-                await markAlertFailed(alertId);
-                continue;
+              // Persistir match en DB antes de alertar
+              if (radarDbId) {
+                await upsertMatch(enrichableMatch, radarDbId);
               }
+
+              const enriched = await enrichMatch(item, enrichableMatch);
+              const alertId = await createAlert(enriched, upsertResult.procurementId, radarDbId);
 
               const msgId = await sendMatchAlert(enriched);
 
               if (msgId) {
-                alertsSentThisCycle++;
                 await markAlertSent(alertId, msgId);
               } else {
                 await markAlertFailed(alertId);
@@ -798,8 +809,6 @@ export async function runRecheckJob(): Promise<void> {
     let itemsCreated = 0;
     let itemsUpdated = 0;
     let totalMatches = 0;
-    let alertsSentThisCycle = 0;
-    let alertsOverflowNotified = false;
     let errorMessage: string | null = null;
 
     try {
@@ -831,13 +840,41 @@ export async function runRecheckJob(): Promise<void> {
 
       const radars = getActiveRadars();
 
+      // Precargar IDs de radar de DB para persistir FK correctamente
+      const radarDbIds = new Map<string, string>();
+      {
+        const { data: radarRows } = await db
+          .from("radars")
+          .select("id, key");
+        for (const row of radarRows ?? []) {
+          radarDbIds.set(row.key, row.id);
+        }
+      }
+
       for (const item of collectResult.items) {
         try {
           const upsertResult = await upsertProcurement(item, sourceId);
           if (upsertResult.isNew) itemsCreated++;
           else if (upsertResult.isUpdated) itemsUpdated++;
 
-          if (!upsertResult.isNew && !upsertResult.isUpdated) continue;
+          const isPristine = !upsertResult.isNew && !upsertResult.isUpdated;
+
+          // Para registros sin cambios, solo evaluar si no hay alerta enviada previa.
+          // Esto cubre records backfilleados en Supabase (ej: los 86 de Morelos)
+          // que nunca pasaron por el pipeline de alertas.
+          if (isPristine) {
+            const alreadyAlerted = await hasExistingAlert(upsertResult.procurementId);
+            if (alreadyAlerted) continue;
+          }
+
+          // Filtrar licitaciones vencidas
+          if (isDateExpired(item.openingDate)) {
+            log.debug(
+              { externalId: item.externalId, openingDate: item.openingDate },
+              "Licitación vencida omitida en recheck",
+            );
+            continue;
+          }
 
           const previousStatus =
             upsertResult.isUpdated && upsertResult.changedFields["status"]
@@ -858,24 +895,17 @@ export async function runRecheckJob(): Promise<void> {
                 ...match,
                 procurementId: upsertResult.procurementId,
               };
-              const enriched = await enrichMatch(item, enrichableMatch);
-              const alertId = await createAlert(enriched);
+              const radarDbId = radarDbIds.get(match.radarKey);
 
-              if (alertsSentThisCycle >= MAX_ALERTS_PER_CYCLE) {
-                if (!alertsOverflowNotified) {
-                  alertsOverflowNotified = true;
-                  const overflowMsg =
-                    `⚠️ Límite de alertas alcanzado: se detectaron más matches que no se enviaron. ` +
-                    `Revisa Supabase para ver todos.`;
-                  await sendTelegramMessage(overflowMsg, "HTML").catch(() => {});
-                }
-                await markAlertFailed(alertId);
-                continue;
+              if (radarDbId) {
+                await upsertMatch(enrichableMatch, radarDbId);
               }
+
+              const enriched = await enrichMatch(item, enrichableMatch);
+              const alertId = await createAlert(enriched, upsertResult.procurementId, radarDbId);
 
               const msgId = await sendMatchAlert(enriched);
               if (msgId) {
-                alertsSentThisCycle++;
                 await markAlertSent(alertId, msgId);
               } else {
                 await markAlertFailed(alertId);
