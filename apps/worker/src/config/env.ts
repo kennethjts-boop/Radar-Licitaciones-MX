@@ -48,12 +48,6 @@ const envSchema = z.object({
   HTTP_PROXY: z.string().optional(),
   HTTPS_PROXY: z.string().optional(),
 
-  // Fondos internacionales — deshabilitado permanentemente
-  FONDOS_ENABLED: z
-    .string()
-    .default("false")
-    .transform((v) => v === "true"),
-
   // Compras MX Incremental Strategy
   // COMPRASMX_SEED_URL: URL raíz del índice de licitaciones (portal buengobierno o compranet).
   COMPRASMX_SEED_URL: z

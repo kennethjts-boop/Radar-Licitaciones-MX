@@ -1,12 +1,12 @@
 /**
- * SCAN — Ejecución manual de todos los radares del sistema.
- * 
+ * SCAN — Ejecución manual del colector ComprasMX.
+ *
  * Uso: npm run scan
  */
 import "dotenv/config";
 import { bootstrap } from "../bootstrap";
 import { setComprasMxSourceId } from "../jobs/collect.job";
-import { runFullManualScan } from "../jobs/manual-scan.job";
+import { runCollectJob } from "../jobs/collect.job";
 import { getLogger } from "../core/logger";
 
 async function main() {
@@ -20,8 +20,8 @@ async function main() {
     setComprasMxSourceId(bootResult.sourceId);
   }
 
-  // 2. Ejecutar Scan Completo
-  await runFullManualScan();
+  // 2. Ejecutar colector ComprasMX
+  await runCollectJob();
 
   log.info("✅ ESCANEO MANUAL COMPLETADO.");
   process.exit(0);

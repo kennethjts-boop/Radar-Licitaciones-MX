@@ -20,7 +20,8 @@
     "buscar:operatividad:2026": "ts-node-dev src/scripts/buscar-operatividad-capufe-2026.ts",
     "buscar:licitacion:2024": "ts-node-dev src/scripts/buscar-licitacion-capufe-2024.ts",
     "scrape:maestros": "ts-node scripts/maestros-morelos/scraper.ts",
-    "scan": "ts-node-dev src/scripts/scan.ts"
+    "scan": "ts-node-dev src/scripts/scan.ts",
+    "test:alerts": "ts-node src/scripts/force-test-alerts.ts"
   },
   "engines": {
     "node": ">=20.0.0"

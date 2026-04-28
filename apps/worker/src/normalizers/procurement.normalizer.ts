@@ -147,6 +147,7 @@ export function normalize(input: RawProcurementInput): NormalizedProcurement {
     description: input.description,
     dependencyName: input.dependencyName,
     buyingUnit: input.buyingUnit,
+    state: input.state,
     attachmentTexts: attachments
       .map((a) => a.detectedText)
       .filter((t): t is string => !!t),

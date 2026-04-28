@@ -75,6 +75,17 @@ export function formatDuration(ms: number): string {
 }
 
 /**
+ * Retorna true si la fecha de apertura ya pasó (licitación vencida).
+ * openingDate puede ser ISO-8601 o null.
+ */
+export function isDateExpired(openingDate: string | null | undefined): boolean {
+  if (!openingDate) return false;
+  const d = parseDate(openingDate);
+  if (!d) return false;
+  return d < new Date();
+}
+
+/**
  * Retorna true si han pasado al menos N minutos desde el timestamp dado.
  */
 export function hasElapsedMinutes(

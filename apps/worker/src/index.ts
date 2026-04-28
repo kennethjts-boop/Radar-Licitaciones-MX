@@ -93,7 +93,7 @@ async function main(): Promise<void> {
   // ── 4. Bot de comandos Telegram ───────────────────────────────────────────
   if (bootResult.telegramOk) {
     try {
-      initCommandBot();
+      await initCommandBot();
       log.info("🤖 Bot Telegram iniciado con polling");
     } catch (err) {
       log.warn({ err }, "⚠️ Error iniciando bot — continuando sin comandos");
@@ -102,11 +102,23 @@ async function main(): Promise<void> {
     log.warn("⚠️ Bot Telegram desactivado — Telegram no disponible");
   }
 
-  // ── 5. Scheduler ──────────────────────────────────────────────────────────
+  // ── 5. FORCE_COLLECT: ciclo inmediato pre-scheduler ──────────────────────
+  if (process.env.FORCE_COLLECT === "true") {
+    log.info("⚡ FORCE_COLLECT=true — ejecutando ciclo de colección inmediato...");
+    try {
+      const { runCollectJob } = await import("./jobs/collect.job");
+      await runCollectJob();
+      log.info("✅ FORCE_COLLECT ciclo completado");
+    } catch (err) {
+      log.error({ err }, "❌ Error en FORCE_COLLECT ciclo");
+    }
+  }
+
+  // ── 6. Scheduler ──────────────────────────────────────────────────────────
   startScheduler();
   log.info("✅ Scheduler iniciado");
 
-  // ── 6. Resumen de arranque ────────────────────────────────────────────────
+  // ── 7. Resumen de arranque ────────────────────────────────────────────────
   log.info(
     {
       supabase: bootResult.supabaseOk ? "ok" : "down",

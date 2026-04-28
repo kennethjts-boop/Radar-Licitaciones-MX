@@ -20,10 +20,6 @@ import { getConfig } from "../config/env";
 import { recordSchedulerStarted } from "../core/system-state";
 import { runCollectJob, runRecheckJob } from "./collect.job";
 import { runDailySummaryJob } from "./daily-summary.job";
-import { runCollectFondosJob } from "./collect-fondos.job";
-import { runDailyAccionesJob, DAILY_ACCIONES_CRON } from "./daily-acciones.job";
-import { runDailyApuestasJob, DAILY_APUESTAS_CRON } from "./daily-apuestas.job";
-import { runDailyPetroleoJob, DAILY_PETROLEO_CRON } from "./daily-petroleo.job";
 
 const log = createModuleLogger("scheduler");
 
@@ -34,7 +30,7 @@ export function startScheduler(): void {
   const summaryHour = config.DAILY_SUMMARY_HOUR;
 
   // ── MODO 1: Periodic Incremental Listing Scan ─────────────────────────────
-  // ... (existing code)
+  // Corre cada N minutos, usa listing superficial, compara fingerprints, aplica stop condition.
   const collectCron = `*/${intervalMinutes} * * * *`;
 
   cron.schedule(
@@ -57,7 +53,8 @@ export function startScheduler(): void {
   );
 
   // ── MODO 2: Daily Direct Recheck ──────────────────────────────────────────
-  // ... (existing code)
+  // Corre una vez al día a COMPRASMX_DAILY_RECHECK_HOUR.
+  // Elude el listado general — entra directo a source_url de cada expediente activo.
   const recheckCron = `0 ${recheckHour} * * *`;
 
   cron.schedule(
@@ -95,58 +92,6 @@ export function startScheduler(): void {
     { timezone: "America/Mexico_City" },
   );
 
-  // ── INVERSIÓN: Reportes diarios especializados ────────────────────────────
-  // Acciones (L-V 9am)
-  cron.schedule(
-    DAILY_ACCIONES_CRON,
-    async () => {
-      log.info({ cron: DAILY_ACCIONES_CRON }, "📈 Disparando reporte diario de acciones");
-      await runDailyAccionesJob();
-    },
-    { timezone: "America/Mexico_City" },
-  );
-
-  // Apuestas (Diario 8am)
-  cron.schedule(
-    DAILY_APUESTAS_CRON,
-    async () => {
-      log.info({ cron: DAILY_APUESTAS_CRON }, "🎯 Disparando reporte diario de apuestas");
-      await runDailyApuestasJob();
-    },
-    { timezone: "America/Mexico_City" },
-  );
-
-  // Petróleo (L,W,F 10am)
-  cron.schedule(
-    DAILY_PETROLEO_CRON,
-    async () => {
-      log.info({ cron: DAILY_PETROLEO_CRON }, "🛢️ Disparando reporte diario de petróleo");
-      await runDailyPetroleoJob();
-    },
-    { timezone: "America/Mexico_City" },
-  );
-
-  // ── FONDOS: Convocatorias internacionales para donatarias autorizadas ────────
-  // ... (existing code)
-  const fondosCron = "0 */6 * * *";
-
-  if (config.FONDOS_ENABLED) {
-    cron.schedule(
-      fondosCron,
-      async () => {
-        log.info({ cron: fondosCron }, "Disparando colección de fondos internacionales");
-        try {
-          await runCollectFondosJob();
-        } catch (err) {
-          log.error({ err }, "Error no manejado en collect-fondos job");
-        }
-      },
-      { timezone: "America/Mexico_City" },
-    );
-  } else {
-    log.warn("⏸️  FONDOS_ENABLED=false — collector de fondos internacionales PAUSADO (los demás scrapers siguen activos)");
-  }
-
   // Registrar estado en system_state
   recordSchedulerStarted(collectCron, summaryCron).catch((err) =>
     log.warn({ err }, "No se pudo registrar scheduler en system_state"),
@@ -174,10 +119,7 @@ export function startScheduler(): void {
         hour: recheckHour,
       },
       summary: { cron: summaryCron, hour: summaryHour },
-      fondos: config.FONDOS_ENABLED
-        ? { cron: fondosCron, description: "Fondos internacionales donatarias" }
-        : { status: "PAUSED", reason: "FONDOS_ENABLED=false" },
     },
-    `✅ Scheduler iniciado — Modo 1 cada ${intervalMinutes} min, Modo 2 a las ${recheckHour}:00, Resumen a las ${summaryHour}:00, Fondos cada 6h`,
+    `✅ Scheduler iniciado — Modo 1 cada ${intervalMinutes} min, Modo 2 a las ${recheckHour}:00, Resumen a las ${summaryHour}:00`,
   );
 }
