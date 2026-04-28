@@ -4,6 +4,7 @@
  */
 import "dotenv/config";
 import { z } from "zod";
+import pino from "pino";
 
 const envSchema = z.object({
   // Runtime
@@ -95,9 +96,16 @@ export function getConfig(): AppConfig {
   }
 
   _config = result.data;
-  // Log crítico: permite verificar en Railway qué URL está usando realmente
-  console.log(`[CONFIG] COMPRASMX_SEED_URL = ${result.data.COMPRASMX_SEED_URL}`);
-  console.log(`[CONFIG] NODE_ENV = ${result.data.NODE_ENV} | RAILWAY_ENVIRONMENT = ${result.data.RAILWAY_ENVIRONMENT ?? "local"}`);
+  // Log crítico usando pino directamente — sin pasar por getLogger() para evitar
+  // dependencia circular durante la inicialización.
+  pino({ base: null, timestamp: pino.stdTimeFunctions.isoTime }).info(
+    {
+      COMPRASMX_SEED_URL: result.data.COMPRASMX_SEED_URL,
+      NODE_ENV: result.data.NODE_ENV,
+      RAILWAY_ENVIRONMENT: result.data.RAILWAY_ENVIRONMENT ?? "local",
+    },
+    "[CONFIG] variables de entorno cargadas",
+  );
   return _config;
 }
 

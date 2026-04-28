@@ -79,6 +79,15 @@ async function downloadPdfText(
     const response = await axios.get<ArrayBuffer>(url, {
       responseType: "arraybuffer",
       timeout: 45_000,
+      headers: {
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      },
     });
 
     await writeFile(tempPath, Buffer.from(response.data));

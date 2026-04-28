@@ -9,6 +9,7 @@ import { createModuleLogger } from "../core/logger";
 import { truncateForTelegram, formatCurrency } from "../core/text";
 import { formatMexicoDate } from "../core/time";
 import { TelegramError } from "../core/errors";
+import { withRetries, isRetryableNetworkError } from "../utils/retry.util";
 import type {
   EnrichedAlert,
   DailySummary,
@@ -152,14 +153,26 @@ export async function sendTelegramMessage(
   const bot = getBot();
 
   try {
-    const msg = await bot.sendMessage(config.TELEGRAM_CHAT_ID, text, {
-      parse_mode: parseMode,
-      disable_web_page_preview: true,
-    } as TelegramBot.SendMessageOptions);
+    const msg = await withRetries(
+      () =>
+        bot.sendMessage(config.TELEGRAM_CHAT_ID, text, {
+          parse_mode: parseMode,
+          disable_web_page_preview: true,
+        } as TelegramBot.SendMessageOptions),
+      {
+        maxAttempts: 3,
+        initialDelayMs: 1_000,
+        backoffMultiplier: 2,
+        maxDelayMs: 4_000,
+        shouldRetry: isRetryableNetworkError,
+        onRetry: (_err, attempt, delay) =>
+          log.warn({ attempt, delayMs: delay }, "⏳ Reintentando envío Telegram..."),
+      },
+    );
     return msg.message_id;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error({ error: msg }, "Error enviando mensaje Telegram");
+    log.error({ error: msg }, "❌ Error enviando mensaje Telegram (agotados reintentos)");
     throw new TelegramError(`Error enviando a Telegram: ${msg}`);
   }
 }

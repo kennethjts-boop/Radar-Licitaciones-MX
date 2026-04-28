@@ -25,6 +25,7 @@ import {
 import { normalize } from "../../normalizers/procurement.normalizer";
 import { getConfig } from "../../config/env";
 import { getSupabaseClient } from "../../storage/client";
+import { withRetries, isRetryableNetworkError } from "../../utils/retry.util";
 
 const log = createModuleLogger("collector-comprasmx");
 
@@ -123,7 +124,8 @@ export async function collectComprasMx(
       .single();
     const sourceId = sourceData?.id ?? null;
 
-    await BrowserManager.withContext(async (page, _context) => {
+    await withRetries(
+      () => BrowserManager.withContext(async (page, _context) => {
       const navigator = new ComprasMxNavigator();
 
       // ── A. Listing Scan ────────────────────────────────────────────────────
@@ -263,7 +265,17 @@ export async function collectComprasMx(
       if (!stopReason) {
         stopReason = `completed — ${pagesScanned} pages scanned, all rows evaluated`;
       }
-    });
+    }),
+      {
+        maxAttempts: 3,
+        initialDelayMs: 1_000,
+        backoffMultiplier: 2,
+        maxDelayMs: 4_000,
+        shouldRetry: isRetryableNetworkError,
+        onRetry: (_err, attempt, delay) =>
+          log.warn({ attempt, delayMs: delay }, "⏳ Reintentando BrowserManager (ComprasMX)..."),
+      },
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ err }, "💥 Falla crítica en BrowserManager");

@@ -9,9 +9,9 @@ import { getConfig } from "../../config/env";
 
 const log = createModuleLogger("browser-manager");
 
-// Agent conservador y estático
+// Chrome 124 real — sincronizado con releases.chromium.org/2024
 const USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 export class BrowserManager {
   private browser: Browser | null = null;
@@ -93,6 +93,11 @@ export class BrowserManager {
       bypassCSP: true,
       extraHTTPHeaders: {
         "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
         DNT: "1",
       },
       proxy,
