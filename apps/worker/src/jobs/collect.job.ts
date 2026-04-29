@@ -664,6 +664,32 @@ export async function runCollectJob(): Promise<void> {
           // 4. Enriquecer y alertar por cada match
           for (const match of matches) {
             try {
+              // ── Filtro geográfico duro ────────────────────────────────────
+              // Si el radar tiene geoTerms y el procurement tiene state,
+              // verificar que al menos un geoTerm aparezca en state.
+              // Excepción: licitaciones DESIERTA siempre pasan (para auditoría).
+              const radarCfg = radars.find((r) => r.key === match.radarKey);
+              if (radarCfg && radarCfg.geoTerms.length > 0 && item.state !== null) {
+                const stateLower = item.state.toLowerCase();
+                const isDesierta = item.status.toLowerCase().includes("desierta");
+                const geoMatch = radarCfg.geoTerms.some((t) =>
+                  stateLower.includes(t.toLowerCase()),
+                );
+                if (!geoMatch && !isDesierta) {
+                  log.info(
+                    {
+                      radarKey: match.radarKey,
+                      externalId: item.externalId,
+                      state: item.state,
+                      status: item.status,
+                      geoTerms: radarCfg.geoTerms,
+                    },
+                    "⛔ Alerta omitida — state del procurement no coincide con geoTerms del radar",
+                  );
+                  continue;
+                }
+              }
+
               // Usar procurement_id real de DB si está disponible
               const enrichableMatch = {
                 ...match,

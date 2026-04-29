@@ -95,11 +95,25 @@ export function evaluateProcurementAgainstRadar(
       ? finalScore * (1 - (0.3 * Math.min(excludedFound.length, 3)) / 3)
       : finalScore;
 
-  if (penalizedScore < radar.minScore) {
+  // Penalización geográfica: si el radar tiene geoTerms y ninguno aparece en
+  // canonical_text, reducir el score en 0.3. El filtro duro geográfico (descartar
+  // la alerta) se aplica en collect.job.ts; aquí solo ajustamos el scoring.
+  let adjustedScore = penalizedScore;
+  if (radar.geoTerms.length > 0) {
+    const canonicalLower = canonical.toLowerCase();
+    const hasGeoMatch = radar.geoTerms.some((term) =>
+      canonicalLower.includes(term.toLowerCase()),
+    );
+    if (!hasGeoMatch) {
+      adjustedScore = Math.max(0, penalizedScore - 0.3);
+    }
+  }
+
+  if (adjustedScore < radar.minScore) {
     return null;
   }
 
-  const matchLevel = scoreToLevel(penalizedScore);
+  const matchLevel = scoreToLevel(adjustedScore);
 
   // 5. Construir explicación
   const explanation = buildExplanation({
@@ -107,7 +121,7 @@ export function evaluateProcurementAgainstRadar(
     matchedTerms,
     excludedFound,
     matchLevel,
-    score: penalizedScore,
+    score: adjustedScore,
     isNew,
     isStatusChange:
       previousStatus !== null && previousStatus !== procurement.status,
@@ -116,7 +130,7 @@ export function evaluateProcurementAgainstRadar(
   return {
     radarKey: radar.key,
     procurementId: procurement.externalId,
-    matchScore: penalizedScore,
+    matchScore: adjustedScore,
     matchLevel,
     matchedTerms,
     excludedTerms: excludedFound,

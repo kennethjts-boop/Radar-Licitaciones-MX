@@ -2,7 +2,7 @@
  * TIME — Manejo de fechas en zona horaria de México.
  * Toda la lógica de scheduling debe pasar por aquí.
  */
-import { formatInTimeZone, toZonedTime } from "date-fns-tz";
+import { formatInTimeZone, toZonedTime, fromZonedTime } from "date-fns-tz";
 import { format, parseISO, isValid } from "date-fns";
 
 const MX_TIMEZONE = "America/Mexico_City";
@@ -84,13 +84,23 @@ export function formatDuration(ms: number): string {
 
 /**
  * Retorna true si la fecha de apertura ya pasó (licitación vencida).
- * openingDate puede ser ISO-8601 o null.
+ * openingDate puede ser ISO-8601 sin offset (e.g. "2026-04-20T09:00:00") o null.
+ *
+ * IMPORTANTE: el API de ComprasMX devuelve fechas sin timezone, pero representan
+ * hora local de México. Se interpreta explícitamente como America/Mexico_City para
+ * evitar el error de +5/+6h que ocurre cuando el servidor corre en UTC.
+ * Si openingDate es null → retorna false (no expirada, dejar pasar).
  */
 export function isDateExpired(openingDate: string | null | undefined): boolean {
   if (!openingDate) return false;
-  const d = parseDate(openingDate);
-  if (!d) return false;
-  return d < new Date();
+  try {
+    // fromZonedTime interpreta el string naive como hora México → devuelve UTC Date.
+    const d = fromZonedTime(openingDate, MX_TIMEZONE);
+    if (!isValid(d)) return false;
+    return d < new Date();
+  } catch {
+    return false;
+  }
 }
 
 /**
