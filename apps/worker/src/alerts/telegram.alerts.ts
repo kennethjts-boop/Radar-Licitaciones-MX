@@ -250,8 +250,14 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
 
   // Fechas reales del API (vienen en ISO "2026-04-17T10:30:00")
   const raw = p.rawJson as Record<string, unknown>;
+  const fechaPublicacion = (raw.fecha_publicacion as string | null | undefined)
+    ?? (raw.visibleDate as string | null | undefined)
+    ?? null;
   const fechaAclaraciones = (raw.fecha_aclaraciones as string | null | undefined) ?? null;
   const fechaLimite = (raw.fecha_limite as string | null | undefined) ?? null;
+  const fechaFallo = (raw.fecha_fallo as string | null | undefined) ?? null;
+  const fechaVisita = (raw.fecha_visita as string | null | undefined) ?? null;
+  const fechaInicioContrato = (raw.fecha_inicio_contrato as string | null | undefined) ?? null;
 
   const fmtDate = (d: string | null) =>
     d ? formatMexicoDate(d, "dd/MM/yyyy HH:mm") : null;
@@ -276,6 +282,9 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
     p.amount ? `💰 <b>Monto:</b> ${formatCurrency(p.amount, p.currency)}` : "",
     "",
     // Fechas reales disponibles en el API
+    fechaPublicacion
+      ? `📅 <b>Fecha de publicación:</b> ${fmtDate(fechaPublicacion)}`
+      : "",
     p.openingDate
       ? `📂 <b>Apertura de proposiciones:</b> ${fmtDate(p.openingDate)}`
       : "",
@@ -284,6 +293,15 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
       : "",
     fechaLimite
       ? `⏰ <b>Límite envío aclaraciones:</b> ${fmtDate(fechaLimite)}`
+      : "",
+    fechaVisita
+      ? `🏛 <b>Visita a instalaciones:</b> ${fmtDate(fechaVisita)}`
+      : "",
+    fechaFallo
+      ? `⚖️ <b>Acto del Fallo:</b> ${fmtDate(fechaFallo)}`
+      : "",
+    fechaInicioContrato
+      ? `🗓 <b>Inicio estimado del contrato:</b> ${fmtDate(fechaInicioContrato)}`
       : "",
     "",
     `🎯 <b>Razón del match:</b>`,

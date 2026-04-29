@@ -40,11 +40,13 @@ export interface ApiRegistro {
   estatus_alterno?: string;
   tipo_procedimiento?: string;
   cod_expediente?: string;
-  fecha_apertura?: string;      // apertura de proposiciones
-  fecha_aclaraciones?: string;  // junta de aclaraciones
-  fecha_limite?: string;        // límite de envío de aclaraciones
-  /** No existe en el listado del API — siempre undefined en producción */
-  fecha_publicacion?: string;
+  fecha_apertura?: string;        // apertura de proposiciones
+  fecha_aclaraciones?: string;    // junta de aclaraciones
+  fecha_limite?: string;          // límite de envío de aclaraciones
+  fecha_publicacion?: string;     // fecha de publicación (no devuelta por el listado API)
+  fecha_fallo?: string;           // acto del fallo
+  fecha_visita?: string;          // visita a instalaciones
+  fecha_inicio_contrato?: string; // inicio estimado del contrato
   monto?: number | string | null;
   caracter?: string;
   [key: string]: unknown;
