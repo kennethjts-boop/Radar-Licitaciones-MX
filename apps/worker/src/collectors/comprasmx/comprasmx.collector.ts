@@ -128,6 +128,7 @@ export async function collectComprasMx(
       () => BrowserManager.withContext(async (page, _context) => {
       const navigator = new ComprasMxNavigator();
 
+
       // ── A. Listing Scan ────────────────────────────────────────────────────
       const { rows: listingRows, apiRegistros, pagesScanned: scanned } =
         await navigator.scanListing(page, baseUrl, maxPages);
@@ -265,7 +266,11 @@ export async function collectComprasMx(
       if (!stopReason) {
         stopReason = `completed — ${pagesScanned} pages scanned, all rows evaluated`;
       }
-    }),
+      },
+      // Timeout del browser: 5 min. Si se cuelga, el finally de withContext
+      // cierra el browser antes de que dispare el outer withTimeout (25 min).
+      { timeoutMs: 5 * 60 * 1000 },
+    ),
       {
         maxAttempts: 3,
         initialDelayMs: 1_000,
@@ -369,7 +374,10 @@ export async function recheckComprasMx(
           log.error({ err: e, url }, "❌ Error en daily recheck URL");
         }
       }
-    });
+    },
+    // Timeout proporcional al número de URLs; mínimo 5 min, máximo 15 min.
+    { timeoutMs: Math.min(Math.max(urls.length * 30_000, 5 * 60_000), 15 * 60_000) },
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error(

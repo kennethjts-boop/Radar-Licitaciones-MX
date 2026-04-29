@@ -150,6 +150,10 @@ export class BrowserManager {
       let timeoutHandle: NodeJS.Timeout | null = null;
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(() => {
+          log.error(
+            { timeoutMs: options.timeoutMs },
+            "⏱ Browser operation timeout — forzando cierre del browser en finally",
+          );
           reject(
             new Error(
               `Browser operation timed out after ${options.timeoutMs}ms`,

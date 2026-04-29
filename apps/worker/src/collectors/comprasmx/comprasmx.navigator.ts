@@ -194,17 +194,42 @@ export class ComprasMxNavigator {
 
       log.info("🔍 Activando búsqueda en el portal ComprasMX...");
       try {
+        // Configurar waitForResponse ANTES del click para no perder la respuesta.
+        // Timeout 60 s — si la API no responde en ese tiempo, es señal de que el portal
+        // está caído o bloqueando la petición; lanzamos error descriptivo.
+        const apiResponsePromise = page.waitForResponse(
+          (resp) => resp.url().includes("/whitney/") && resp.status() === 200,
+          { timeout: 60_000 },
+        );
+
+        log.info("⏳ waitForResponse /whitney/ configurado — ejecutando click en Buscar...");
         await page.click('button:has-text("Buscar")', { timeout: 8000 });
+        log.info("🖱 Click en Buscar ejecutado — esperando respuesta API /whitney/ (timeout: 60 s)...");
+
+        try {
+          const apiResp = await apiResponsePromise;
+          log.info(
+            { url: apiResp.url(), status: apiResp.status() },
+            "✅ Respuesta API /whitney/ recibida",
+          );
+        } catch (waitErr) {
+          const msg = waitErr instanceof Error ? waitErr.message : String(waitErr);
+          throw new Error(
+            `⏱ API /whitney/ no respondió en 60 s tras click en Buscar: ${msg}`,
+          );
+        }
+
+        // Confirmar que las filas ya están en el DOM
         await page.waitForFunction(
           `document.querySelectorAll(${JSON.stringify(SELECTORS.LISTING_ROW)}).length > 1`,
-          { timeout: 15000 }
+          { timeout: 15000 },
         );
         log.info("✅ Tabla de procedimientos cargada con resultados");
       } catch (buscarErr) {
         const html = await page.content().catch(() => "(no se pudo obtener HTML)");
         log.error(
           { buscarErr, html: html.slice(0, 2000) },
-          "❌ FATAL: No se pudo activar Buscar — el portal no cargó correctamente"
+          "❌ FATAL: No se pudo activar Buscar o capturar respuesta API",
         );
         page.off('response', captureApiRegistros);
         return { rows: [], apiRegistros, pagesScanned: 0 };
