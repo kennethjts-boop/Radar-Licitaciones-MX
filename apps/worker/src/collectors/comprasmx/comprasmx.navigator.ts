@@ -170,6 +170,9 @@ export class ComprasMxNavigator {
             { campos: Object.keys(first), muestra: first },
             "🔬 DIAG campos del primer ApiRegistro"
           );
+          // DIAG TEMPORAL — ver estructura exacta del primer registro en Railway
+          // eslint-disable-next-line no-console
+          console.log("🔬 [DIAG TEMPORAL] registros[0] crudo:\n" + JSON.stringify(first, null, 2));
         }
 
         let count = 0;
