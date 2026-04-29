@@ -3,7 +3,7 @@
  * Cada collector produce un objeto crudo; este normalizer lo transforma.
  */
 import { buildCanonicalText, normalizeText } from "../core/text";
-import { buildProcurementFingerprint } from "../core/fingerprints";
+import { buildProcurementFingerprint, buildCanonicalHash } from "../core/fingerprints";
 import { nowISO } from "../core/time";
 import type {
   NormalizedProcurement,
@@ -161,6 +161,8 @@ export function normalize(input: RawProcurementInput): NormalizedProcurement {
     expedienteId: input.expedienteId,
   });
 
+  const canonicalHash = buildCanonicalHash(input.procedureNumber, input.expedienteId);
+
   return {
     source: input.source,
     sourceUrl: input.sourceUrl,
@@ -185,6 +187,7 @@ export function normalize(input: RawProcurementInput): NormalizedProcurement {
     canonicalText,
     canonicalFingerprint,
     lightweightFingerprint: null,
+    canonicalHash,
     rawJson: input.rawJson,
     fetchedAt: nowISO(),
   };

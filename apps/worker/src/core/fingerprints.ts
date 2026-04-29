@@ -81,6 +81,21 @@ export function buildRawFingerprint(raw: Record<string, unknown>): string {
 }
 
 /**
+ * Hash canónico de deduplicación cross-ID: número de procedimiento + expediente_id.
+ * Estable incluso si ComprasMX cambia su external_id interno.
+ */
+export function buildCanonicalHash(
+  numeroProcedimiento: string | null | undefined,
+  expedienteId: string | null | undefined,
+): string {
+  const parts = [
+    (numeroProcedimiento ?? "").trim().toLowerCase(),
+    (expedienteId ?? "").trim().toLowerCase(),
+  ];
+  return sha256(parts.join("|"));
+}
+
+/**
  * Detecta qué campos cambiaron entre dos objetos parciales.
  * Retorna un objeto con { campo: { prev, next } } para cada campo diferente.
  */

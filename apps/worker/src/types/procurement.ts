@@ -91,6 +91,7 @@ export interface NormalizedProcurement {
   canonicalText: string; // título + descripción + dependencia + unidad + términos adjuntos
   canonicalFingerprint: string; // SHA-256 hex del canonicalText
   lightweightFingerprint: string | null;
+  canonicalHash: string | null; // SHA-256 de numero_procedimiento + expediente_id (deduplicación cross-ID)
 
   // Raw original (preservar siempre)
   rawJson: Record<string, unknown>;

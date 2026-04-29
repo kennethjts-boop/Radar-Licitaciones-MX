@@ -40,19 +40,40 @@ export async function upsertProcurement(
 ): Promise<UpsertProcurementResult> {
   const db = getSupabaseClient();
 
-  // Buscar existente
-  const { data: existing, error: findError } = await db
-    .from("procurements")
-    .select("*")
-    .eq("source_id", sourceId)
-    .eq("external_id", normalized.externalId)
-    .single();
+  // Buscar existente: primero por canonical_hash (deduplicación cross-ID), luego fallback por source+external_id
+  let existing: DbProcurement | null = null;
 
-  if (findError && findError.code !== "PGRST116") {
-    throw new StorageError(
-      `Error buscando procurement: ${findError.message}`,
-      "find",
-    );
+  if (normalized.canonicalHash) {
+    const { data: byHash, error: hashError } = await db
+      .from("procurements")
+      .select("*")
+      .eq("canonical_hash", normalized.canonicalHash)
+      .maybeSingle();
+
+    if (hashError && hashError.code !== "PGRST116") {
+      throw new StorageError(
+        `Error buscando procurement por canonical_hash: ${hashError.message}`,
+        "find",
+      );
+    }
+    existing = byHash ?? null;
+  }
+
+  if (!existing) {
+    const { data: byExternal, error: findError } = await db
+      .from("procurements")
+      .select("*")
+      .eq("source_id", sourceId)
+      .eq("external_id", normalized.externalId)
+      .maybeSingle();
+
+    if (findError && findError.code !== "PGRST116") {
+      throw new StorageError(
+        `Error buscando procurement: ${findError.message}`,
+        "find",
+      );
+    }
+    existing = byExternal ?? null;
   }
 
   const now = nowISO();
@@ -107,6 +128,7 @@ export async function upsertProcurement(
       canonical_text: normalized.canonicalText,
       canonical_fingerprint: normalized.canonicalFingerprint,
       lightweight_fingerprint: normalized.lightweightFingerprint,
+      canonical_hash: normalized.canonicalHash,
       last_seen_at: now,
       last_detail_checked_at: now,
       last_attachments_checked_at:
@@ -208,6 +230,7 @@ export async function upsertProcurement(
       canonical_text: normalized.canonicalText,
       canonical_fingerprint: normalized.canonicalFingerprint,
       lightweight_fingerprint: normalized.lightweightFingerprint,
+      canonical_hash: normalized.canonicalHash,
       last_seen_at: now,
       last_detail_checked_at: now,
       last_attachments_checked_at:

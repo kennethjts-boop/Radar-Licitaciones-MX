@@ -74,6 +74,7 @@ export interface DbProcurement {
   canonical_text: string;
   canonical_fingerprint: string;
   lightweight_fingerprint: string | null;
+  canonical_hash: string | null;
   last_seen_at: string;
   last_detail_checked_at: string | null;
   last_attachments_checked_at: string | null;

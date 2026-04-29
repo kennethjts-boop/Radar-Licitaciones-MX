@@ -52,6 +52,7 @@ function dbToNormalized(row: DbProcurement): NormalizedProcurement {
     canonicalText: row.canonical_text,
     canonicalFingerprint: row.canonical_fingerprint,
     lightweightFingerprint: row.lightweight_fingerprint,
+    canonicalHash: row.canonical_hash ?? null,
     rawJson: {},
     fetchedAt: row.last_seen_at,
   };
