@@ -128,6 +128,21 @@ export const SELECTORS = {
   ATTACHMENTS_TABLE_HEADER: 'Tipo de documento'
 };
 
+/**
+ * Candidatos de selector para el botón "Buscar".
+ * El portal usa PrimeNG — el elemento puede ser <button>, <p-button> o tener clases variables.
+ */
+const BUSCAR_SELECTORS_LIST = [
+  'button:has-text("Buscar")',
+  'p-button:has-text("Buscar") button',
+  '.p-button:has-text("Buscar")',
+  'button[aria-label*="uscar"]',
+  'button.p-button-primary',
+  'input[type="submit"][value*="uscar"]',
+  'button[type="submit"]',
+];
+const BUSCAR_SELECTOR_ANY = BUSCAR_SELECTORS_LIST.join(', ');
+
 export class ComprasMxNavigator {
   /**
    * Escanea el listado.
@@ -192,37 +207,118 @@ export class ComprasMxNavigator {
     try {
       log.info({ baseUrl }, "🌐 Navegando al portal ComprasMX...");
       await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-      await page.waitForSelector('button:has-text("Buscar")', { timeout: 20000 });
-      await page.waitForTimeout(2000);
+
+      // Esperar cualquiera de los selectores candidatos del botón Buscar
+      log.info({ selector: BUSCAR_SELECTOR_ANY }, "⏳ Esperando botón Buscar...");
+      await page.waitForSelector(BUSCAR_SELECTOR_ANY, { timeout: 20000 });
+
+      // 5 s para que Angular hidrate el componente antes del click
+      await page.waitForTimeout(5000);
 
       log.info("🔍 Activando búsqueda en el portal ComprasMX...");
       try {
-        // Configurar waitForResponse ANTES del click para no perder la respuesta.
-        // Timeout 60 s — si la API no responde en ese tiempo, es señal de que el portal
-        // está caído o bloqueando la petición; lanzamos error descriptivo.
+        // ── Screenshot antes del click (diagnóstico) ─────────────────────────
+        const screenshotBuf = await page.screenshot({ fullPage: false }).catch(() => null);
+        if (screenshotBuf) {
+          const b64 = screenshotBuf.toString("base64");
+          log.info({ screenshotBytes: screenshotBuf.length }, "📸 Screenshot capturado antes del click en Buscar");
+          // eslint-disable-next-line no-console
+          console.log("📸 [SCREENSHOT-PRE-CLICK] data:image/png;base64," + b64);
+        }
+
+        // ── Configurar waitForResponse ANTES del click ────────────────────────
         const apiResponsePromise = page.waitForResponse(
           (resp) => resp.url().includes("/whitney/") && resp.status() === 200,
           { timeout: 60_000 },
         );
 
-        log.info("⏳ waitForResponse /whitney/ configurado — ejecutando click en Buscar...");
-        await page.click('button:has-text("Buscar")', { timeout: 8000 });
-        log.info("🖱 Click en Buscar ejecutado — esperando respuesta API /whitney/ (timeout: 60 s)...");
+        // ── Click con fallback de selectores ──────────────────────────────────
+        let clickedSelector = "";
+        for (const sel of BUSCAR_SELECTORS_LIST) {
+          try {
+            const el = await page.$(sel);
+            if (el && await el.isVisible()) {
+              await el.click({ timeout: 8000 });
+              clickedSelector = sel;
+              log.info({ selector: sel }, "🖱 Click en Buscar ejecutado");
+              break;
+            }
+          } catch { /* probar siguiente selector */ }
+        }
+        if (!clickedSelector) {
+          // Log del HTML para diagnóstico antes de lanzar el error
+          const html = await page.content().catch(() => "(sin HTML)");
+          log.error(
+            { html: html.slice(0, 3000), selectoresProbados: BUSCAR_SELECTORS_LIST },
+            "❌ No se encontró el botón Buscar con ningún selector",
+          );
+          throw new Error(
+            `Botón Buscar no encontrado. Selectores probados: [${BUSCAR_SELECTORS_LIST.join(", ")}]`,
+          );
+        }
 
+        log.info("⏳ Esperando respuesta API /whitney/ (timeout: 60 s)...");
+
+        // ── Intentar capturar respuesta vía interceptor ───────────────────────
+        let apiOk = false;
         try {
           const apiResp = await apiResponsePromise;
           log.info(
             { url: apiResp.url(), status: apiResp.status() },
-            "✅ Respuesta API /whitney/ recibida",
+            "✅ Respuesta API /whitney/ recibida vía interceptor",
           );
+          apiOk = true;
         } catch (waitErr) {
-          const msg = waitErr instanceof Error ? waitErr.message : String(waitErr);
-          throw new Error(
-            `⏱ API /whitney/ no respondió en 60 s tras click en Buscar: ${msg}`,
+          log.warn(
+            { waitErr: String(waitErr) },
+            "⚠️ waitForResponse timeout — intentando fallback fetch directo desde browser...",
           );
         }
 
-        // Confirmar que las filas ya están en el DOM
+        // ── FALLBACK: fetch directo desde el contexto del browser ─────────────
+        if (!apiOk) {
+          const fallbackResult = await page.evaluate(async () => {
+            try {
+              const resp = await fetch("/whitney/sitiopublico/expedientes", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Accept: "application/json" },
+                body: JSON.stringify({ pagina: 1, registros_por_pagina: 50, filtros: {} }),
+              });
+              if (!resp.ok) return null;
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              return resp.json() as Promise<any>;
+            } catch { return null; }
+          }) as { data?: Array<{ registros?: unknown[] }> } | null;
+
+          const fallbackRegistros = fallbackResult?.data?.[0]?.registros;
+          if (Array.isArray(fallbackRegistros) && fallbackRegistros.length > 0) {
+            const registros = fallbackRegistros as ApiRegistro[];
+            log.info({ count: registros.length }, "✅ Fallback API directo exitoso — sintetizando filas");
+            for (const it of registros) {
+              if (!it.numero_procedimiento) continue;
+              apiRegistros.set(it.numero_procedimiento, it);
+              allRows.push({
+                externalId: it.numero_procedimiento,
+                title: it.nombre_procedimiento?.trim() ?? null,
+                dependency: it.siglas?.trim() ?? null,
+                status: it.estatus_alterno ?? null,
+                visibleDate: it.fecha_publicacion ?? null,
+                sourceUrl: "",
+                rowText: [it.nombre_procedimiento, it.siglas, it.estatus_alterno]
+                  .filter(Boolean).join(" "),
+              });
+            }
+            pagesScanned = 1;
+            page.off("response", captureApiRegistros);
+            return { rows: allRows, apiRegistros, pagesScanned };
+          }
+
+          throw new Error(
+            `⏱ API /whitney/ no respondió en 60 s y el fallback fetch directo también falló`,
+          );
+        }
+
+        // ── Confirmar filas en el DOM ─────────────────────────────────────────
         await page.waitForFunction(
           `document.querySelectorAll(${JSON.stringify(SELECTORS.LISTING_ROW)}).length > 1`,
           { timeout: 15000 },
@@ -234,12 +330,12 @@ export class ComprasMxNavigator {
           { buscarErr, html: html.slice(0, 2000) },
           "❌ FATAL: No se pudo activar Buscar o capturar respuesta API",
         );
-        page.off('response', captureApiRegistros);
+        page.off("response", captureApiRegistros);
         return { rows: [], apiRegistros, pagesScanned: 0 };
       }
     } catch (err) {
       log.error({ err, baseUrl }, "❌ Error cargando portal ComprasMX");
-      page.off('response', captureApiRegistros);
+      page.off("response", captureApiRegistros);
       return { rows: [], apiRegistros, pagesScanned: 0 };
     }
 
