@@ -410,6 +410,79 @@ export class ComprasMxNavigator {
   }
 
   /**
+   * Extrae la fecha de publicación de la sección "CRONOGRAMA DE EVENTOS" del detalle.
+   * Debe llamarse cuando la page ya está cargada en la URL de detalle.
+   * Usa estrategia multi-selector igual que getValByLabel en extractDetail.
+   * Retorna el string tal como aparece en el DOM (e.g. "17/04/2026 10:00") o null.
+   */
+  async fetchPublicationDate(page: Page): Promise<string | null> {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await page.evaluate((): string | null => {
+        const LABEL_HINT = "publicaci"; // fragmento case-insensitive, tolerante a tildes
+
+        // Estrategia 1: celdas de tabla (PrimeNG p-table / tablas nativas)
+        // @ts-ignore
+        const allTds: any[] = Array.from(document.querySelectorAll("td, th"));
+        for (const td of allTds) {
+          const text = ((td.textContent as string) ?? "").trim().toLowerCase();
+          if (text.includes(LABEL_HINT)) {
+            const next: any = td.nextElementSibling;
+            if (next) {
+              const val = ((next.textContent as string) ?? "").trim();
+              if (val && /\d/.test(val)) return val;
+            }
+          }
+        }
+
+        // Estrategia 2: label, span, div, b — mismo patrón que getValByLabel en extractDetail
+        // @ts-ignore
+        const allEls: any[] = Array.from(
+          // @ts-ignore
+          document.querySelectorAll("label, span, div, b, p, .p-column-title"),
+        );
+        for (const el of allEls) {
+          const text = ((el.textContent as string) ?? "").trim().toLowerCase();
+          if (!text.includes(LABEL_HINT)) continue;
+
+          // Sibling directo
+          const next: any = el.nextElementSibling;
+          if (next) {
+            const val = ((next.textContent as string) ?? "").trim();
+            if (val && /\d/.test(val)) return val;
+          }
+
+          // Padre — quitar el label y tomar el resto
+          const parent: any = el.parentElement;
+          if (parent) {
+            const children: any[] = Array.from(parent.children);
+            const idx = children.indexOf(el);
+            if (idx >= 0 && idx + 1 < children.length) {
+              const val = ((children[idx + 1].textContent as string) ?? "").trim();
+              if (val && /\d/.test(val)) return val;
+            }
+            // Texto completo del padre menos el label
+            const labelText = ((el.textContent as string) ?? "").trim();
+            const parentText = ((parent.textContent as string) ?? "")
+              .replace(labelText, "")
+              .replace(/\s+/g, " ")
+              .trim();
+            if (parentText && /\d/.test(parentText) && parentText.length < 30) {
+              return parentText;
+            }
+          }
+        }
+
+        return null;
+      });
+
+      return result ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Extrae el detalle.
    * Si se provee una URL, navega a ella. Si se provee un externalId, busca y clicka en la página actual.
    */

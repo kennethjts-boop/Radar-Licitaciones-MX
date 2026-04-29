@@ -75,7 +75,7 @@ const COLLECT_TIMEOUT_MS = 25 * 60 * 1000; // 25 minutos
 async function processAttachmentsForProcurement(
   procurementId: string,
   sourceUrl: string,
-): Promise<void> {
+): Promise<string | null> {
   const excludedKeywordsIndex = BUSINESS_PROFILE.EXCLUDED_KEYWORDS.map((word) => ({
     raw: word,
     normalized: sanitizeForKeywordRegex(word),
@@ -125,12 +125,24 @@ async function processAttachmentsForProcurement(
 
   const existingFileNames = new Set((existingRows ?? []).map((r) => r.file_name));
 
+  // Capturar fecha_publicacion mientras el browser del detalle está abierto.
+  let capturedFechaPublicacion: string | null = null;
+
   await BrowserManager.withContext(async (page, context) => {
     const navigator = new ComprasMxNavigator();
     const detail = await navigator.extractDetail(context, sourceUrl, page);
     if (!detail) {
       log.warn({ procurementId, sourceUrl }, "No se pudo abrir detalle para adjuntos");
       return;
+    }
+
+    // La page está en la URL de detalle — extraer fecha_publicacion del cronograma.
+    capturedFechaPublicacion = await navigator.fetchPublicationDate(page);
+    if (capturedFechaPublicacion) {
+      log.debug(
+        { procurementId, sourceUrl, fechaPublicacion: capturedFechaPublicacion },
+        "📅 fecha_publicacion extraída del cronograma de detalle",
+      );
     }
 
     const downloads = await downloadAttachmentsFromDetail(page, {
@@ -532,6 +544,8 @@ async function processAttachmentsForProcurement(
       }
     }
   });
+
+  return capturedFechaPublicacion;
 }
 
 export async function runCollectJob(): Promise<void> {
@@ -592,8 +606,9 @@ export async function runCollectJob(): Promise<void> {
           // Solo evaluar matches si es nuevo o cambió
           if (!upsertResult.isNew && !upsertResult.isUpdated) continue;
 
+          let fechaPublicacion: string | null = null;
           try {
-            await processAttachmentsForProcurement(
+            fechaPublicacion = await processAttachmentsForProcurement(
               upsertResult.procurementId,
               item.sourceUrl,
             );
@@ -602,6 +617,10 @@ export async function runCollectJob(): Promise<void> {
               { err: attErr, externalId: item.externalId },
               "Fallo en pipeline de adjuntos; se continúa con match/alertas",
             );
+          }
+          // Inyectar fecha_publicacion en rawJson para que telegram.alerts la muestre.
+          if (fechaPublicacion) {
+            item.rawJson = { ...item.rawJson, fecha_publicacion: fechaPublicacion };
           }
 
           // Filtrar licitaciones vencidas: no generar alertas si ya pasó la fecha de apertura
