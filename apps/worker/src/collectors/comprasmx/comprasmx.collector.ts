@@ -255,6 +255,12 @@ export async function collectComprasMx(
             "✅ Registro construido desde API — sin detail fetch"
           );
 
+          // DIAG TEMPORAL — imprimir el primer NormalizedProcurement completo
+          if (items.length === 0) {
+            // eslint-disable-next-line no-console
+            console.log("🔬 [DIAG TEMPORAL] NormalizedProcurement[0]:\n" + JSON.stringify(normalized, null, 2));
+          }
+
           items.push(normalized);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
