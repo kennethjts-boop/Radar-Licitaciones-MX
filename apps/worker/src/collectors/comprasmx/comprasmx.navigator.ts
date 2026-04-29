@@ -40,9 +40,11 @@ export interface ApiRegistro {
   estatus_alterno?: string;
   tipo_procedimiento?: string;
   cod_expediente?: string;
-  fecha_apertura?: string;
+  fecha_apertura?: string;      // apertura de proposiciones
+  fecha_aclaraciones?: string;  // junta de aclaraciones
+  fecha_limite?: string;        // límite de envío de aclaraciones
+  /** No existe en el listado del API — siempre undefined en producción */
   fecha_publicacion?: string;
-  fecha_aclaraciones?: string;
   monto?: number | string | null;
   caracter?: string;
   [key: string]: unknown;
@@ -58,9 +60,10 @@ export function apiRegistroToRawInput(item: ApiRegistro): RawProcurementInput {
     ? `https://comprasmx.buengobierno.gob.mx/sitiopublico/#/sitiopublico/detalle/${uuid}/procedimiento`
     : '';
 
-  // fecha_publicacion es el campo canónico; fecha_aclaraciones como fallback
-  // si la API no incluye publicación explícita.
-  const publicationDate = item.fecha_publicacion ?? item.fecha_aclaraciones ?? null;
+  // El API del listado NO incluye fecha_publicacion.
+  // fecha_aclaraciones es la junta de aclaraciones, NO la fecha de publicación.
+  // Se deja publicationDate en null; la "novedad" se detecta por ausencia en DB (fetchedAt).
+  // Las fechas reales se preservan en rawJson y se muestran directamente en la alerta Telegram.
 
   return {
     source: 'comprasmx',
@@ -74,9 +77,9 @@ export function apiRegistroToRawInput(item: ApiRegistro): RawProcurementInput {
     dependencyName: item.siglas?.trim() ?? null,
     buyingUnit: null,
     procedureType: item.tipo_procedimiento ?? null,
-    status: item.estatus_alterno ?? null,           // → normalizeStatus() en normalizer
-    publicationDate,                                 // fecha_publicacion ?? fecha_aclaraciones
-    openingDate: item.fecha_apertura ?? null,        // fecha de apertura de propuestas
+    status: item.estatus_alterno ?? null,
+    publicationDate: null,                    // no disponible en el listado del API
+    openingDate: item.fecha_apertura ?? null, // apertura de proposiciones
     awardDate: null,
     state: (item["entidad_federativa_contratacion"] as string | null) ?? null,
     municipality: null,

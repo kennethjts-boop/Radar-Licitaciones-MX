@@ -248,6 +248,14 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
   const emoji = matchLevelEmoji(alert.matchLevel);
   const score = (alert.matchScore * 100).toFixed(0);
 
+  // Fechas reales del API (vienen en ISO "2026-04-17T10:30:00")
+  const raw = p.rawJson as Record<string, unknown>;
+  const fechaAclaraciones = (raw.fecha_aclaraciones as string | null | undefined) ?? null;
+  const fechaLimite = (raw.fecha_limite as string | null | undefined) ?? null;
+
+  const fmtDate = (d: string | null) =>
+    d ? formatMexicoDate(d, "dd/MM/yyyy HH:mm") : null;
+
   const lines: string[] = [
     `${emoji} <b>NUEVO MATCH — ${alert.radarName}</b>`,
     `Nivel: <b>${alert.matchLevel.toUpperCase()}</b> | Score: ${score}%`,
@@ -264,9 +272,19 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
       ? `📍 <b>Ubicación:</b> ${p.municipality ? `${p.municipality}, ` : ""}${p.state}`
       : "",
     "",
-    `📅 <b>Publicación:</b> ${p.publicationDate ? formatMexicoDate(p.publicationDate, "dd/MM/yyyy") : "N/D"}`,
     `📊 <b>Estatus:</b> ${p.status}`,
     p.amount ? `💰 <b>Monto:</b> ${formatCurrency(p.amount, p.currency)}` : "",
+    "",
+    // Fechas reales disponibles en el API
+    p.openingDate
+      ? `📂 <b>Apertura de proposiciones:</b> ${fmtDate(p.openingDate)}`
+      : "",
+    fechaAclaraciones
+      ? `📋 <b>Junta de aclaraciones:</b> ${fmtDate(fechaAclaraciones)}`
+      : "",
+    fechaLimite
+      ? `⏰ <b>Límite envío aclaraciones:</b> ${fmtDate(fechaLimite)}`
+      : "",
     "",
     `🎯 <b>Razón del match:</b>`,
     alert.explanation,
