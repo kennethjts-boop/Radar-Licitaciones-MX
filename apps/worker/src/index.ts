@@ -18,7 +18,7 @@ import { startScheduler } from "./jobs/scheduler";
 import { initCommandBot } from "./agent/telegram.commands";
 import { setComprasMxSourceId } from "./jobs/collect.job";
 import { runMaestrosScraper } from "./scripts/maestros-morelos";
-import { startHealthServer } from "./core/health-server";
+import { startHttpServer } from "./core/http-server";
 
 async function main(): Promise<void> {
   // ── 1. Configuración y logger ─────────────────────────────────────────────
@@ -115,14 +115,14 @@ async function main(): Promise<void> {
     }
   }
 
-  // ── 6. Health check endpoint ──────────────────────────────────────────────
-  startHealthServer();
+  // ── 6. HTTP Server ────────────────────────────────────────────────────────
+  startHttpServer();
 
   // ── 7. Scheduler ──────────────────────────────────────────────────────────
   startScheduler();
   log.info("✅ Scheduler iniciado");
 
-  // ── 7. Resumen de arranque ────────────────────────────────────────────────
+  // ── 8. Resumen de arranque ────────────────────────────────────────────────
   log.info(
     {
       supabase: bootResult.supabaseOk ? "ok" : "down",

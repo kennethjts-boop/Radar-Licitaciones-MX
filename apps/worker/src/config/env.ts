@@ -77,6 +77,9 @@ const envSchema = z.object({
 
   // App
   APP_TIMEZONE: z.string().default("America/Mexico_City"),
+
+  // HTTP Server
+  HEALTH_PORT: z.string().default("8080").transform(Number),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;
