@@ -11,6 +11,7 @@ import { getConfig } from "../config/env";
 import { createModuleLogger } from "../core/logger";
 import { healthTracker } from "../core/healthcheck";
 import { formatDuration, formatMexicoDate, nowISO } from "../core/time";
+import { formatCurrency } from "../core/text";
 import { getState, STATE_KEYS } from "../core/system-state";
 import { getActiveRadars } from "../radars/index";
 
@@ -176,6 +177,67 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     }
   });
 
+  // ── /monto ────────────────────────────────────────────────────────────────
+  bot.onText(/\/monto (.+)/, async (msg, match) => {
+    if (String(msg.chat.id) !== chatId) return;
+    const query = match?.[1]?.trim();
+    if (!query) return;
+    log.info({ from: msg.from?.username, query }, "📥 /monto");
+
+    try {
+      const { getSupabaseClient } = await import("../storage/client");
+      const db = getSupabaseClient();
+      const { data: result, error } = await db
+        .from("procurements")
+        .select("amount,currency,licitation_number,dependency_name,state,municipality,opening_date,source_url")
+        .or(
+          `external_id.ilike.%${query}%,` +
+          `licitation_number.ilike.%${query}%,` +
+          `procedure_number.ilike.%${query}%`
+        )
+        .order("last_seen_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (!result) {
+        await bot.sendMessage(chatId, `❌ No encontré esa licitación: <b>${query}</b>`, { parse_mode: "HTML" });
+        return;
+      }
+
+      if (result.amount === null || result.amount === undefined) {
+        await bot.sendMessage(
+          chatId,
+          `⚠️ Monto no disponible para este expediente.\n📋 <b>${result.licitation_number ?? query}</b>`,
+          { parse_mode: "HTML" },
+        );
+        return;
+      }
+
+      const lines = [
+        `💰 <b>Monto:</b> ${formatCurrency(result.amount as number, result.currency as "MXN" | "USD" | null)}`,
+        `📋 <b>${result.licitation_number ?? "N/D"}</b>`,
+        `🏛 ${result.dependency_name ?? "N/D"}`,
+        result.state
+          ? `📍 ${result.municipality ? `${result.municipality as string}, ` : ""}${result.state as string}`
+          : "",
+        result.opening_date
+          ? `📅 <b>Apertura:</b> ${formatMexicoDate(result.opening_date as string, "dd/MM/yyyy HH:mm")}`
+          : "",
+        result.source_url ? `🔗 ${result.source_url as string}` : "",
+      ];
+
+      await bot.sendMessage(chatId, lines.filter(Boolean).join("\n"), {
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+      });
+    } catch (err) {
+      log.error({ err }, "❌ Error en /monto");
+      await bot.sendMessage(chatId, "❌ Error buscando el expediente").catch(() => {});
+    }
+  });
+
   // ── /debug_resumen ────────────────────────────────────────────────────────
   bot.onText(/\/debug_resumen/, async (msg) => {
     if (String(msg.chat.id) !== chatId) return;
@@ -250,5 +312,5 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     }
   });
 
-  log.info("✅ Comandos registrados: /prueba, /buscar, /debug_resumen, /scan, /recuperar");
+  log.info("✅ Comandos registrados: /prueba, /buscar, /monto, /debug_resumen, /scan, /recuperar");
 }
