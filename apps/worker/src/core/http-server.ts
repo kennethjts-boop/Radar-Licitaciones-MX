@@ -92,14 +92,24 @@ async function handleGetTopes(
     presupuesto,
   );
 
-  sendJson(res, 200, {
+  const response: Record<string, unknown> = {
     anio: tope.anio,
     tipo: tope.tipo,
     presupuesto_autorizado: presupuesto,
     tope_adjudicacion: tope.tope_adjudicacion_miles * 1000,
     tope_invitacion: tope.tope_invitacion_miles * 1000,
     fuente: tope.fuente,
-  });
+  };
+  if (
+    tope.tope_adjudicacion_srob_miles !== null &&
+    tope.tope_invitacion_srob_miles !== null
+  ) {
+    response.tope_adjudicacion_servicios =
+      tope.tope_adjudicacion_srob_miles * 1000;
+    response.tope_invitacion_servicios =
+      tope.tope_invitacion_srob_miles * 1000;
+  }
+  sendJson(res, 200, response);
 }
 
 async function handlePostEvaluarModalidad(

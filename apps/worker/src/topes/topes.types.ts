@@ -19,6 +19,10 @@ export interface TopeFinancieroRow {
   presupuesto_hasta: number | null;
   tope_adjudicacion_miles: number;
   tope_invitacion_miles: number;
+  /** Solo para tipo='obra_publica': tope adjudicación directa servicios relacionados con obra */
+  tope_adjudicacion_srob_miles: number | null;
+  /** Solo para tipo='obra_publica': tope invitación 3 personas servicios relacionados con obra */
+  tope_invitacion_srob_miles: number | null;
   fuente: string;
 }
 
