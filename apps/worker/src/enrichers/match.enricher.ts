@@ -22,6 +22,7 @@ const log = createModuleLogger("enricher");
 export async function enrichMatch(
   procurement: NormalizedProcurement,
   match: MatchResult,
+  modalidadProbable?: string,
 ): Promise<EnrichedAlert> {
   const radar = getRadarByKey(match.radarKey);
 
@@ -63,6 +64,7 @@ export async function enrichMatch(
     historyCount,
     detectedAt: nowISO(),
     telegramMessage: "", // se genera abajo
+    modalidadProbable,
   };
 
   // Generar mensaje Telegram

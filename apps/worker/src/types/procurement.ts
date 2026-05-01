@@ -145,6 +145,8 @@ export interface EnrichedAlert {
   historyCount: number;
   detectedAt: string; // ISO-8601
   telegramMessage: string; // Mensaje ya formateado para Telegram
+  /** Modalidad de contratación probable según topes PEF. Presente si el expediente tiene monto. */
+  modalidadProbable?: string;
 }
 
 // ─── Resumen diario ──────────────────────────────────────────────────────────

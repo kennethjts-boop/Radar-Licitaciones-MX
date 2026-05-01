@@ -280,6 +280,9 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
     "",
     `📊 <b>Estatus:</b> ${p.status}`,
     p.amount ? `💰 <b>Monto:</b> ${formatCurrency(p.amount, p.currency)}` : "",
+    alert.modalidadProbable
+      ? `📋 <b>Modalidad probable:</b> ${alert.modalidadProbable.replace(/_/g, " ")}`
+      : "",
     "",
     // Fechas reales disponibles en el API
     fechaPublicacion
