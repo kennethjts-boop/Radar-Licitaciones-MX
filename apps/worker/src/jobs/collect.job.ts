@@ -35,6 +35,7 @@ import {
 import { getActiveRadars } from "../radars/index";
 import { evaluateAllRadars } from "../matchers/matcher";
 import { enrichMatch } from "../enrichers/match.enricher";
+import { evaluarModalidad, inferTipoContratacion } from "../topes/topes.service";
 import {
   sendMatchAlert,
   sendTelegramMessage,
@@ -722,7 +723,26 @@ export async function runCollectJob(): Promise<void> {
                 await upsertMatch(enrichableMatch, radarDbId);
               }
 
-              const enriched = await enrichMatch(item, enrichableMatch);
+              // Evaluar modalidad de contratación si el expediente tiene monto
+              let modalidadProbable: string | undefined;
+              if (item.amount) {
+                try {
+                  const modalidadResult = await evaluarModalidad({
+                    monto: item.amount,
+                    tipo: inferTipoContratacion(item),
+                    presupuestoAutorizado: 500_000_000, // default: entidad mediana federal
+                    incluyeIva: false,
+                  });
+                  modalidadProbable = modalidadResult.modalidad;
+                } catch (modalidadErr) {
+                  log.warn(
+                    { err: modalidadErr, externalId: item.externalId },
+                    "No se pudo evaluar modalidad — se omite del mensaje",
+                  );
+                }
+              }
+
+              const enriched = await enrichMatch(item, enrichableMatch, modalidadProbable);
               const alertId = await createAlert(enriched, upsertResult.procurementId, radarDbId);
 
               const msgId = await sendMatchAlert(enriched);
