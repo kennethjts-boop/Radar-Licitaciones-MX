@@ -723,14 +723,16 @@ export async function runCollectJob(): Promise<void> {
                 await upsertMatch(enrichableMatch, radarDbId);
               }
 
-              // Evaluar modalidad de contratación si el expediente tiene monto
+              // Evaluar modalidad de contratación si el expediente tiene monto.
+              // Se usa el mismo amount como presupuesto_autorizado porque es el único
+              // dato financiero disponible en el listing API.
               let modalidadProbable: string | undefined;
               if (item.amount) {
                 try {
                   const modalidadResult = await evaluarModalidad({
                     monto: item.amount,
                     tipo: inferTipoContratacion(item),
-                    presupuestoAutorizado: 500_000_000, // default: entidad mediana federal
+                    presupuestoAutorizado: item.amount,
                     incluyeIva: false,
                   });
                   modalidadProbable = modalidadResult.modalidad;
