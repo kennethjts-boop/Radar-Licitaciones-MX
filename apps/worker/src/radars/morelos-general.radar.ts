@@ -52,5 +52,25 @@ export const morelosGeneralRadar: RadarConfig = {
 
   entityTerms: [],
 
-  rules: [],
+  rules: [
+    {
+      ruleType: "geo",
+      fieldName: "canonical_text",
+      operator: "any_of",
+      value: [
+        "morelos",
+        "estado de morelos",
+        "cuernavaca",
+        "cuautla",
+        "jiutepec",
+        "temixco",
+        "jojutla",
+        "zacatepec",
+        "yautepec",
+        "puente de ixtla",
+      ],
+      weight: 0.6,
+      isRequired: true,
+    },
+  ],
 };

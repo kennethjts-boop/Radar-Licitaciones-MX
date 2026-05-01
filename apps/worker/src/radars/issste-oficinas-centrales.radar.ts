@@ -98,5 +98,13 @@ export const isssteoOficinasCentralesRadar: RadarConfig = {
       weight: 0.5,
       isRequired: false,
     },
+    {
+      ruleType: "geo",
+      fieldName: "canonical_text",
+      operator: "any_of",
+      value: ["ciudad de mexico", "cdmx", "distrito federal"],
+      weight: 0.3,
+      isRequired: false,
+    },
   ],
 };
