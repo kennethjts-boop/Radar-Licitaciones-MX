@@ -104,6 +104,26 @@ export function isDateExpired(openingDate: string | null | undefined): boolean {
 }
 
 /**
+ * Retorna true si la fecha de publicación es anterior a hace 5 días.
+ * Usado para asegurar que solo procesamos licitaciones "a partir de hoy" (con un margen de gracia para fines de semana).
+ */
+export function isPublicationTooOld(pubDate: string | null | undefined): boolean {
+  if (!pubDate) return false; // Ante la duda, la dejamos pasar
+  try {
+    const d = fromZonedTime(pubDate, MX_TIMEZONE);
+    if (!isValid(d)) return false;
+    
+    const limit = new Date();
+    limit.setDate(limit.getDate() - 5);
+    
+    return d < limit;
+  } catch {
+    return false;
+  }
+}
+
+
+/**
  * Retorna true si han pasado al menos N minutos desde el timestamp dado.
  */
 export function hasElapsedMinutes(

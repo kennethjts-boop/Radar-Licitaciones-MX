@@ -147,7 +147,7 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
           `canonical_text.ilike.%${query}%,` +
           `expediente_id.ilike.%${query}%`
         )
-        .order("last_seen_at", { ascending: false })
+        .order("publication_date", { ascending: false })
         .limit(5);
 
       if (error) throw error;

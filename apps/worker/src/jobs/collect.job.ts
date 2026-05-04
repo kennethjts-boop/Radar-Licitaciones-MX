@@ -14,7 +14,7 @@
 import { createModuleLogger } from "../core/logger";
 import { withLock } from "../core/lock";
 import { withTimeout } from "../core/errors";
-import { nowISO, formatDuration, isDateExpired } from "../core/time";
+import { nowISO, formatDuration, isDateExpired, isPublicationTooOld } from "../core/time";
 import { healthTracker } from "../core/healthcheck";
 import { existsSync, readFileSync, unlinkSync } from "fs";
 import {
@@ -623,6 +623,31 @@ export async function runCollectJob(): Promise<void> {
           if (fechaPublicacion) {
             item.rawJson = { ...item.rawJson, fecha_publicacion: fechaPublicacion };
           }
+
+          // ── Filtro Global de Fechas: Solo procesar licitaciones "a partir de hoy" ──
+          const pubDateToEvaluate = fechaPublicacion || item.publicationDate;
+          if (isPublicationTooOld(pubDateToEvaluate)) {
+            log.info(
+              { externalId: item.externalId, pubDate: pubDateToEvaluate },
+              "Licitación omitida por tener una fecha de publicación muy antigua (fuera del margen actual)",
+            );
+            continue;
+          }
+
+          // ── Filtro Global de Ocultamiento Geográfico ──
+          const stateLower = (item.state || "").toLowerCase();
+          const canonicalGlobalLower = item.canonicalText.toLowerCase();
+          const hasExcludedGeo = BUSINESS_PROFILE.EXCLUDED_GEO?.some(geo => 
+            stateLower.includes(geo) || canonicalGlobalLower.includes(geo)
+          );
+          if (hasExcludedGeo) {
+            log.info(
+              { externalId: item.externalId, state: item.state },
+              "Licitación omitida por regla de ocultamiento geográfico (EXCLUDED_GEO)",
+            );
+            continue;
+          }
+
 
           // Filtrar licitaciones vencidas: no generar alertas si ya pasó la fecha de apertura
           if (isDateExpired(item.openingDate)) {

@@ -37,10 +37,23 @@ export const COMPRASMX_SOURCE_KEY = "comprasmx";
  */
 const ACTIVE_STATUSES = new Set([
   "VIGENTE",
+  "VIGENTE SIN ACTA",
+  "VIGENTE PAP",
+  "VIGENTE JA",
   "EN ACLARACIONES",
   "EN ATENCIÓN DE PREGUNTAS",
+  "EN ATENCION DE PREGUNTAS",
   "EN REPREGUNTAS",
   "PENDIENTE DE APERTURA",
+  "EN APERTURA",
+  "EN EVALUACIÓN",
+  "EN EVALUACION",
+  "EN DECISIÓN DE FALLO",
+  "EN DECISION DE FALLO",
+  "SUSPENDIDO",
+  "PUBLICADA",
+  "ACTIVA",
+  "EN PROCESO"
 ]);
 
 function isActiveStatus(estatus: string | undefined | null): boolean {

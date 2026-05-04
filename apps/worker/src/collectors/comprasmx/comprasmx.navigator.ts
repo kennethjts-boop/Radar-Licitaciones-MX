@@ -80,7 +80,7 @@ export function apiRegistroToRawInput(item: ApiRegistro): RawProcurementInput {
     buyingUnit: null,
     procedureType: item.tipo_procedimiento ?? null,
     status: item.estatus_alterno ?? null,
-    publicationDate: null,                    // no disponible en el listado del API
+    publicationDate: item.fecha_publicacion ?? null, // puede no estar disponible en el listado del API
     openingDate: item.fecha_apertura ?? null, // apertura de proposiciones
     awardDate: null,
     state: (item["entidad_federativa_contratacion"] as string | null) ?? null,

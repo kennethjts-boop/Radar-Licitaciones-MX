@@ -69,7 +69,7 @@ export function startScheduler(): void {
   const summaryHour = config.DAILY_SUMMARY_HOUR;
 
   // ── MODO 2: Daily Direct Recheck ──────────────────────────────────────────
-  const recheckCron = `0 ${recheckHour} * * *`;
+  const recheckCron = `0 ${recheckHour} * * 1-5`;
 
   cron.schedule(
     recheckCron,
@@ -91,7 +91,7 @@ export function startScheduler(): void {
   );
 
   // ── RESUMEN DIARIO ────────────────────────────────────────────────────────
-  const summaryCron = `0 ${summaryHour} * * *`;
+  const summaryCron = `0 ${summaryHour} * * 1-5`;
 
   cron.schedule(
     summaryCron,

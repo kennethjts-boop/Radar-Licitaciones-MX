@@ -6,6 +6,13 @@ export const BUSINESS_PROFILE = {
     "copiado", "papelería", "papeleria", "cafetería", "cafeteria",
   ],
 
+  // CAPA GEOGRÁFICA RESTRINGIDA
+  EXCLUDED_GEO: [
+    "oaxaca", "hermosillo", "mazatlan", "mazatlán", "sonora", "sinaloa",
+    "baja california", "yucatan", "yucatán", "quintana roo", "chiapas", "campeche", "tabasco"
+  ],
+
+
   // CAPA 2: NICHOS ESPECÍFICOS (Relevancia Directa)
   CATEGORIES: {
     CAPUFE_VEHICULOS: [
