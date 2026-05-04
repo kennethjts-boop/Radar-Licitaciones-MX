@@ -264,64 +264,43 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
 
   const lines: string[] = [
     `${emoji} <b>NUEVO MATCH — ${alert.radarName}</b>`,
-    `Nivel: <b>${alert.matchLevel.toUpperCase()}</b> | Score: ${score}%`,
-    "",
-    `📋 <b>Expediente:</b> ${p.expedienteId ?? "N/D"}`,
-    `🔢 <b>Licitación:</b> ${p.licitationNumber ?? "No especificado"}`,
-    `📝 <b>Proc. #:</b> ${p.procedureNumber ?? "N/D"}`,
+    `Score: <b>${score}%</b> (${alert.matchLevel.toUpperCase()})`,
     "",
     `📌 <b>${p.title}</b>`,
     "",
     `🏛 <b>Dependencia:</b> ${p.dependencyName ?? "N/D"}`,
-    `🏢 <b>Unidad compradora:</b> ${p.buyingUnit ?? "N/D"}`,
     p.state
       ? `📍 <b>Ubicación:</b> ${p.municipality ? `${p.municipality}, ` : ""}${p.state}`
       : "",
-    "",
     `📊 <b>Estatus:</b> ${p.status}`,
     p.amount ? `💰 <b>Monto:</b> ${formatCurrency(p.amount, p.currency)}` : "",
     alert.modalidadProbable
       ? `📋 <b>Modalidad probable:</b> ${alert.modalidadProbable.replace(/_/g, " ")}`
       : "",
     "",
-    // Fechas reales disponibles en el API
-    fechaPublicacion
-      ? `📅 <b>Fecha de publicación:</b> ${fmtDate(fechaPublicacion)}`
-      : "",
-    p.openingDate
-      ? `📂 <b>Apertura de proposiciones:</b> ${fmtDate(p.openingDate)}`
-      : "",
-    fechaAclaraciones
-      ? `📋 <b>Junta de aclaraciones:</b> ${fmtDate(fechaAclaraciones)}`
-      : "",
-    fechaLimite
-      ? `⏰ <b>Límite envío aclaraciones:</b> ${fmtDate(fechaLimite)}`
-      : "",
-    fechaVisita
-      ? `🏛 <b>Visita a instalaciones:</b> ${fmtDate(fechaVisita)}`
-      : "",
-    fechaFallo
-      ? `⚖️ <b>Acto del Fallo:</b> ${fmtDate(fechaFallo)}`
-      : "",
-    fechaInicioContrato
-      ? `🗓 <b>Inicio estimado del contrato:</b> ${fmtDate(fechaInicioContrato)}`
-      : "",
+    `🔢 <b>Licitación:</b> ${p.licitationNumber ?? p.procedureNumber ?? "N/D"}`,
+    p.expedienteId ? `📋 <b>Expediente:</b> ${p.expedienteId}` : "",
     "",
-    `🎯 <b>Razón del match:</b>`,
-    alert.explanation,
+    // Fechas relevantes, omitiendo las nulas para no ensuciar
+    fechaPublicacion ? `📅 <b>Publicación:</b> ${fmtDate(fechaPublicacion)}` : "",
+    p.openingDate ? `📂 <b>Apertura:</b> ${fmtDate(p.openingDate)}` : "",
+    fechaAclaraciones ? `🗣 <b>Junta de Aclaraciones:</b> ${fmtDate(fechaAclaraciones)}` : "",
+    fechaVisita ? `👷 <b>Visita:</b> ${fmtDate(fechaVisita)}` : "",
+    fechaLimite ? `⏰ <b>Límite Aclaraciones:</b> ${fmtDate(fechaLimite)}` : "",
+    fechaFallo ? `⚖️ <b>Fallo:</b> ${fmtDate(fechaFallo)}` : "",
+    fechaInicioContrato ? `🗓 <b>Inicio Contrato:</b> ${fmtDate(fechaInicioContrato)}` : "",
     "",
-    `🔍 <b>Términos detectados:</b> ${alert.matchedTerms.slice(0, 8).join(" · ")}`,
+    `🎯 <b>Razones del Match:</b>`,
+    `Términos: ${alert.matchedTerms.slice(0, 8).join(" · ")}`,
     alert.procurement.attachments.length > 0
-      ? `📎 <b>Adjuntos:</b> ${alert.procurement.attachments.length} archivo(s)`
+      ? `📎 Adjuntos: ${alert.procurement.attachments.length} archivo(s)`
       : "",
     alert.hasHistory
-      ? `🔁 <b>Antecedentes:</b> ${alert.historyCount} versión(es) previa(s)`
+      ? `🔁 Historial: ${alert.historyCount} versión(es) previa(s)`
       : "",
     "",
-    `🔗 <b>Ver expediente:</b>`,
-    p.sourceUrl,
-    "",
-    `⏱ Detectado: ${formatMexicoDate(alert.detectedAt)}`,
+    `🔗 <a href="${p.sourceUrl}">Ver Expediente Original</a>`,
+    `⏱ <i>Detectado: ${formatMexicoDate(alert.detectedAt, "dd/MM/yyyy HH:mm")}</i>`,
   ];
 
   return truncateForTelegram(lines.filter(Boolean).join("\n"));
