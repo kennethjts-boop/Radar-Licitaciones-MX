@@ -1,15 +1,12 @@
 import { useEffect, useState } from 'react';
 import { supabase } from './lib/supabase';
-import { Search, Building, X, Zap, Coins, LogIn, CheckCircle2, MapPin, Calendar, ChevronRight, Sparkles, AlertCircle } from 'lucide-react';
+import { Search, Building, X, Zap, Coins, LogIn, CheckCircle2, MapPin, ChevronRight, Sparkles, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 
 interface Procurement {
   id: string;
-  source_id: string;
-  external_id: string;
   title: string;
-  description: string | null;
   status: string;
   dependency_name: string | null;
   licitation_number: string | null;
@@ -30,7 +27,7 @@ interface User {
 
 interface AnalysisResult {
   resumen_ejecutivo: string;
-  veredicto: 'ALTA_OPORTUNIDAD' | 'MODERADA' | 'POSIBLE_DIRIGIDA' | 'RIESGO_ALTO';
+  veredicto: string;
   score_oportunidad: number;
   probabilidad_exito: number;
   puntos_clave: string[];
@@ -45,242 +42,208 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterState, setFilterState] = useState('');
-  const [selectedProcurement, setSelectedProcurement] = useState<Procurement | null>(null);
-  
-  // Auth & SaaS State
+  const [selected, setSelected] = useState<Procurement | null>(null);
+
   const [user, setUser] = useState<User | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
 
-  // AI Analysis State
   const [analyzing, setAnalyzing] = useState(false);
-  const [generatedAnalyses, setGeneratedAnalyses] = useState<Record<string, AnalysisResult>>({});
+  const [analyses, setAnalyses] = useState<Record<string, AnalysisResult>>({});
 
   useEffect(() => {
     fetchProcurements();
-    // Check local session
-    const savedUser = localStorage.getItem('radar_user');
-    if (savedUser) setUser(JSON.parse(savedUser));
+    const saved = localStorage.getItem('radar_user');
+    if (saved) setUser(JSON.parse(saved));
   }, []);
 
   const fetchProcurements = async () => {
     try {
       const { data, error } = await supabase
-        .from('procurements')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(100);
-      
+        .from('procurements').select('*')
+        .order('created_at', { ascending: false }).limit(120);
       if (error) throw error;
       setProcurements(data || []);
-    } catch (err) {
-      console.error('Error fetching procurements:', err);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
   };
 
   const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthLoading(true);
+    e.preventDefault(); setAuthLoading(true);
     setTimeout(() => {
-      let role: 'admin' | 'user' = 'user';
-      if (email === 'admin@radar.com') role = 'admin';
-      const userData: User = { email, role, tokens: role === 'admin' ? 999999 : 50 };
-      setUser(userData);
-      localStorage.setItem('radar_user', JSON.stringify(userData));
-      setAuthLoading(false);
-    }, 800);
+      const role = email === 'admin@radar.com' ? 'admin' : 'user';
+      const u: User = { email, role, tokens: role === 'admin' ? 999999 : 50 };
+      setUser(u); localStorage.setItem('radar_user', JSON.stringify(u)); setAuthLoading(false);
+    }, 900);
   };
 
   const handleGuestLogin = () => {
-    const guest: User = { email: 'invitado@demo.com', role: 'guest', tokens: 0 };
-    setUser(guest);
+    const u: User = { email: 'invitado@demo.com', role: 'guest', tokens: 0 };
+    setUser(u);
   };
 
-  const handleLogout = () => {
-    setUser(null);
-    localStorage.removeItem('radar_user');
-  };
+  const handleLogout = () => { setUser(null); localStorage.removeItem('radar_user'); };
 
-  const generateExpertAnalysis = async (procurement: Procurement) => {
+  const generateAnalysis = async (p: Procurement) => {
     if (user?.tokens === 0 && user.role !== 'admin') {
-      alert("No tienes tokens suficientes. Por favor, recarga tu cuenta.");
-      return;
+      alert("Sin tokens. Recarga tu cuenta."); return;
     }
-
     setAnalyzing(true);
     try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      
-      const res = await fetch(`${supabaseUrl}/functions/v1/analyze-procurement`, {
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/analyze-procurement`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
-        },
-        body: JSON.stringify({ procurementId: procurement.id })
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+        body: JSON.stringify({ procurementId: p.id })
       });
-
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Error en el análisis');
-      }
-
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Error'); }
       const analysis: AnalysisResult = await res.json();
-      setGeneratedAnalyses(prev => ({ ...prev, [procurement.id]: analysis }));
-      
-      // Deduct token (mock)
+      setAnalyses(prev => ({ ...prev, [p.id]: analysis }));
       if (user && user.role !== 'admin') {
-        const updatedUser = { ...user, tokens: user.tokens - 10 };
-        setUser(updatedUser);
-        localStorage.setItem('radar_user', JSON.stringify(updatedUser));
+        const u = { ...user, tokens: user.tokens - 10 };
+        setUser(u); localStorage.setItem('radar_user', JSON.stringify(u));
       }
-    } catch (err: any) {
-      alert(`Error generando análisis: ${err.message}`);
-    } finally {
-      setAnalyzing(false);
-    }
+    } catch (e: any) { alert(`Error: ${e.message}`); }
+    finally { setAnalyzing(false); }
   };
 
-  const filteredProcurements = procurements.filter(p => {
-    const matchesSearch = p.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                         (p.licitation_number?.toLowerCase().includes(searchTerm.toLowerCase()));
-    const matchesState = filterState ? p.state === filterState : true;
-    return matchesSearch && matchesState;
+  const filtered = procurements.filter(p => {
+    const s = p.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+              p.licitation_number?.toLowerCase().includes(searchTerm.toLowerCase());
+    const st = filterState ? p.state === filterState : true;
+    return s && st;
   });
 
   const uniqueStates = Array.from(new Set(procurements.map(p => p.state).filter(Boolean))) as string[];
 
-  const formatDate = (dateString: string | null) => {
-    if (!dateString) return 'Pendiente';
-    try {
-      return format(new Date(dateString), "dd MMM yyyy", { locale: es });
-    } catch (e) {
-      return dateString;
-    }
+  const fmtDate = (d: string | null) => {
+    if (!d) return 'N/D';
+    try { return format(new Date(d), 'dd MMM yyyy', { locale: es }); } catch { return d; }
   };
 
-  if (!user) {
-    return (
-      <div className="flex items-center justify-center min-h-screen login-bg">
-        <div className="login-premium-card animate-slide">
-          <div className="flex justify-center mb-10">
-            <div className="logo-box">
-              <Sparkles size={28} />
-            </div>
-          </div>
-          <h1 style={{ fontSize: '2.5rem', textAlign: 'center', marginBottom: '0.75rem' }}>Radar OSINT</h1>
-          <p style={{ textAlign: 'center', color: 'var(--text-secondary)', marginBottom: '3rem' }}>Inteligencia estratégica para licitaciones públicas.</p>
-          
-          <form onSubmit={handleLogin} className="flex flex-col gap-5">
-            <div className="flex flex-col gap-2">
-              <label style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Email</label>
-              <input type="email" required className="input-premium" value={email} onChange={e => setEmail(e.target.value)} placeholder="tu@empresa.com" />
-            </div>
-            <div className="flex flex-col gap-2">
-              <label style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Contraseña</label>
-              <input type="password" required className="input-premium" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
-            </div>
-            <button type="submit" className="btn-premium btn-blue" style={{ width: '100%', marginTop: '1rem' }} disabled={authLoading}>
-              {authLoading ? 'Verificando...' : 'Entrar al Radar'}
-            </button>
-          </form>
+  const badgeClass = (status: string) => {
+    const s = status.toLowerCase();
+    if (s.includes('activ') || s.includes('vigent') || s.includes('publicad')) return 'badge-active';
+    if (s.includes('desiert') || s.includes('cancel')) return 'badge-danger';
+    if (s.includes('evalua') || s.includes('fallo')) return 'badge-warning';
+    return 'badge-neutral';
+  };
 
-          <div style={{ marginTop: '2.5rem', textAlign: 'center' }}>
-            <button onClick={handleGuestLogin} className="btn-premium btn-white" style={{ width: '100%' }}>
-              Explorar como Invitado
-            </button>
+  /* ── LOGIN ── */
+  if (!user) return (
+    <div className="login-page">
+      <div className="blob blob-1" />
+      <div className="blob blob-2" />
+      <div className="blob blob-3" />
+      <div className="login-card">
+        <div className="flex justify-center mb-8">
+          <div className="logo-icon" style={{ width: 72, height: 72, borderRadius: 22 }}>
+            <Sparkles size={36} />
           </div>
         </div>
-      </div>
-    );
-  }
+        <h1 style={{ fontSize: '2.4rem', textAlign: 'center', marginBottom: '0.5rem' }}>Radar OSINT</h1>
+        <p style={{ textAlign: 'center', color: 'var(--text-3)', marginBottom: '3rem', fontSize: '1rem' }}>Inteligencia estratégica para licitaciones públicas de México</p>
 
+        <form onSubmit={handleLogin} className="flex flex-col gap-5">
+          <div className="flex flex-col gap-2">
+            <label className="input-label">Correo</label>
+            <input type="email" required className="input-field" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@radar.com" />
+          </div>
+          <div className="flex flex-col gap-2">
+            <label className="input-label">Contraseña</label>
+            <input type="password" required className="input-field" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
+          </div>
+          <button type="submit" className="btn btn-gradient" style={{ width: '100%', padding: '1rem', fontSize: '1rem', marginTop: '0.5rem' }} disabled={authLoading}>
+            {authLoading ? <div className="loader-ring" style={{ width: 22, height: 22, borderWidth: 3 }} /> : <><Sparkles size={18} /> Entrar al Radar</>}
+          </button>
+        </form>
+
+        <div className="divider" />
+        <button onClick={handleGuestLogin} className="btn btn-ghost" style={{ width: '100%', padding: '0.9rem' }}>
+          Explorar como Invitado
+        </button>
+        <div style={{ marginTop: '1.5rem', padding: '1rem 1.25rem', background: 'rgba(59,130,246,0.04)', borderRadius: 14, border: '1px solid rgba(59,130,246,0.1)', fontSize: '0.82rem', color: 'var(--text-3)' }}>
+          <strong style={{ color: 'var(--blue)' }}>Admin demo:</strong> admin@radar.com / admin123
+        </div>
+      </div>
+    </div>
+  );
+
+  /* ── MAIN DASHBOARD ── */
   return (
-    <div className="animate-fade">
+    <>
+      <div className="animated-bg" />
+
       <header className="header">
         <div className="container flex justify-between items-center">
           <div className="logo-wrap">
-            <div className="logo-box">
-              <Sparkles size={24} />
-            </div>
-            <h1 className="logo-text">Radar OSINT</h1>
+            <div className="logo-icon"><Sparkles size={22} /></div>
+            <span className="logo-name">Radar OSINT</span>
+            <span className="logo-badge">PRO</span>
           </div>
-          
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2" style={{ background: 'white', padding: '0.6rem 1.2rem', borderRadius: '14px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}>
-              <Coins size={16} color="var(--brand-primary)" />
-              <span style={{ fontWeight: 800, fontSize: '0.9rem' }}>{user.role === 'admin' ? 'ILIMITADO' : `${user.tokens} TOKENS`}</span>
+          <div className="flex items-center gap-4">
+            <div className="token-chip">
+              <Coins size={14} />
+              <span>{user.role === 'admin' ? '∞ ILIMITADO' : `${user.tokens} TOKENS`}</span>
             </div>
-            
-            <button className="btn-premium btn-white" style={{ padding: '0.6rem' }} onClick={handleLogout}>
+            <button className="btn btn-ghost btn-icon" onClick={handleLogout} title="Salir">
               <LogIn size={18} />
             </button>
           </div>
         </div>
       </header>
 
-      <main className="container" style={{ marginTop: '3rem', paddingBottom: '6rem' }}>
-        <div className="flex flex-col md:flex-row gap-6 mb-12 items-center">
-          <div className="search-bar-wrapper" style={{ flex: 1, maxWidth: '800px' }}>
-            <Search size={20} color="var(--text-muted)" />
-            <input 
-              className="search-input" 
-              placeholder="Buscar por licitación, dependencia o expediente..." 
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-            />
+      <main className="container" style={{ paddingTop: '3rem', paddingBottom: '6rem' }}>
+        {/* Search row */}
+        <div className="flex items-center gap-4 mb-12">
+          <div className="search-wrap">
+            <Search size={20} color="var(--text-3)" />
+            <input className="search-input" placeholder="Buscar licitación, dependencia, expediente..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
           </div>
-          <select className="input-premium" style={{ width: 'auto', minWidth: '200px', padding: '0.6rem 1.2rem' }} value={filterState} onChange={e => setFilterState(e.target.value)}>
+          <select className="select-styled" value={filterState} onChange={e => setFilterState(e.target.value)}>
             <option value="">Todos los Estados</option>
             {uniqueStates.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
         </div>
 
+        {/* Grid */}
         {loading ? (
-          <div style={{ textAlign: 'center', padding: '10rem 0' }}>
-            <Sparkles className="animate-spin" size={48} color="var(--brand-primary)" style={{ margin: '0 auto 2rem' }} />
-            <h2 style={{ color: 'var(--text-secondary)' }}>Sincronizando Base de Datos Nacional...</h2>
+          <div style={{ textAlign: 'center', padding: '8rem 0' }}>
+            <div className="loader-ring" style={{ width: 56, height: 56, borderWidth: 5 }} />
+            <p style={{ marginTop: '2rem', color: 'var(--text-3)', fontWeight: 600 }}>Sincronizando base de datos nacional...</p>
           </div>
         ) : (
-          <div className="grid xl:grid-cols-4 lg:grid-cols-3 md:grid-cols-2 gap-8">
-            {filteredProcurements.map((p, i) => (
-              <div key={p.id} className="card-premium animate-slide" style={{ animationDelay: `${i * 0.05}s`, cursor: 'pointer' }} onClick={() => setSelectedProcurement(p)}>
-                <div className="flex justify-between items-start mb-6">
-                  <span className={`badge-premium ${p.status.includes('ACTIVA') ? 'badge-green' : 'badge-blue'}`}>{p.status}</span>
-                  <div className="flex items-center gap-1 text-[11px] font-bold text-slate-400">
-                    <Calendar size={12} /> {formatDate(p.created_at)}
-                  </div>
+          <div className="grid xl:grid-cols-4 lg:grid-cols-3 sm:grid-cols-2 grid-cols-1" style={{ gap: '1.5rem' }}>
+            {filtered.map((p, i) => (
+              <div
+                key={p.id}
+                className={`card anim-in ${analyses[p.id] ? 'card-glow' : ''}`}
+                style={{ animationDelay: `${Math.min(i * 0.04, 0.8)}s` }}
+                onClick={() => setSelected(p)}
+              >
+                <div className="flex justify-between items-center mb-4">
+                  <span className={`badge ${badgeClass(p.status)}`}>{p.status}</span>
+                  <span className="date-chip">{fmtDate(p.created_at)}</span>
                 </div>
-                
+
                 <h3 className="card-title">{p.title}</h3>
-                
-                <div className="flex flex-col gap-3 mb-8">
-                  <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
-                    <Building size={14} className="text-slate-300" />
-                    {p.dependency_name || 'N/D'}
-                  </div>
-                  <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
-                    <MapPin size={14} className="text-slate-300" />
-                    {p.state || 'Nacional'}
-                  </div>
+
+                <div className="flex flex-col gap-2 mb-6">
+                  <div className="card-meta"><Building size={13} />{p.dependency_name || 'Sin dependencia'}</div>
+                  <div className="card-meta"><MapPin size={13} />{p.state || 'Nacional'}</div>
                 </div>
-                
-                <div className="mt-auto pt-6 border-t border-slate-50 flex justify-between items-center">
-                  <div className="flex flex-col">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Monto Est.</span>
-                    <span style={{ fontWeight: 800, color: 'var(--text-primary)' }}>{p.amount ? `$${p.amount.toLocaleString()}` : 'ABIERT'}</span>
-                  </div>
-                  {generatedAnalyses[p.id] ? (
-                    <div className="flex items-center gap-1 text-emerald-500">
-                      <Zap size={16} fill="currentColor" />
-                      <span className="text-[11px] font-black">PRO</span>
+
+                <div className="mt-auto" style={{ paddingTop: '1rem', borderTop: '1px solid rgba(0,0,0,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-3)', marginBottom: 2 }}>Monto</div>
+                    <div style={{ fontWeight: 800, fontSize: '1rem', color: 'var(--text)' }}>
+                      {p.amount ? `$${p.amount.toLocaleString()}` : 'Abierto'}
                     </div>
-                  ) : (
-                    <ChevronRight size={20} className="text-slate-200" />
-                  )}
+                  </div>
+                  {analyses[p.id]
+                    ? <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--emerald)', fontSize: '0.8rem', fontWeight: 800 }}><Zap size={16} fill="currentColor" /> IA</div>
+                    : <ChevronRight size={20} color="var(--text-3)" />
+                  }
                 </div>
               </div>
             ))}
@@ -288,89 +251,99 @@ export default function App() {
         )}
       </main>
 
-      {selectedProcurement && (
-        <div className="panel-backdrop" onClick={() => setSelectedProcurement(null)}>
-          <div className="panel-content" onClick={e => e.stopPropagation()}>
+      {/* Detail Panel */}
+      {selected && (
+        <div className="panel-backdrop" onClick={() => setSelected(null)}>
+          <div className="panel" onClick={e => e.stopPropagation()}>
             <div className="panel-header">
-              <div className="flex items-center gap-4">
-                <div className="badge-premium badge-blue">Expediente {selectedProcurement.licitation_number}</div>
-              </div>
-              <button className="btn-premium btn-white" style={{ padding: '0.6rem', borderRadius: '50%' }} onClick={() => setSelectedProcurement(null)}>
-                <X size={20} />
-              </button>
+              <span className={`badge ${badgeClass(selected.status)}`}>{selected.status}</span>
+              <button className="btn btn-ghost btn-icon" onClick={() => setSelected(null)}><X size={20} /></button>
             </div>
-            
+
             <div className="panel-body">
-              <h1 style={{ fontSize: '2rem', marginBottom: '1.5rem', lineHeight: 1.2 }}>{selectedProcurement.title}</h1>
-              
-              <div className="grid md:grid-cols-2 gap-4 mb-10">
-                <div className="detail-section">
+              <h1 style={{ fontSize: '1.75rem', lineHeight: 1.25, marginBottom: '2rem' }}>{selected.title}</h1>
+
+              <div className="detail-grid">
+                <div className="detail-box">
                   <div className="detail-label">Dependencia</div>
-                  <div className="detail-value">{selectedProcurement.dependency_name}</div>
+                  <div className="detail-value">{selected.dependency_name || 'N/D'}</div>
                 </div>
-                <div className="detail-section">
-                  <div className="detail-label">Lugar</div>
-                  <div className="detail-value">{selectedProcurement.state || 'México'}</div>
+                <div className="detail-box">
+                  <div className="detail-label">Estado</div>
+                  <div className="detail-value">{selected.state || 'México'}</div>
                 </div>
-                <div className="detail-section">
-                  <div className="detail-label">Detección Radar</div>
-                  <div className="detail-value">{formatDate(selectedProcurement.created_at)}</div>
+                <div className="detail-box">
+                  <div className="detail-label">Detectada por Radar</div>
+                  <div className="detail-value" style={{ color: 'var(--blue)' }}>{fmtDate(selected.created_at)}</div>
                 </div>
-                <div className="detail-section">
+                <div className="detail-box">
                   <div className="detail-label">Monto Referencia</div>
-                  <div className="detail-value">{selectedProcurement.amount ? `$${selectedProcurement.amount.toLocaleString()} MXN` : 'Abierto'}</div>
+                  <div className="detail-value">{selected.amount ? `$${selected.amount.toLocaleString()} ${selected.currency || 'MXN'}` : 'Abierto'}</div>
                 </div>
+                {selected.licitation_number && (
+                  <div className="detail-box" style={{ gridColumn: 'span 2' }}>
+                    <div className="detail-label">Número de Licitación</div>
+                    <div className="detail-value" style={{ fontFamily: 'monospace' }}>{selected.licitation_number}</div>
+                  </div>
+                )}
               </div>
 
-              {generatedAnalyses[selectedProcurement.id] ? (
-                <div className="ai-premium-card">
-                  <div className="flex justify-between items-start mb-8">
+              {selected.url && (
+                <a href={selected.url} target="_blank" rel="noopener noreferrer"
+                  className="btn btn-ghost" style={{ marginBottom: '2.5rem', width: '100%' }}>
+                  Ver Convocatoria Oficial ↗
+                </a>
+              )}
+
+              {/* AI SECTION */}
+              {analyses[selected.id] ? (
+                <div className="ai-result">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem', position: 'relative' }}>
                     <div>
-                      <h2 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Análisis Estratégico IA</h2>
-                      <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.9rem' }}>Resultados basados en RAG y modelos expertos de contratación pública.</p>
+                      <div style={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.4)', marginBottom: '0.5rem' }}>Análisis Experto IA</div>
+                      <h2 style={{ fontSize: '1.4rem' }}>{analyses[selected.id].veredicto?.replace(/_/g, ' ')}</h2>
                     </div>
-                    <div className="logo-box" style={{ background: 'rgba(255,255,255,0.1)', boxShadow: 'none' }}>
-                      <Zap size={24} color="var(--brand-primary)" />
-                    </div>
-                  </div>
-
-                  <div className="grid md:grid-cols-2 gap-6 mb-10">
-                    <div style={{ background: 'rgba(255,255,255,0.05)', padding: '1.5rem', borderRadius: '20px' }}>
-                      <div className="detail-label" style={{ color: 'rgba(255,255,255,0.4)' }}>Score de Oportunidad</div>
-                      <div style={{ fontSize: '2.5rem', fontWeight: 900 }}>{generatedAnalyses[selectedProcurement.id].score_oportunidad}/100</div>
-                    </div>
-                    <div style={{ background: 'rgba(255,255,255,0.05)', padding: '1.5rem', borderRadius: '20px' }}>
-                      <div className="detail-label" style={{ color: 'rgba(255,255,255,0.4)' }}>Probabilidad Ganar</div>
-                      <div style={{ fontSize: '2.5rem', fontWeight: 900 }}>{generatedAnalyses[selectedProcurement.id].probabilidad_exito}%</div>
+                    <div className="logo-icon" style={{ background: 'rgba(255,255,255,0.08)', boxShadow: 'none', flexShrink: 0, animation: 'none' }}>
+                      <Zap size={22} color="var(--blue)" />
                     </div>
                   </div>
 
-                  <div className="mb-8">
-                    <h3 style={{ color: '#60a5fa', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <CheckCircle2 size={20} /> Veredicto del Consultor
-                    </h3>
-                    <p style={{ fontSize: '1.1rem', lineHeight: 1.6, color: 'rgba(255,255,255,0.9)' }}>
-                      {generatedAnalyses[selectedProcurement.id].resumen_ejecutivo}
-                    </p>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '2rem', position: 'relative' }}>
+                    <div style={{ background: 'rgba(255,255,255,0.05)', padding: '1.5rem', borderRadius: 20 }}>
+                      <div className="ai-score-label">Score de Oportunidad</div>
+                      <div className="ai-score-big" style={{ color: analyses[selected.id].score_oportunidad > 65 ? '#34d399' : '#fb923c' }}>
+                        {analyses[selected.id].score_oportunidad}<span style={{ fontSize: '1.5rem', opacity: 0.5 }}>/100</span>
+                      </div>
+                    </div>
+                    <div style={{ background: 'rgba(255,255,255,0.05)', padding: '1.5rem', borderRadius: 20 }}>
+                      <div className="ai-score-label">Prob. de Ganar</div>
+                      <div className="ai-score-big" style={{ color: '#a78bfa' }}>
+                        {analyses[selected.id].probabilidad_exito}<span style={{ fontSize: '1.5rem', opacity: 0.5 }}>%</span>
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="grid md:grid-cols-2 gap-8">
+                  <p style={{ fontSize: '1rem', lineHeight: 1.7, color: 'rgba(255,255,255,0.85)', marginBottom: '2rem', position: 'relative' }}>
+                    {analyses[selected.id].resumen_ejecutivo}
+                  </p>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', position: 'relative' }}>
                     <div>
-                      <h4 style={{ fontSize: '0.9rem', color: '#10b981', marginBottom: '1rem' }}>PUNTOS CLAVE</h4>
-                      <ul style={{ listStyle: 'none' }}>
-                        {generatedAnalyses[selectedProcurement.id].puntos_clave.map((item, i) => (
-                          <li key={i} style={{ fontSize: '0.85rem', marginBottom: '0.5rem', display: 'flex', gap: '0.5rem' }}>
-                            <ChevronRight size={14} className="text-emerald-500" /> {item}
+                      <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#34d399', textTransform: 'uppercase', marginBottom: '1rem', letterSpacing: '0.06em' }}>✓ Oportunidades</div>
+                      <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                        {analyses[selected.id].puntos_clave?.map((item, i) => (
+                          <li key={i} style={{ fontSize: '0.83rem', color: 'rgba(255,255,255,0.75)', display: 'flex', gap: '0.5rem' }}>
+                            <CheckCircle2 size={14} style={{ color: '#34d399', flexShrink: 0, marginTop: 2 }} />{item}
                           </li>
                         ))}
                       </ul>
                     </div>
                     <div>
-                      <h4 style={{ fontSize: '0.9rem', color: '#f43f5e', marginBottom: '1rem' }}>RIESGOS</h4>
-                      <ul style={{ listStyle: 'none' }}>
-                        {generatedAnalyses[selectedProcurement.id].riesgos_detectados.map((item, i) => (
-                          <li key={i} style={{ fontSize: '0.85rem', marginBottom: '0.5rem', display: 'flex', gap: '0.5rem' }}>
-                            <AlertCircle size={14} className="text-rose-500" /> {item}
+                      <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#fb7185', textTransform: 'uppercase', marginBottom: '1rem', letterSpacing: '0.06em' }}>⚠ Riesgos</div>
+                      <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                        {analyses[selected.id].riesgos_detectados?.map((item, i) => (
+                          <li key={i} style={{ fontSize: '0.83rem', color: 'rgba(255,255,255,0.75)', display: 'flex', gap: '0.5rem' }}>
+                            <AlertCircle size={14} style={{ color: '#fb7185', flexShrink: 0, marginTop: 2 }} />{item}
                           </li>
                         ))}
                       </ul>
@@ -378,28 +351,28 @@ export default function App() {
                   </div>
                 </div>
               ) : (
-                <div style={{ background: '#0f172a', padding: '3rem', borderRadius: '32px', textAlign: 'center', color: 'white' }}>
-                  <Zap size={48} className="mb-6" style={{ margin: '0 auto 1.5rem', color: 'var(--brand-primary)' }} />
-                  <h2 style={{ marginBottom: '1rem' }}>Desbloquear Análisis Experto</h2>
-                  <p style={{ color: 'rgba(255,255,255,0.6)', marginBottom: '2rem' }}>Obtén el análisis de riesgos, score de oportunidad y tips técnicos para ganar esta licitación.</p>
-                  <button 
-                    className="btn-premium btn-blue" 
-                    onClick={() => generateExpertAnalysis(selectedProcurement)}
-                    disabled={analyzing}
-                  >
-                    {analyzing ? (
-                      <>Procesando Inteligencia...</>
-                    ) : (
-                      <><Sparkles size={20} /> Generar Reporte PRO</>
-                    )}
+                <div className="ai-cta">
+                  <div className="ai-cta-icon"><Zap size={36} color="white" /></div>
+                  <h2>Consultor Experto IA</h2>
+                  <p>Obtén antecedentes históricos, score de oportunidad, análisis técnico-económico y tips para ganar.</p>
+                  <button className="btn btn-gradient" style={{ fontSize: '1rem', padding: '1rem 2.5rem' }}
+                    onClick={() => generateAnalysis(selected)} disabled={analyzing || (user.role === 'guest')}>
+                    {analyzing
+                      ? <><div className="loader-ring" style={{ width: 20, height: 20, borderWidth: 3 }} /> Procesando...</>
+                      : user.role === 'guest'
+                        ? <><Zap size={18} /> Solo para usuarios registrados</>
+                        : <><Sparkles size={18} /> Generar Reporte PRO</>
+                    }
                   </button>
-                  <p style={{ marginTop: '1.5rem', fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)' }}>Costo: 10 Tokens • Tiempo est.: 15 segundos</p>
+                  {user.role !== 'guest' && (
+                    <p style={{ marginTop: '1.25rem', fontSize: '0.78rem', color: 'rgba(255,255,255,0.35)' }}>Costo: 10 tokens · Tiempo estimado: 15 seg</p>
+                  )}
                 </div>
               )}
             </div>
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
