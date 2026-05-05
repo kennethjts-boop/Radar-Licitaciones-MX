@@ -4,7 +4,7 @@ import { BUSINESS_PROFILE, BusinessCategory } from "../config/business_profile";
 
 const log = createModuleLogger("openai-service");
 
-const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
+const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 const OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
 
 export interface TenderDocumentAnalysis {
