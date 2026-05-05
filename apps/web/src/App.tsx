@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from './lib/supabase';
-import { Shield, Search, FileText, AlertTriangle, ExternalLink, Building, Trophy, Filter, X, Zap, Target, Download } from 'lucide-react';
+import { Shield, Search, FileText, AlertTriangle, ExternalLink, Building, Filter, X, Zap, Target, Download, Coins, LogIn, Lock, CheckCircle2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 
@@ -30,37 +30,90 @@ interface Attachment {
   file_url: string;
 }
 
-interface Analysis {
-  attachment_id: string;
-  score_total: number;
-  score_tech: number;
-  score_commercial: number;
-  win_probability: number;
-  category_detected: string;
-  is_relevant: boolean;
-  summary: string;
-  contract_type: string;
-  deadline: string;
-  opportunities: string[];
-  risks: string[];
-  red_flags: string[];
+// MOCKED EXPERT ANALYSIS FOR SAAS DEMO
+interface ExpertAnalysis {
+  antecedentes: string;
+  tips_ganadores: string[];
+  fase_tecnica: string[];
+  fase_economica: string[];
 }
 
 function App() {
   const [procurements, setProcurements] = useState<Procurement[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [analyses, setAnalyses] = useState<Analysis[]>([]);
   
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterState, setFilterState] = useState('');
-  const [vipMode, setVipMode] = useState(false);
   
   const [selectedProcurement, setSelectedProcurement] = useState<Procurement | null>(null);
 
+  // SAAS STATES
+  const [user, setUser] = useState<any>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [tokenBalance, setTokenBalance] = useState(500); // Demo starting balance
+  const [analyzingItem, setAnalyzingItem] = useState<string | null>(null);
+  const [generatedAnalyses, setGeneratedAnalyses] = useState<Record<string, ExpertAnalysis>>({});
+
   useEffect(() => {
-    fetchData();
+    // Check active session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        fetchData();
+      } else {
+        setLoading(false);
+      }
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (user) {
+      fetchData();
+    }
+  }, [user]);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    try {
+      // Intentar login
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      
+      if (error) {
+        // Si no existe, intentar registro automático para la demo
+        if (error.message.includes('Invalid login credentials')) {
+          const { error: signUpError } = await supabase.auth.signUp({
+            email,
+            password,
+          });
+          if (signUpError) throw signUpError;
+          alert("Cuenta creada exitosamente. Bienvenido a Radar OSINT.");
+        } else {
+          throw error;
+        }
+      }
+    } catch (err: any) {
+      alert("Error de autenticación: " + err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -82,18 +135,7 @@ function App() {
           .select('id, procurement_id, file_name, file_url')
           .in('procurement_id', procIds);
           
-        const fetchedAttachments = attData || [];
-        setAttachments(fetchedAttachments);
-
-        if (fetchedAttachments.length > 0) {
-          const attIds = fetchedAttachments.map(a => a.id);
-          const { data: anaData } = await supabase
-            .from('document_analysis')
-            .select('*')
-            .in('attachment_id', attIds);
-            
-          setAnalyses(anaData || []);
-        }
+        setAttachments(attData || []);
       }
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -102,22 +144,44 @@ function App() {
     }
   };
 
-  const getAnalysisForProcurement = (procId: string) => {
-    const procAtts = attachments.filter(a => a.procurement_id === procId);
-    const attIds = procAtts.map(a => a.id);
-    const bestAnalysis = analyses
-      .filter(ana => attIds.includes(ana.attachment_id))
-      .sort((a, b) => b.score_total - a.score_total)[0];
-    return bestAnalysis || null;
+  const generateExpertAnalysis = (procId: string) => {
+    if (tokenBalance < 50) {
+      alert("No tienes suficientes tokens. Adquiere más tokens para continuar.");
+      return;
+    }
+    
+    setAnalyzingItem(procId);
+    
+    // Simulate API call to OpenAI via Edge Function
+    setTimeout(() => {
+      setTokenBalance(prev => prev - 50);
+      setGeneratedAnalyses(prev => ({
+        ...prev,
+        [procId]: {
+          antecedentes: "Históricamente, esta dependencia favorece propuestas que incluyan soporte técnico local en menos de 24 horas. El año pasado, la empresa 'Soluciones IT' ganó una licitación similar por un monto de $2.5M MXN.",
+          tips_ganadores: [
+            "Destacar certificaciones ISO en la propuesta técnica.",
+            "Ofrecer un plazo de garantía extendido (ej. 24 meses en lugar de 12) como valor agregado sin costo.",
+            "Evitar intermediarios en las marcas propuestas; presentar cartas del fabricante directo."
+          ],
+          fase_tecnica: [
+            "Requisito Crítico: Presentar Currículum de al menos 3 ingenieros certificados en la marca.",
+            "Formato: Asegurarse de foliar todas las hojas y anexar la declaración de integridad firmada en original.",
+            "Ojo: Revisar el Anexo 4, pide pruebas de laboratorio que tardan 5 días en emitirse. ¡Tramitar ya!"
+          ],
+          fase_economica: [
+            "Margen Sugerido: Se estima que el precio ganador debe rondar entre el 12% y 15% de utilidad bruta.",
+            "Fianza: Preparar fianza de cumplimiento por el 10% del monto total sin IVA.",
+            "Anticipo: La convocatoria NO contempla anticipos. Considerar fondeo propio para los primeros 60 días."
+          ]
+        }
+      }));
+      setAnalyzingItem(null);
+    }, 3500);
   };
 
   const getAttachmentsForProcurement = (procId: string) => {
     return attachments.filter(a => a.procurement_id === procId);
-  };
-
-  const isVip = (analysis: Analysis | null) => {
-    if (!analysis) return false;
-    return analysis.score_total >= 70 && analysis.win_probability >= 50 && analysis.is_relevant;
   };
 
   const filteredProcurements = procurements.filter((p) => {
@@ -127,10 +191,8 @@ function App() {
       (p.dependency_name || '').toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesState = filterState === '' || p.state === filterState;
-    const ana = getAnalysisForProcurement(p.id);
-    const matchesVip = !vipMode || isVip(ana);
 
-    return matchesSearch && matchesState && matchesVip;
+    return matchesSearch && matchesState;
   });
 
   const uniqueStates = Array.from(new Set(procurements.map(p => p.state).filter(Boolean))) as string[];
@@ -156,6 +218,50 @@ function App() {
     return 'badge-neutral';
   };
 
+  if (!user) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50" style={{ backgroundColor: 'var(--bg-surface-variant)' }}>
+        <div className="card" style={{ width: '100%', maxWidth: '400px', padding: '2.5rem' }}>
+          <div className="flex justify-center mb-6">
+            <div style={{ background: 'var(--google-blue)', padding: '12px', borderRadius: '16px', color: 'white' }}>
+              <Shield size={32} />
+            </div>
+          </div>
+          <h1 style={{ fontSize: '1.5rem', textAlign: 'center', marginBottom: '0.5rem' }}>Radar OSINT SaaS</h1>
+          <p className="text-muted" style={{ textAlign: 'center', marginBottom: '2rem' }}>Inicia sesión para acceder a inteligencia de licitaciones.</p>
+          
+          <form onSubmit={handleLogin} className="flex flex-col gap-4">
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>Correo Electrónico</label>
+              <input 
+                type="email" 
+                required
+                className="search-input" 
+                style={{ background: 'var(--bg-color)', border: '1px solid var(--border-color)', borderRadius: '8px' }}
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>Contraseña</label>
+              <input 
+                type="password" 
+                required
+                className="search-input" 
+                style={{ background: 'var(--bg-color)', border: '1px solid var(--border-color)', borderRadius: '8px' }}
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+              />
+            </div>
+            <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '1rem', padding: '0.8rem' }} disabled={authLoading}>
+              {authLoading ? <div style={{ width: '20px', height: '20px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div> : <><LogIn size={18} /> Entrar / Registrarse</>}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <header className="header">
@@ -165,20 +271,16 @@ function App() {
               <Shield size={28} />
             </div>
             <div>
-              <h1 style={{ fontSize: '1.4rem', marginBottom: 0, fontWeight: 700 }}>Radar OSINT</h1>
-              <p className="text-muted" style={{ fontSize: '0.85rem' }}>Inteligencia Comercial y Licitaciones</p>
+              <h1 style={{ fontSize: '1.4rem', marginBottom: 0, fontWeight: 700 }}>Radar OSINT <span style={{fontSize: '0.8rem', background: 'var(--google-yellow-light)', color: '#b07d00', padding: '2px 6px', borderRadius: '4px', verticalAlign: 'middle', marginLeft: '8px'}}>PRO</span></h1>
             </div>
           </div>
-          <div className="flex gap-4">
-            <button className="btn btn-secondary" onClick={fetchData}>
-              Actualizar Datos
-            </button>
-            <button 
-              className={`btn btn-vip ${vipMode ? 'active' : ''}`}
-              onClick={() => setVipMode(!vipMode)}
-            >
-              <Trophy size={18} /> 
-              {vipMode ? "Viendo solo VIP" : "Filtrar VIP"}
+          <div className="flex items-center gap-4">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--bg-surface-variant)', padding: '6px 12px', borderRadius: '20px', fontWeight: 600, fontSize: '0.9rem' }}>
+              <Coins size={16} color="var(--google-yellow)" />
+              {tokenBalance.toLocaleString()} Tokens
+            </div>
+            <button className="btn btn-secondary" onClick={handleLogout} style={{ padding: '0.4rem 1rem', fontSize: '0.8rem' }}>
+              Salir
             </button>
           </div>
         </div>
@@ -186,7 +288,7 @@ function App() {
 
       <main className="container" style={{ marginTop: '2rem', paddingBottom: '4rem' }}>
         
-        {/* Search Bar - Google Style */}
+        {/* Search Bar */}
         <div className="flex flex-col md:flex-row gap-4 justify-between" style={{ marginBottom: '2.5rem' }}>
           <div className="search-bar-wrapper" style={{ flex: '1', maxWidth: '600px' }}>
             <Search size={22} color="var(--text-muted)" />
@@ -217,28 +319,27 @@ function App() {
         {loading ? (
           <div style={{ padding: '5rem 0', textAlign: 'center' }}>
             <div style={{ width: '40px', height: '40px', border: '4px solid var(--google-blue-light)', borderTopColor: 'var(--google-blue)', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto' }}></div>
-            <p className="text-muted" style={{ marginTop: '1.5rem', fontWeight: 500 }}>Descargando licitaciones...</p>
+            <p className="text-muted" style={{ marginTop: '1.5rem', fontWeight: 500 }}>Descargando base de datos nacional...</p>
           </div>
         ) : filteredProcurements.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '5rem 0' }}>
             <AlertTriangle size={48} color="var(--google-yellow)" style={{ margin: '0 auto 1rem' }} />
             <h2>Sin resultados</h2>
             <p className="text-muted" style={{ marginTop: '0.5rem', marginBottom: '1.5rem' }}>Intenta cambiar los filtros o los términos de búsqueda.</p>
-            <button className="btn btn-secondary" onClick={() => {setSearchTerm(''); setFilterState(''); setVipMode(false);}}>
+            <button className="btn btn-secondary" onClick={() => {setSearchTerm(''); setFilterState('');}}>
               Limpiar filtros
             </button>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {filteredProcurements.map((procurement, index) => {
-              const analysis = getAnalysisForProcurement(procurement.id);
-              const procVip = isVip(analysis);
+              const hasAnalysis = !!generatedAnalyses[procurement.id];
               
               return (
                 <div 
                   key={procurement.id} 
                   className="card card-hover animate-item flex flex-col justify-between"
-                  style={{ animationDelay: `${index * 0.03}s`, cursor: 'pointer' }}
+                  style={{ animationDelay: `${index * 0.03}s`, cursor: 'pointer', border: hasAnalysis ? '1px solid var(--google-blue-light)' : '1px solid transparent' }}
                   onClick={() => setSelectedProcurement(procurement)}
                 >
                   <div>
@@ -266,19 +367,11 @@ function App() {
                   </div>
                   
                   <div>
-                    {analysis && (
-                      <div className="ai-pills-container">
-                        <div className="ai-pill ai-pill-score">
-                          <Zap size={12} /> Score: {analysis.score_total}
+                    {hasAnalysis && (
+                      <div className="ai-pills-container" style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: 'none' }}>
+                        <div className="ai-pill" style={{ background: 'var(--google-green-light)', color: '#0d652d', width: '100%', justifyContent: 'center' }}>
+                          <CheckCircle2 size={12} /> Análisis de IA Completado
                         </div>
-                        <div className="ai-pill ai-pill-prob">
-                          <Target size={12} /> Win: {analysis.win_probability}%
-                        </div>
-                        {procVip && (
-                          <div className="ai-pill ai-pill-vip">
-                            <Trophy size={12} /> VIP
-                          </div>
-                        )}
                       </div>
                     )}
                     
@@ -339,65 +432,86 @@ function App() {
                   <span className="detail-label">Fecha de Publicación</span>
                   <span className="detail-value">{formatDate(getDisplayDate(selectedProcurement))}</span>
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">Monto Referencia</span>
-                  <span className="detail-value" style={{ color: 'var(--google-green)', fontWeight: 700 }}>
-                    {selectedProcurement.amount ? `$${selectedProcurement.amount.toLocaleString()} ${selectedProcurement.currency || 'MXN'}` : 'No especificado'}
-                  </span>
-                </div>
               </div>
 
-              {getAnalysisForProcurement(selectedProcurement.id) ? (() => {
-                const ana = getAnalysisForProcurement(selectedProcurement.id)!;
-                return (
-                  <div className="ai-card">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem', color: 'var(--google-blue)' }}>
-                      <Zap size={24} />
-                      <h2 style={{ fontSize: '1.25rem', color: 'var(--google-blue)', margin: 0 }}>Análisis Inteligente</h2>
-                    </div>
-                    
-                    <div className="ai-stat-row">
-                      <div className="ai-stat-big" style={{ color: 'var(--google-blue)' }}>
-                        <span className="num">{ana.score_total}</span>
-                        <span className="lbl">Score Global</span>
-                      </div>
-                      <div className="ai-stat-big" style={{ color: 'var(--google-green)' }}>
-                        <span className="num">{ana.win_probability}%</span>
-                        <span className="lbl">Prob. Ganar</span>
-                      </div>
-                      <div className="ai-stat-big" style={{ color: 'var(--google-yellow)' }}>
-                        <span className="num">{ana.score_tech}</span>
-                        <span className="lbl">Técnico</span>
-                      </div>
+              {/* SECTION: AI ANALYSIS SAAS */}
+              <div className="ai-card" style={{ background: generatedAnalyses[selectedProcurement.id] ? 'var(--bg-surface)' : 'var(--bg-surface-variant)', border: generatedAnalyses[selectedProcurement.id] ? '2px solid var(--google-blue-light)' : 'none' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem', color: 'var(--google-blue)' }}>
+                  <Zap size={24} />
+                  <h2 style={{ fontSize: '1.25rem', color: 'var(--google-blue)', margin: 0 }}>Consultor Experto IA</h2>
+                </div>
+                
+                {generatedAnalyses[selectedProcurement.id] ? (
+                  <div className="ai-results animate-item">
+                    <div style={{ marginBottom: '1.5rem' }}>
+                      <h4 style={{ color: 'var(--text-primary)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <FileText size={16} color="var(--google-blue)" /> Antecedentes RAG
+                      </h4>
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', background: 'var(--bg-surface-variant)', padding: '1rem', borderRadius: '8px' }}>
+                        {generatedAnalyses[selectedProcurement.id].antecedentes}
+                      </p>
                     </div>
 
-                    <div style={{ marginBottom: '2rem' }}>
-                      <h4 style={{ marginBottom: '0.5rem' }}>Resumen Ejecutivo</h4>
-                      <p style={{ color: 'var(--text-secondary)' }}>{ana.summary}</p>
+                    <div style={{ marginBottom: '1.5rem' }}>
+                      <h4 style={{ color: 'var(--google-green)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Target size={16} /> Tips para Ganar
+                      </h4>
+                      <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        {generatedAnalyses[selectedProcurement.id].tips_ganadores.map((tip, i) => (
+                          <li key={i} style={{ position: 'relative', paddingLeft: '1.5rem', fontSize: '0.95rem', color: 'var(--text-secondary)' }}>
+                            <span style={{ position: 'absolute', left: 0, color: 'var(--google-green)', fontWeight: 'bold' }}>✓</span> {tip}
+                          </li>
+                        ))}
+                      </ul>
                     </div>
 
-                    <div className="ai-lists">
-                      <div className="ai-list-col opps">
-                        <h4 style={{ color: 'var(--google-green)' }}>Oportunidades Clave</h4>
-                        <ul>
-                          {ana.opportunities?.map((opp, i) => <li key={i}>{opp}</li>)}
+                    <div className="detail-grid" style={{ marginBottom: 0 }}>
+                      <div className="detail-item" style={{ background: 'var(--bg-color)', padding: '1rem', borderRadius: '8px' }}>
+                        <span className="detail-label" style={{ color: 'var(--google-blue)' }}>Fase Técnica</span>
+                        <ul style={{ listStyle: 'none', marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {generatedAnalyses[selectedProcurement.id].fase_tecnica.map((t, i) => (
+                            <li key={i} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>• {t}</li>
+                          ))}
                         </ul>
                       </div>
-                      <div className="ai-list-col risks">
-                        <h4 style={{ color: 'var(--google-red)' }}>Riesgos y Red Flags</h4>
-                        <ul>
-                          {ana.red_flags?.map((rf, i) => <li key={`rf-${i}`}>{rf}</li>)}
-                          {ana.risks?.map((r, i) => <li key={`r-${i}`}>{r}</li>)}
+                      <div className="detail-item" style={{ background: 'var(--bg-color)', padding: '1rem', borderRadius: '8px' }}>
+                        <span className="detail-label" style={{ color: 'var(--google-yellow)' }}>Fase Económica</span>
+                        <ul style={{ listStyle: 'none', marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {generatedAnalyses[selectedProcurement.id].fase_economica.map((e, i) => (
+                            <li key={i} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>• {e}</li>
+                          ))}
                         </ul>
                       </div>
                     </div>
                   </div>
-                );
-              })() : (
-                <div style={{ padding: '2rem', textAlign: 'center', background: 'var(--bg-surface-variant)', borderRadius: 'var(--radius-lg)' }}>
-                  <p style={{ color: 'var(--text-muted)' }}>La inteligencia artificial aún no ha analizado los documentos de esta licitación.</p>
-                </div>
-              )}
+                ) : (
+                  <div style={{ textAlign: 'center', padding: '1rem 0' }}>
+                    <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.95rem' }}>
+                      Obtén un desglose estratégico completo, antecedentes históricos y consejos para armar la propuesta técnica y económica perfecta.
+                    </p>
+                    <button 
+                      className="btn btn-primary" 
+                      style={{ width: '100%', padding: '1rem', fontSize: '1rem' }}
+                      onClick={() => generateExpertAnalysis(selectedProcurement.id)}
+                      disabled={analyzingItem === selectedProcurement.id}
+                    >
+                      {analyzingItem === selectedProcurement.id ? (
+                        <>
+                          <div style={{ width: '20px', height: '20px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
+                          Procesando documentos con IA...
+                        </>
+                      ) : (
+                        <>
+                          <Lock size={18} /> Generar Análisis Experto (🪙 50 Tokens)
+                        </>
+                      )}
+                    </button>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
+                      Se descargarán los anexos y se procesarán utilizando LLMs avanzados.
+                    </p>
+                  </div>
+                )}
+              </div>
 
               {getAttachmentsForProcurement(selectedProcurement.id).length > 0 && (
                 <div style={{ marginTop: '2.5rem' }}>
