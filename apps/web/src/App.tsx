@@ -32,9 +32,14 @@ interface Attachment {
 
 interface ExpertAnalysis {
   antecedentes: string;
+  resumen_ejecutivo: string;
   tips_ganadores: string[];
+  alertas_riesgo: string[];
   fase_tecnica: string[];
   fase_economica: string[];
+  score_oportunidad: number;
+  probabilidad_ganar: number;
+  veredicto: 'ALTA_OPORTUNIDAD' | 'OPORTUNIDAD_MODERADA' | 'RIESGO_ELEVADO' | 'POSIBLE_DIRIGIDA';
 }
 
 // TIPOS SAAS
@@ -141,52 +146,74 @@ function App() {
     }
   };
 
-  const generateExpertAnalysis = (procId: string) => {
+  const generateExpertAnalysis = async (procId: string) => {
     if (!user) return;
-    
+
     if (user.tokens < 50 && user.role !== 'admin') {
-      alert("No tienes suficientes tokens. Adquiere más tokens para continuar o inicia sesión como Admin.");
+      alert('No tienes suficientes tokens. Adquiere más para continuar.');
       return;
     }
-    
+
     setAnalyzingItem(procId);
-    
-    // Buscar la licitación seleccionada para hacer el texto dinámico
+
     const proc = procurements.find(p => p.id === procId);
-    const depName = proc?.dependency_name || 'Esta dependencia';
-    const amountVal = proc?.amount ? `$${(proc.amount * 0.85).toLocaleString()} MXN` : 'un monto reservado';
-    
-    // Simulate API call
-    setTimeout(() => {
+
+    try {
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+      const res = await fetch(
+        `${supabaseUrl}/functions/v1/analyze-procurement`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${supabaseKey}`,
+            'apikey': supabaseKey,
+          },
+          body: JSON.stringify({
+            procurement_id: procId,
+            title: proc?.title,
+            dependency_name: proc?.dependency_name,
+            state: proc?.state,
+            amount: proc?.amount,
+            licitation_number: proc?.licitation_number,
+          }),
+        }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Error desconocido en Edge Function');
+      }
+
+      const analysis: ExpertAnalysis = {
+        antecedentes: data.analysis.antecedentes || 'No disponible.',
+        resumen_ejecutivo: data.analysis.resumen_ejecutivo || '',
+        tips_ganadores: Array.isArray(data.analysis.tips_ganadores) ? data.analysis.tips_ganadores : [],
+        alertas_riesgo: Array.isArray(data.analysis.alertas_riesgo) ? data.analysis.alertas_riesgo : [],
+        fase_tecnica: Array.isArray(data.analysis.fase_tecnica) ? data.analysis.fase_tecnica : [],
+        fase_economica: Array.isArray(data.analysis.fase_economica) ? data.analysis.fase_economica : [],
+        score_oportunidad: typeof data.analysis.score_oportunidad === 'number' ? data.analysis.score_oportunidad : 0,
+        probabilidad_ganar: typeof data.analysis.probabilidad_ganar === 'number' ? data.analysis.probabilidad_ganar : 0,
+        veredicto: data.analysis.veredicto || 'OPORTUNIDAD_MODERADA',
+      };
+
+      // Descontar tokens
       if (user.role !== 'admin') {
         const updatedUser = { ...user, tokens: user.tokens - 50 };
         setUser(updatedUser);
         localStorage.setItem('radar_mock_user', JSON.stringify(updatedUser));
       }
-      
-      setGeneratedAnalyses(prev => ({
-        ...prev,
-        [procId]: {
-          antecedentes: `[DEMO SIMULADO] Históricamente, ${depName} favorece propuestas que cumplan estrictamente los anexos técnicos. El año pasado, una licitación similar de esta misma rama se adjudicó por aproximadamente ${amountVal}.`,
-          tips_ganadores: [
-            "[DEMO SIMULADO] Enfocar la propuesta en tiempos de entrega rápidos.",
-            "Asegurar que todas las cartas del fabricante estén notariadas.",
-            `Considerar las regulaciones específicas de ${proc?.state || 'esta región'}.`
-          ],
-          fase_tecnica: [
-            "[DEMO SIMULADO] Requisito Crítico: Presentar Currículum del personal clave.",
-            "Formato: Foliar todas las hojas y firmar en tinta azul.",
-            "Ojo: Revisar el Anexo Técnico detalladamente, suelen descalificar por omisiones menores."
-          ],
-          fase_economica: [
-            `[DEMO SIMULADO] Margen Sugerido para ${depName}: 12% a 18% de utilidad bruta.`,
-            "Fianza: Preparar fianza de cumplimiento por el 10% del monto total sin IVA.",
-            "Anticipo: Verificar si las bases permiten anticipo del 30%."
-          ]
-        }
-      }));
+
+      setGeneratedAnalyses(prev => ({ ...prev, [procId]: analysis }));
+    } catch (err: any) {
+      console.error('Error en Consultor IA:', err);
+      alert(`Error generando análisis: ${err.message}. Verifica que la Edge Function está desplegada y OPENAI_API_KEY está configurada en Supabase.`);
+    } finally {
       setAnalyzingItem(null);
-    }, 3500);
+    }
   };
 
   const getAttachmentsForProcurement = (procId: string) => {
@@ -566,32 +593,90 @@ function App() {
                 
                 {generatedAnalyses[selectedProcurement.id] ? (
                   <div className="ai-results animate-item">
+
+                    {/* VEREDICTO + SCORES */}
+                    {(() => {
+                      const a = generatedAnalyses[selectedProcurement.id];
+                      const veredictoStyles: Record<string, {bg: string; color: string; label: string}> = {
+                        ALTA_OPORTUNIDAD:    { bg: 'var(--google-green-light)',  color: '#0d652d', label: '🚀 Alta Oportunidad' },
+                        OPORTUNIDAD_MODERADA:{ bg: 'var(--google-blue-light)',   color: 'var(--google-blue)', label: '📊 Oportunidad Moderada' },
+                        RIESGO_ELEVADO:      { bg: '#fff3cd',                    color: '#856404', label: '⚠️ Riesgo Elevado' },
+                        POSIBLE_DIRIGIDA:    { bg: 'var(--google-red-light)',    color: 'var(--google-red)', label: '🔒 Posible Licitación Dirigida' },
+                      };
+                      const v = veredictoStyles[a.veredicto] || veredictoStyles.OPORTUNIDAD_MODERADA;
+                      return (
+                        <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+                          <div style={{ flex: '1 1 200px', background: v.bg, color: v.color, padding: '0.75rem 1rem', borderRadius: '8px', fontWeight: 700, fontSize: '0.95rem', display: 'flex', alignItems: 'center' }}>
+                            {v.label}
+                          </div>
+                          <div style={{ flex: '0 0 auto', background: 'var(--bg-surface-variant)', padding: '0.75rem 1.25rem', borderRadius: '8px', textAlign: 'center' }}>
+                            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--google-blue)' }}>{a.score_oportunidad}</div>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Score /100</div>
+                          </div>
+                          <div style={{ flex: '0 0 auto', background: 'var(--bg-surface-variant)', padding: '0.75rem 1.25rem', borderRadius: '8px', textAlign: 'center' }}>
+                            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--google-green)' }}>{a.probabilidad_ganar}%</div>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Prob. Ganar</div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* RESUMEN EJECUTIVO */}
+                    {generatedAnalyses[selectedProcurement.id].resumen_ejecutivo && (
+                      <div style={{ marginBottom: '1.5rem', padding: '1rem', background: 'var(--bg-surface-variant)', borderRadius: '8px', borderLeft: '3px solid var(--google-blue)' }}>
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', margin: 0, lineHeight: 1.6 }}>
+                          {generatedAnalyses[selectedProcurement.id].resumen_ejecutivo}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* ANTECEDENTES */}
                     <div style={{ marginBottom: '1.5rem' }}>
                       <h4 style={{ color: 'var(--text-primary)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <FileText size={16} color="var(--google-blue)" /> Antecedentes RAG
+                        <FileText size={16} color="var(--google-blue)" /> Antecedentes
                       </h4>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', background: 'var(--bg-surface-variant)', padding: '1rem', borderRadius: '8px' }}>
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', background: 'var(--bg-surface-variant)', padding: '1rem', borderRadius: '8px', margin: 0 }}>
                         {generatedAnalyses[selectedProcurement.id].antecedentes}
                       </p>
                     </div>
 
-                    <div style={{ marginBottom: '1.5rem' }}>
-                      <h4 style={{ color: 'var(--google-green)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <Target size={16} /> Tips para Ganar
-                      </h4>
-                      <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                        {generatedAnalyses[selectedProcurement.id].tips_ganadores.map((tip, i) => (
-                          <li key={i} style={{ position: 'relative', paddingLeft: '1.5rem', fontSize: '0.95rem', color: 'var(--text-secondary)' }}>
-                            <span style={{ position: 'absolute', left: 0, color: 'var(--google-green)', fontWeight: 'bold' }}>✓</span> {tip}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
+                    {/* TIPS PARA GANAR */}
+                    {generatedAnalyses[selectedProcurement.id].tips_ganadores.length > 0 && (
+                      <div style={{ marginBottom: '1.5rem' }}>
+                        <h4 style={{ color: 'var(--google-green)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <Target size={16} /> Tips para Ganar
+                        </h4>
+                        <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: 0, margin: 0 }}>
+                          {generatedAnalyses[selectedProcurement.id].tips_ganadores.map((tip, i) => (
+                            <li key={i} style={{ position: 'relative', paddingLeft: '1.5rem', fontSize: '0.95rem', color: 'var(--text-secondary)' }}>
+                              <span style={{ position: 'absolute', left: 0, color: 'var(--google-green)', fontWeight: 'bold' }}>✓</span> {tip}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
 
+                    {/* ALERTAS DE RIESGO */}
+                    {generatedAnalyses[selectedProcurement.id].alertas_riesgo.length > 0 && (
+                      <div style={{ marginBottom: '1.5rem' }}>
+                        <h4 style={{ color: 'var(--google-red)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <AlertTriangle size={16} /> Alertas y Candados
+                        </h4>
+                        <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: 0, margin: 0 }}>
+                          {generatedAnalyses[selectedProcurement.id].alertas_riesgo.map((alerta, i) => (
+                            <li key={i} style={{ position: 'relative', paddingLeft: '1.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+                              <span style={{ position: 'absolute', left: 0, color: 'var(--google-red)' }}>⚠</span> {alerta}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* FASE TÉCNICA + ECONÓMICA */}
                     <div className="detail-grid" style={{ marginBottom: 0 }}>
                       <div className="detail-item" style={{ background: 'var(--bg-color)', padding: '1rem', borderRadius: '8px' }}>
                         <span className="detail-label" style={{ color: 'var(--google-blue)' }}>Fase Técnica</span>
-                        <ul style={{ listStyle: 'none', marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        <ul style={{ listStyle: 'none', marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: 0 }}>
                           {generatedAnalyses[selectedProcurement.id].fase_tecnica.map((t, i) => (
                             <li key={i} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>• {t}</li>
                           ))}
@@ -599,7 +684,7 @@ function App() {
                       </div>
                       <div className="detail-item" style={{ background: 'var(--bg-color)', padding: '1rem', borderRadius: '8px' }}>
                         <span className="detail-label" style={{ color: 'var(--google-yellow)' }}>Fase Económica</span>
-                        <ul style={{ listStyle: 'none', marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        <ul style={{ listStyle: 'none', marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: 0 }}>
                           {generatedAnalyses[selectedProcurement.id].fase_economica.map((e, i) => (
                             <li key={i} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>• {e}</li>
                           ))}
