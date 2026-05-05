@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { supabase } from './lib/supabase';
 import { Shield, Search, FileText, AlertTriangle, ExternalLink, Calendar, MapPin, Building, Trophy, Filter } from 'lucide-react';
 import { format } from 'date-fns';
@@ -23,15 +23,6 @@ interface Procurement {
   created_at: string;
 }
 
-interface Analysis {
-  id: string;
-  attachment_id: string;
-  score_total: number;
-  win_probability: number;
-  category_detected: string;
-  is_relevant: boolean;
-  summary: string;
-}
 
 function App() {
   const [procurements, setProcurements] = useState<Procurement[]>([]);
