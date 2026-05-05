@@ -181,6 +181,12 @@ async function handlePostEvaluarModalidad(
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
+function isAuthorized(req: http.IncomingMessage): boolean {
+  const token = process.env.INTERNAL_API_TOKEN;
+  if (!token) return false; // endpoints deshabilitados si no hay token configurado
+  return req.headers["x-internal-token"] === token;
+}
+
 export function createHttpServer(): http.Server {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -193,6 +199,10 @@ export function createHttpServer(): http.Server {
       }
 
       if (req.method === "GET" && url.pathname === "/api/topes/federales") {
+        if (!isAuthorized(req)) {
+          sendJson(res, 401, { error: "Unauthorized" });
+          return;
+        }
         await handleGetTopes(url, res);
         return;
       }
@@ -201,6 +211,10 @@ export function createHttpServer(): http.Server {
         req.method === "POST" &&
         url.pathname === "/api/licitaciones/evaluar-modalidad"
       ) {
+        if (!isAuthorized(req)) {
+          sendJson(res, 401, { error: "Unauthorized" });
+          return;
+        }
         await handlePostEvaluarModalidad(req, res);
         return;
       }
