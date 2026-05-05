@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from './lib/supabase';
-import { Shield, Search, FileText, AlertTriangle, ExternalLink, Building, Filter, X, Zap, Target, Download, Coins, LogIn, Lock, CheckCircle2 } from 'lucide-react';
+import { Shield, Search, FileText, AlertTriangle, ExternalLink, Building, Filter, X, Zap, Target, Download, Coins, LogIn, Lock, CheckCircle2, Activity, Settings, UserCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 
@@ -30,7 +30,6 @@ interface Attachment {
   file_url: string;
 }
 
-// MOCKED EXPERT ANALYSIS FOR SAAS DEMO
 interface ExpertAnalysis {
   antecedentes: string;
   tips_ganadores: string[];
@@ -38,81 +37,79 @@ interface ExpertAnalysis {
   fase_economica: string[];
 }
 
+// TIPOS SAAS
+type UserRole = 'admin' | 'guest' | 'user';
+
+interface LocalUser {
+  email: string;
+  role: UserRole;
+  tokens: number;
+}
+
 function App() {
   const [procurements, setProcurements] = useState<Procurement[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterState, setFilterState] = useState('');
   
   const [selectedProcurement, setSelectedProcurement] = useState<Procurement | null>(null);
 
-  // SAAS STATES
-  const [user, setUser] = useState<any>(null);
+  // SAAS STATES (Mocked Auth)
+  const [user, setUser] = useState<LocalUser | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
-  const [tokenBalance, setTokenBalance] = useState(500); // Demo starting balance
+  
   const [analyzingItem, setAnalyzingItem] = useState<string | null>(null);
   const [generatedAnalyses, setGeneratedAnalyses] = useState<Record<string, ExpertAnalysis>>({});
 
-  useEffect(() => {
-    // Check active session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        fetchData();
-      } else {
-        setLoading(false);
-      }
-    });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
+  // VIEW STATES
+  const [currentView, setCurrentView] = useState<'radar' | 'admin'>('radar');
 
   useEffect(() => {
-    if (user) {
-      fetchData();
+    // Intentar recuperar sesión mockeada
+    const savedUser = localStorage.getItem('radar_mock_user');
+    if (savedUser) {
+      const parsed = JSON.parse(savedUser);
+      setUser(parsed);
+      if (parsed) fetchData();
     }
-  }, [user]);
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthLoading(true);
-    try {
-      // Intentar login
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+    
+    setTimeout(() => {
+      let loggedInUser: LocalUser;
       
-      if (error) {
-        // Si no existe, intentar registro automático para la demo
-        if (error.message.includes('Invalid login credentials')) {
-          const { error: signUpError } = await supabase.auth.signUp({
-            email,
-            password,
-          });
-          if (signUpError) throw signUpError;
-          alert("Cuenta creada exitosamente. Bienvenido a Radar OSINT.");
-        } else {
-          throw error;
-        }
+      if (email === 'admin@radar.com' && password === 'admin123') {
+        loggedInUser = { email: 'admin@radar.com', role: 'admin', tokens: 999999 };
+      } else {
+        // Simulamos un usuario normal
+        loggedInUser = { email, role: 'user', tokens: 100 };
       }
-    } catch (err: any) {
-      alert("Error de autenticación: " + err.message);
-    } finally {
+      
+      localStorage.setItem('radar_mock_user', JSON.stringify(loggedInUser));
+      setUser(loggedInUser);
       setAuthLoading(false);
-    }
+      fetchData();
+    }, 1000);
   };
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
+  const handleGuestLogin = () => {
+    const guestUser: LocalUser = { email: 'invitado@demo.com', role: 'guest', tokens: 0 };
+    localStorage.setItem('radar_mock_user', JSON.stringify(guestUser));
+    setUser(guestUser);
+    fetchData();
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('radar_mock_user');
+    setUser(null);
+    setCurrentView('radar');
   };
 
   const fetchData = async () => {
@@ -145,16 +142,23 @@ function App() {
   };
 
   const generateExpertAnalysis = (procId: string) => {
-    if (tokenBalance < 50) {
-      alert("No tienes suficientes tokens. Adquiere más tokens para continuar.");
+    if (!user) return;
+    
+    if (user.tokens < 50 && user.role !== 'admin') {
+      alert("No tienes suficientes tokens. Adquiere más tokens para continuar o inicia sesión como Admin.");
       return;
     }
     
     setAnalyzingItem(procId);
     
-    // Simulate API call to OpenAI via Edge Function
+    // Simulate API call
     setTimeout(() => {
-      setTokenBalance(prev => prev - 50);
+      if (user.role !== 'admin') {
+        const updatedUser = { ...user, tokens: user.tokens - 50 };
+        setUser(updatedUser);
+        localStorage.setItem('radar_mock_user', JSON.stringify(updatedUser));
+      }
+      
       setGeneratedAnalyses(prev => ({
         ...prev,
         [procId]: {
@@ -191,7 +195,6 @@ function App() {
       (p.dependency_name || '').toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesState = filterState === '' || p.state === filterState;
-
     return matchesSearch && matchesState;
   });
 
@@ -218,6 +221,9 @@ function App() {
     return 'badge-neutral';
   };
 
+  // -----------------------------
+  // VISTA DE LOGIN
+  // -----------------------------
   if (!user) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50" style={{ backgroundColor: 'var(--bg-surface-variant)' }}>
@@ -228,7 +234,7 @@ function App() {
             </div>
           </div>
           <h1 style={{ fontSize: '1.5rem', textAlign: 'center', marginBottom: '0.5rem' }}>Radar OSINT SaaS</h1>
-          <p className="text-muted" style={{ textAlign: 'center', marginBottom: '2rem' }}>Inicia sesión para acceder a inteligencia de licitaciones.</p>
+          <p className="text-muted" style={{ textAlign: 'center', marginBottom: '2rem' }}>Inicia sesión para acceder a la inteligencia comercial.</p>
           
           <form onSubmit={handleLogin} className="flex flex-col gap-4">
             <div>
@@ -240,6 +246,7 @@ function App() {
                 style={{ background: 'var(--bg-color)', border: '1px solid var(--border-color)', borderRadius: '8px' }}
                 value={email}
                 onChange={e => setEmail(e.target.value)}
+                placeholder="admin@radar.com"
               />
             </div>
             <div>
@@ -251,17 +258,113 @@ function App() {
                 style={{ background: 'var(--bg-color)', border: '1px solid var(--border-color)', borderRadius: '8px' }}
                 value={password}
                 onChange={e => setPassword(e.target.value)}
+                placeholder="admin123"
               />
             </div>
-            <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '1rem', padding: '0.8rem' }} disabled={authLoading}>
-              {authLoading ? <div style={{ width: '20px', height: '20px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div> : <><LogIn size={18} /> Entrar / Registrarse</>}
+            <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem', padding: '0.8rem' }} disabled={authLoading}>
+              {authLoading ? <div style={{ width: '20px', height: '20px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div> : <><LogIn size={18} /> Iniciar Sesión</>}
             </button>
           </form>
+
+          <div style={{ marginTop: '2rem', textAlign: 'center', borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem' }}>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>¿No tienes cuenta? Explora la plataforma.</p>
+            <button onClick={handleGuestLogin} className="btn btn-secondary" style={{ width: '100%' }}>
+              <UserCircle size={18} /> Entrar como Invitado
+            </button>
+          </div>
+
+          <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--google-blue-light)', borderRadius: '8px', fontSize: '0.8rem', color: 'var(--google-blue-hover)' }}>
+            <strong>Acceso Super Admin:</strong><br/>
+            Email: admin@radar.com<br/>
+            Pass: admin123
+          </div>
         </div>
       </div>
     );
   }
 
+  // -----------------------------
+  // VISTA DE ADMIN DASHBOARD
+  // -----------------------------
+  if (currentView === 'admin' && user.role === 'admin') {
+    return (
+      <div className="app">
+        <header className="header">
+          <div className="container flex justify-between items-center">
+            <div className="flex items-center gap-4">
+              <div style={{ background: 'var(--google-red)', padding: '10px', borderRadius: '12px', color: 'white' }}>
+                <Settings size={28} />
+              </div>
+              <div>
+                <h1 style={{ fontSize: '1.4rem', marginBottom: 0, fontWeight: 700 }}>Panel Administrativo</h1>
+                <p className="text-muted" style={{ fontSize: '0.85rem' }}>Control SaaS y Usuarios</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              <button className="btn btn-secondary" onClick={() => setCurrentView('radar')}>
+                Volver al Radar
+              </button>
+            </div>
+          </div>
+        </header>
+        
+        <main className="container" style={{ marginTop: '2rem', paddingBottom: '4rem' }}>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div className="card flex flex-col gap-2">
+              <span className="text-muted" style={{ fontWeight: 600, textTransform: 'uppercase', fontSize: '0.8rem' }}>Usuarios Activos</span>
+              <span style={{ fontSize: '2.5rem', fontWeight: 800, color: 'var(--google-blue)' }}>124</span>
+              <span className="text-muted" style={{ fontSize: '0.85rem' }}>+12 este mes</span>
+            </div>
+            <div className="card flex flex-col gap-2">
+              <span className="text-muted" style={{ fontWeight: 600, textTransform: 'uppercase', fontSize: '0.8rem' }}>Análisis IA Generados</span>
+              <span style={{ fontSize: '2.5rem', fontWeight: 800, color: 'var(--google-green)' }}>892</span>
+              <span className="text-muted" style={{ fontSize: '0.85rem' }}>~44,600 tokens gastados</span>
+            </div>
+            <div className="card flex flex-col gap-2">
+              <span className="text-muted" style={{ fontWeight: 600, textTransform: 'uppercase', fontSize: '0.8rem' }}>Ingresos Estimados (MRR)</span>
+              <span style={{ fontSize: '2.5rem', fontWeight: 800, color: 'var(--google-yellow)' }}>$4,200</span>
+              <span className="text-muted" style={{ fontSize: '0.85rem' }}>USD recurrentes</span>
+            </div>
+          </div>
+
+          <div className="card">
+            <h2 style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Activity size={20} color="var(--google-blue)" /> Actividad Reciente de Usuarios (Mock)
+            </h2>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {[
+                { time: 'Hace 2 min', user: 'juan.perez@constructora.com', action: 'Generó un Análisis de IA (Gasto: 50 tokens)', type: 'ia' },
+                { time: 'Hace 15 min', user: 'invitado@demo.com', action: 'Intentó generar un análisis pero no tenía tokens', type: 'error' },
+                { time: 'Hace 1 hora', user: 'contacto@techsolutions.mx', action: 'Compró Paquete Básico (1,000 tokens)', type: 'payment' },
+                { time: 'Hace 3 horas', user: 'maria.g@gobierno.com', action: 'Inició sesión en la plataforma', type: 'login' },
+              ].map((log, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '1rem', padding: '1rem', background: 'var(--bg-surface-variant)', borderRadius: '8px' }}>
+                  <div style={{ padding: '8px', background: 'white', borderRadius: '50%' }}>
+                    {log.type === 'ia' && <Zap size={16} color="var(--google-blue)" />}
+                    {log.type === 'error' && <AlertTriangle size={16} color="var(--google-red)" />}
+                    {log.type === 'payment' && <Coins size={16} color="var(--google-green)" />}
+                    {log.type === 'login' && <LogIn size={16} color="var(--text-muted)" />}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                      <strong style={{ fontSize: '0.9rem' }}>{log.user}</strong>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{log.time}</span>
+                    </div>
+                    <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>{log.action}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // -----------------------------
+  // VISTA PRINCIPAL RADAR (DASHBOARD)
+  // -----------------------------
   return (
     <div className="app">
       <header className="header">
@@ -275,12 +378,27 @@ function App() {
             </div>
           </div>
           <div className="flex items-center gap-4">
+            
+            {user.role === 'admin' && (
+              <button className="btn" style={{ background: 'var(--google-red-light)', color: 'var(--google-red)', padding: '0.4rem 1rem', fontSize: '0.85rem' }} onClick={() => setCurrentView('admin')}>
+                <Settings size={16} /> Panel Admin
+              </button>
+            )}
+
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--bg-surface-variant)', padding: '6px 12px', borderRadius: '20px', fontWeight: 600, fontSize: '0.9rem' }}>
               <Coins size={16} color="var(--google-yellow)" />
-              {tokenBalance.toLocaleString()} Tokens
+              {user.role === 'admin' ? '∞' : user.tokens} Tokens
             </div>
-            <button className="btn btn-secondary" onClick={handleLogout} style={{ padding: '0.4rem 1rem', fontSize: '0.8rem' }}>
-              Salir
+            
+            <div style={{ borderLeft: '1px solid var(--border-color)', height: '24px', margin: '0 4px' }}></div>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', marginRight: '8px' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>{user.email.split('@')[0]}</span>
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{user.role === 'guest' ? 'Invitado' : user.role === 'admin' ? 'Super Admin' : 'Usuario Pro'}</span>
+            </div>
+
+            <button className="btn btn-secondary" onClick={handleLogout} style={{ padding: '0.4rem', borderRadius: '50%' }} title="Cerrar Sesión">
+              <LogIn size={16} />
             </button>
           </div>
         </div>
@@ -370,7 +488,7 @@ function App() {
                     {hasAnalysis && (
                       <div className="ai-pills-container" style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: 'none' }}>
                         <div className="ai-pill" style={{ background: 'var(--google-green-light)', color: '#0d652d', width: '100%', justifyContent: 'center' }}>
-                          <CheckCircle2 size={12} /> Análisis de IA Completado
+                          <CheckCircle2 size={12} /> Análisis IA Completado
                         </div>
                       </div>
                     )}
