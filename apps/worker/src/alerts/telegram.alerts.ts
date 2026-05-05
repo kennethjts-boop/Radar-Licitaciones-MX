@@ -266,9 +266,9 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
     `${emoji} <b>NUEVO MATCH — ${alert.radarName}</b>`,
     `Score: <b>${score}%</b> (${alert.matchLevel.toUpperCase()})`,
     "",
-    `📌 <b>${p.title}</b>`,
+    `📌 <b>${escapeHtml(p.title ?? "")}</b>`,
     "",
-    `🏛 <b>Dependencia:</b> ${p.dependencyName ?? "N/D"}`,
+    `🏛 <b>Dependencia:</b> ${escapeHtml(p.dependencyName ?? "N/D")}`,
     p.state
       ? `📍 <b>Ubicación:</b> ${p.municipality ? `${p.municipality}, ` : ""}${p.state}`
       : "",
@@ -319,9 +319,9 @@ export function formatStatusChangeAlert(
     `🔄 <b>CAMBIO DE ESTATUS — ${alert.radarName}</b>`,
     "",
     `📋 <b>Expediente:</b> ${p.expedienteId ?? "N/D"}`,
-    `📌 <b>${p.title}</b>`,
+    `📌 <b>${escapeHtml(p.title ?? "")}</b>`,
     "",
-    `🏛 <b>Dependencia:</b> ${p.dependencyName ?? "N/D"}`,
+    `🏛 <b>Dependencia:</b> ${escapeHtml(p.dependencyName ?? "N/D")}`,
     "",
     `📊 <b>Estatus anterior:</b> ${previousStatus}`,
     `📊 <b>Estatus nuevo:</b> <b>${p.status}</b>`,
