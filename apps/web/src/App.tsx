@@ -256,45 +256,51 @@ function App() {
   // -----------------------------
   if (!user) {
     return (
-      <div className="login-wrapper">
+      <div className="flex flex-col items-center justify-center min-h-screen login-wrapper">
         <div className="login-card">
-          <div className="login-logo">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="9" stroke="white" strokeWidth="1.5" strokeDasharray="3 2"/>
-              <circle cx="12" cy="12" r="4" fill="white" fillOpacity="0.9"/>
-              <line x1="12" y1="3" x2="12" y2="1" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-              <line x1="12" y1="23" x2="12" y2="21" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-              <line x1="3" y1="12" x2="1" y2="12" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-              <line x1="23" y1="12" x2="21" y2="12" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-            </svg>
+          <div className="flex justify-center mb-8">
+            <div className="logo-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M2 17L12 22L22 17" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M2 12L12 17L22 12" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </div>
           </div>
-          <h1 style={{ fontSize: '1.6rem', textAlign: 'center', marginBottom: '0.35rem' }}>Radar OSINT</h1>
-          <p style={{ textAlign: 'center', color: 'var(--text-muted)', marginBottom: '2rem', fontSize: '0.9rem' }}>Inteligencia de licitaciones en tiempo real</p>
+          <h1 style={{ fontSize: '1.8rem', textAlign: 'center', marginBottom: '0.5rem' }}>Radar OSINT</h1>
+          <p style={{ textAlign: 'center', color: 'var(--text-subtle)', marginBottom: '2.5rem', fontSize: '0.95rem' }}>Plataforma avanzada de inteligencia comercial.</p>
 
-          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <div>
-              <label className="form-label">Correo Electrónico</label>
-              <input type="email" required className="form-input" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@radar.com" />
+          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            <div className="flex flex-col gap-2">
+              <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)' }}>Correo Electrónico</label>
+              <input 
+                type="email" required className="search-input" 
+                style={{ background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid transparent' }} 
+                value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@radar.com" 
+              />
             </div>
-            <div>
-              <label className="form-label">Contraseña</label>
-              <input type="password" required className="form-input" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
+            <div className="flex flex-col gap-2">
+              <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)' }}>Contraseña</label>
+              <input 
+                type="password" required className="search-input" 
+                style={{ background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid transparent' }} 
+                value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" 
+              />
             </div>
-            <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '0.75rem', marginTop: '0.5rem', fontSize: '0.95rem' }} disabled={authLoading}>
-              {authLoading
-                ? <div style={{ width: '18px', height: '18px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
-                : <><LogIn size={16}/> Iniciar Sesión</>
-              }
+            <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '0.8rem', marginTop: '0.5rem' }} disabled={authLoading}>
+              {authLoading ? <div style={{ width: '20px', height: '20px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div> : <><LogIn size={18} /> Iniciar Sesión</>}
             </button>
           </form>
 
-          <div className="divider"/>
-          <button onClick={handleGuestLogin} className="btn btn-secondary" style={{ width: '100%', padding: '0.7rem' }}>
-            <UserCircle size={16}/> Continuar como Invitado
-          </button>
+          <div style={{ marginTop: '2rem', textAlign: 'center', borderTop: '1px solid var(--border)', paddingTop: '2rem' }}>
+            <button onClick={handleGuestLogin} className="btn btn-secondary" style={{ width: '100%' }}>
+              <UserCircle size={18} /> Entrar como Invitado
+            </button>
+          </div>
 
-          <div className="credentials-box">
-            <strong>Super Admin:</strong> admin@radar.com &nbsp;/&nbsp; admin123
+          <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'var(--primary-light)', borderRadius: '12px', fontSize: '0.8rem', color: 'var(--primary)', border: '1px solid rgba(37, 99, 235, 0.1)' }}>
+            <strong>Acceso de Prueba:</strong><br/>
+            admin@radar.com / admin123
           </div>
         </div>
       </div>
@@ -387,36 +393,33 @@ function App() {
     <div className="app">
       <header className="header">
         <div className="container flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <div className="logo-mark">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-                <circle cx="12" cy="12" r="9" stroke="white" strokeWidth="1.5" strokeDasharray="3 2"/>
-                <circle cx="12" cy="12" r="3.5" fill="white"/>
-                <line x1="12" y1="2" x2="12" y2="5" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-                <line x1="12" y1="19" x2="12" y2="22" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-                <line x1="2" y1="12" x2="5" y2="12" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-                <line x1="19" y1="12" x2="22" y2="12" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+          <div className="logo-container">
+            <div className="logo-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M2 17L12 22L22 17" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M2 12L12 17L22 12" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
             </div>
-            <span className="logo-text">Radar <span>OSINT</span><span className="pro-badge">PRO</span></span>
+            <h1 className="logo-text">Radar <span>OSINT</span></h1>
           </div>
+          
           <div className="flex items-center gap-4">
             {user.role === 'admin' && (
-              <button className="btn btn-admin" onClick={() => setCurrentView('admin')}>
-                <Settings size={14}/> Admin
+              <button className="btn btn-secondary" style={{ padding: '0.4rem 1rem', fontSize: '0.8rem' }} onClick={() => setCurrentView('admin')}>
+                Admin
               </button>
             )}
-            <div className="token-pill">
-              <Coins size={14}/>
-              {user.role === 'admin' ? '∞' : user.tokens}
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--bg-subtle)', padding: '6px 14px', borderRadius: '20px', fontWeight: 600, fontSize: '0.85rem', border: '1px solid var(--border)' }}>
+              <Coins size={14} color="var(--warning)" />
+              {user.role === 'admin' ? '∞' : user.tokens} <span style={{color: 'var(--text-muted)', fontWeight: 400}}>tokens</span>
             </div>
-            <div style={{ width: '1px', height: '20px', background: 'var(--border)' }}/>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>{user.email.split('@')[0]}</span>
-              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{user.role === 'guest' ? 'Invitado' : user.role === 'admin' ? 'Super Admin' : 'Pro'}</span>
-            </div>
-            <button className="btn-icon" onClick={handleLogout} title="Salir">
-              <LogIn size={15}/>
+            
+            <div style={{ borderLeft: '1px solid var(--border)', height: '24px', margin: '0 4px' }}></div>
+            
+            <button className="btn btn-secondary" onClick={handleLogout} style={{ padding: '0.4rem', borderRadius: '50%' }} title="Cerrar Sesión">
+              <LogIn size={16} />
             </button>
           </div>
         </div>
@@ -471,30 +474,45 @@ function App() {
             {filteredProcurements.map((procurement, index) => {
               const hasAnalysis = !!generatedAnalyses[procurement.id];
               return (
-                <div
-                  key={procurement.id}
-                  className="card card-hover animate-item flex flex-col justify-between"
-                  style={{ animationDelay: `${index * 0.03}s`, cursor: 'pointer', borderColor: hasAnalysis ? 'var(--border-active)' : 'var(--border)' }}
+                <div 
+                  key={procurement.id} 
+                  className="card animate-item"
+                  style={{ animationDelay: `${index * 0.03}s`, cursor: 'pointer', borderColor: hasAnalysis ? 'var(--primary)' : 'var(--border)' }}
                   onClick={() => setSelectedProcurement(procurement)}
                 >
-                  <div>
-                    <div className="flex justify-between items-center" style={{ marginBottom: '0.85rem' }}>
-                      <span className={`badge ${getStatusBadgeClass(procurement.status)}`}>{procurement.status}</span>
-                      <span className="card-detected">
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
-                        {formatDate(procurement.created_at)}
+                  <div className="flex justify-between items-center mb-4">
+                    <span className={`badge ${getStatusBadgeClass(procurement.status)}`}>
+                      {procurement.status}
+                    </span>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--primary)', fontWeight: 600, background: 'var(--primary-light)', padding: '2px 8px', borderRadius: '4px' }}>
+                      {formatDate(procurement.created_at)}
+                    </span>
+                  </div>
+                  
+                  <h3 className="card-title">{procurement.title}</h3>
+                  
+                  <div className="flex flex-col gap-2 mb-4">
+                    <div className="flex items-center gap-2 text-xs text-slate-500">
+                      <Building size={12} className="text-slate-400" />
+                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {procurement.dependency_name || 'Sin dependencia'}
                       </span>
                     </div>
-                    <h3 className="card-title">{procurement.title.length > 85 ? procurement.title.substring(0, 85) + '…' : procurement.title}</h3>
-                    <div className="card-meta"><Building size={13}/><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{procurement.dependency_name || 'Sin dependencia'}</span></div>
-                    <div className="card-meta"><FileText size={13}/><span>{procurement.licitation_number || 'S/N'}</span></div>
+                    <div className="flex items-center gap-2 text-xs text-slate-500">
+                      <FileText size={12} className="text-slate-400" />
+                      <span>{procurement.licitation_number || 'S/N'}</span>
+                    </div>
                   </div>
-                  <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    {procurement.amount
-                      ? <span style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text-primary)' }}>${procurement.amount.toLocaleString()} <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{procurement.currency || 'MXN'}</span></span>
-                      : <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Monto por definir</span>
-                    }
-                    {hasAnalysis && <span className="ai-pill" style={{ background: 'var(--green-light)', color: 'var(--green)', fontSize: '0.68rem' }}><CheckCircle2 size={10}/> IA</span>}
+                  
+                  <div className="mt-auto pt-4 border-t border-slate-100 flex justify-between items-center">
+                    <div className="text-sm font-bold text-slate-900">
+                      {procurement.amount ? `$${procurement.amount.toLocaleString()}` : 'Monto abierto'}
+                    </div>
+                    {hasAnalysis && (
+                      <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 uppercase tracking-wider">
+                        <CheckCircle2 size={12} /> IA Ok
+                      </div>
+                    )}
                   </div>
                 </div>
               );
