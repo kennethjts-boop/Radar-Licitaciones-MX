@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from './lib/supabase';
-import { Shield, Search, FileText, AlertTriangle, ExternalLink, Building, Filter, X, Zap, Target, Download, Coins, LogIn, Lock, CheckCircle2, Activity, Settings, UserCircle } from 'lucide-react';
+import { Search, FileText, AlertTriangle, ExternalLink, Building, Filter, X, Zap, Target, Download, Coins, LogIn, Lock, CheckCircle2, Activity, Settings, UserCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 
@@ -232,15 +232,12 @@ function App() {
 
   const uniqueStates = Array.from(new Set(procurements.map(p => p.state).filter(Boolean))) as string[];
 
-  // La fecha principal es siempre cuándo fue encontrada (created_at)
-  const getDisplayDate = (p: Procurement) => {
-    return p.created_at || p.publication_date || p.opening_date;
-  };
 
-  const formatDate = (dateString: string | null) => {
+  const formatDate = (dateString: string | null, showTime = false) => {
     if (!dateString) return 'N/D';
     try {
-      return format(new Date(dateString), "dd MMM yyyy, h:mm a", { locale: es });
+      const pattern = showTime ? 'dd MMM yyyy, h:mm a' : 'dd MMM yyyy';
+      return format(new Date(dateString), pattern, { locale: es });
     } catch (e) {
       return dateString;
     }
@@ -259,57 +256,45 @@ function App() {
   // -----------------------------
   if (!user) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50" style={{ backgroundColor: 'var(--bg-surface-variant)' }}>
-        <div className="card" style={{ width: '100%', maxWidth: '400px', padding: '2.5rem' }}>
-          <div className="flex justify-center mb-6">
-            <div style={{ background: 'var(--google-blue)', padding: '12px', borderRadius: '16px', color: 'white' }}>
-              <Shield size={32} />
-            </div>
+      <div className="login-wrapper">
+        <div className="login-card">
+          <div className="login-logo">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="9" stroke="white" strokeWidth="1.5" strokeDasharray="3 2"/>
+              <circle cx="12" cy="12" r="4" fill="white" fillOpacity="0.9"/>
+              <line x1="12" y1="3" x2="12" y2="1" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+              <line x1="12" y1="23" x2="12" y2="21" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+              <line x1="3" y1="12" x2="1" y2="12" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+              <line x1="23" y1="12" x2="21" y2="12" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
           </div>
-          <h1 style={{ fontSize: '1.5rem', textAlign: 'center', marginBottom: '0.5rem' }}>Radar OSINT SaaS</h1>
-          <p className="text-muted" style={{ textAlign: 'center', marginBottom: '2rem' }}>Inicia sesión para acceder a la inteligencia comercial.</p>
-          
-          <form onSubmit={handleLogin} className="flex flex-col gap-4">
+          <h1 style={{ fontSize: '1.6rem', textAlign: 'center', marginBottom: '0.35rem' }}>Radar OSINT</h1>
+          <p style={{ textAlign: 'center', color: 'var(--text-muted)', marginBottom: '2rem', fontSize: '0.9rem' }}>Inteligencia de licitaciones en tiempo real</p>
+
+          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div>
-              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>Correo Electrónico</label>
-              <input 
-                type="email" 
-                required
-                className="search-input" 
-                style={{ background: 'var(--bg-color)', border: '1px solid var(--border-color)', borderRadius: '8px' }}
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="admin@radar.com"
-              />
+              <label className="form-label">Correo Electrónico</label>
+              <input type="email" required className="form-input" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@radar.com" />
             </div>
             <div>
-              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>Contraseña</label>
-              <input 
-                type="password" 
-                required
-                className="search-input" 
-                style={{ background: 'var(--bg-color)', border: '1px solid var(--border-color)', borderRadius: '8px' }}
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="admin123"
-              />
+              <label className="form-label">Contraseña</label>
+              <input type="password" required className="form-input" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
             </div>
-            <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem', padding: '0.8rem' }} disabled={authLoading}>
-              {authLoading ? <div style={{ width: '20px', height: '20px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div> : <><LogIn size={18} /> Iniciar Sesión</>}
+            <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '0.75rem', marginTop: '0.5rem', fontSize: '0.95rem' }} disabled={authLoading}>
+              {authLoading
+                ? <div style={{ width: '18px', height: '18px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
+                : <><LogIn size={16}/> Iniciar Sesión</>
+              }
             </button>
           </form>
 
-          <div style={{ marginTop: '2rem', textAlign: 'center', borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem' }}>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>¿No tienes cuenta? Explora la plataforma.</p>
-            <button onClick={handleGuestLogin} className="btn btn-secondary" style={{ width: '100%' }}>
-              <UserCircle size={18} /> Entrar como Invitado
-            </button>
-          </div>
+          <div className="divider"/>
+          <button onClick={handleGuestLogin} className="btn btn-secondary" style={{ width: '100%', padding: '0.7rem' }}>
+            <UserCircle size={16}/> Continuar como Invitado
+          </button>
 
-          <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--google-blue-light)', borderRadius: '8px', fontSize: '0.8rem', color: 'var(--google-blue-hover)' }}>
-            <strong>Acceso Super Admin:</strong><br/>
-            Email: admin@radar.com<br/>
-            Pass: admin123
+          <div className="credentials-box">
+            <strong>Super Admin:</strong> admin@radar.com &nbsp;/&nbsp; admin123
           </div>
         </div>
       </div>
@@ -403,35 +388,35 @@ function App() {
       <header className="header">
         <div className="container flex justify-between items-center">
           <div className="flex items-center gap-4">
-            <div style={{ background: 'var(--google-blue)', padding: '10px', borderRadius: '12px', color: 'white' }}>
-              <Shield size={28} />
+            <div className="logo-mark">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="9" stroke="white" strokeWidth="1.5" strokeDasharray="3 2"/>
+                <circle cx="12" cy="12" r="3.5" fill="white"/>
+                <line x1="12" y1="2" x2="12" y2="5" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                <line x1="12" y1="19" x2="12" y2="22" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                <line x1="2" y1="12" x2="5" y2="12" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                <line x1="19" y1="12" x2="22" y2="12" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
             </div>
-            <div>
-              <h1 style={{ fontSize: '1.4rem', marginBottom: 0, fontWeight: 700 }}>Radar OSINT <span style={{fontSize: '0.8rem', background: 'var(--google-yellow-light)', color: '#b07d00', padding: '2px 6px', borderRadius: '4px', verticalAlign: 'middle', marginLeft: '8px'}}>PRO</span></h1>
-            </div>
+            <span className="logo-text">Radar <span>OSINT</span><span className="pro-badge">PRO</span></span>
           </div>
           <div className="flex items-center gap-4">
-            
             {user.role === 'admin' && (
-              <button className="btn" style={{ background: 'var(--google-red-light)', color: 'var(--google-red)', padding: '0.4rem 1rem', fontSize: '0.85rem' }} onClick={() => setCurrentView('admin')}>
-                <Settings size={16} /> Panel Admin
+              <button className="btn btn-admin" onClick={() => setCurrentView('admin')}>
+                <Settings size={14}/> Admin
               </button>
             )}
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--bg-surface-variant)', padding: '6px 12px', borderRadius: '20px', fontWeight: 600, fontSize: '0.9rem' }}>
-              <Coins size={16} color="var(--google-yellow)" />
-              {user.role === 'admin' ? '∞' : user.tokens} Tokens
+            <div className="token-pill">
+              <Coins size={14}/>
+              {user.role === 'admin' ? '∞' : user.tokens}
             </div>
-            
-            <div style={{ borderLeft: '1px solid var(--border-color)', height: '24px', margin: '0 4px' }}></div>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', marginRight: '8px' }}>
-              <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>{user.email.split('@')[0]}</span>
-              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{user.role === 'guest' ? 'Invitado' : user.role === 'admin' ? 'Super Admin' : 'Usuario Pro'}</span>
+            <div style={{ width: '1px', height: '20px', background: 'var(--border)' }}/>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>{user.email.split('@')[0]}</span>
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{user.role === 'guest' ? 'Invitado' : user.role === 'admin' ? 'Super Admin' : 'Pro'}</span>
             </div>
-
-            <button className="btn btn-secondary" onClick={handleLogout} style={{ padding: '0.4rem', borderRadius: '50%' }} title="Cerrar Sesión">
-              <LogIn size={16} />
+            <button className="btn-icon" onClick={handleLogout} title="Salir">
+              <LogIn size={15}/>
             </button>
           </div>
         </div>
@@ -485,56 +470,31 @@ function App() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {filteredProcurements.map((procurement, index) => {
               const hasAnalysis = !!generatedAnalyses[procurement.id];
-              
               return (
-                <div 
-                  key={procurement.id} 
+                <div
+                  key={procurement.id}
                   className="card card-hover animate-item flex flex-col justify-between"
-                  style={{ animationDelay: `${index * 0.03}s`, cursor: 'pointer', border: hasAnalysis ? '1px solid var(--google-blue-light)' : '1px solid transparent' }}
+                  style={{ animationDelay: `${index * 0.03}s`, cursor: 'pointer', borderColor: hasAnalysis ? 'var(--border-active)' : 'var(--border)' }}
                   onClick={() => setSelectedProcurement(procurement)}
                 >
                   <div>
-                    <div className="flex justify-between items-center" style={{ marginBottom: '1rem' }}>
-                      <span className={`badge ${getStatusBadgeClass(procurement.status)}`}>
-                        {procurement.status}
-                      </span>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 500 }}>
-                        {formatDate(getDisplayDate(procurement))}
-                      </span>
-                    </div>
-                    
-                    <h3 className="card-title">{procurement.title.length > 80 ? procurement.title.substring(0, 80) + '...' : procurement.title}</h3>
-                    
-                    <div className="card-meta">
-                      <Building size={14} />
-                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {procurement.dependency_name || 'Sin dependencia'}
+                    <div className="flex justify-between items-center" style={{ marginBottom: '0.85rem' }}>
+                      <span className={`badge ${getStatusBadgeClass(procurement.status)}`}>{procurement.status}</span>
+                      <span className="card-detected">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
+                        {formatDate(procurement.created_at)}
                       </span>
                     </div>
-                    <div className="card-meta">
-                      <FileText size={14} />
-                      <span>{procurement.licitation_number || 'S/N'}</span>
-                    </div>
+                    <h3 className="card-title">{procurement.title.length > 85 ? procurement.title.substring(0, 85) + '…' : procurement.title}</h3>
+                    <div className="card-meta"><Building size={13}/><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{procurement.dependency_name || 'Sin dependencia'}</span></div>
+                    <div className="card-meta"><FileText size={13}/><span>{procurement.licitation_number || 'S/N'}</span></div>
                   </div>
-                  
-                  <div>
-                    {hasAnalysis && (
-                      <div className="ai-pills-container" style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: 'none' }}>
-                        <div className="ai-pill" style={{ background: 'var(--google-green-light)', color: '#0d652d', width: '100%', justifyContent: 'center' }}>
-                          <CheckCircle2 size={12} /> Análisis IA Completado
-                        </div>
-                      </div>
-                    )}
-                    
-                    <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      {procurement.amount ? (
-                        <span style={{ fontWeight: '700', color: 'var(--text-primary)', fontSize: '1.1rem' }}>
-                          ${procurement.amount.toLocaleString()} <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{procurement.currency || 'MXN'}</span>
-                        </span>
-                      ) : (
-                        <span className="text-muted" style={{ fontSize: '0.85rem' }}>Monto abierto</span>
-                      )}
-                    </div>
+                  <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    {procurement.amount
+                      ? <span style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text-primary)' }}>${procurement.amount.toLocaleString()} <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{procurement.currency || 'MXN'}</span></span>
+                      : <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Monto por definir</span>
+                    }
+                    {hasAnalysis && <span className="ai-pill" style={{ background: 'var(--green-light)', color: 'var(--green)', fontSize: '0.68rem' }}><CheckCircle2 size={10}/> IA</span>}
                   </div>
                 </div>
               );
