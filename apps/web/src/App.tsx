@@ -151,6 +151,11 @@ function App() {
     
     setAnalyzingItem(procId);
     
+    // Buscar la licitación seleccionada para hacer el texto dinámico
+    const proc = procurements.find(p => p.id === procId);
+    const depName = proc?.dependency_name || 'Esta dependencia';
+    const amountVal = proc?.amount ? `$${(proc.amount * 0.85).toLocaleString()} MXN` : 'un monto reservado';
+    
     // Simulate API call
     setTimeout(() => {
       if (user.role !== 'admin') {
@@ -162,21 +167,21 @@ function App() {
       setGeneratedAnalyses(prev => ({
         ...prev,
         [procId]: {
-          antecedentes: "Históricamente, esta dependencia favorece propuestas que incluyan soporte técnico local en menos de 24 horas. El año pasado, la empresa 'Soluciones IT' ganó una licitación similar por un monto de $2.5M MXN.",
+          antecedentes: `[DEMO SIMULADO] Históricamente, ${depName} favorece propuestas que cumplan estrictamente los anexos técnicos. El año pasado, una licitación similar de esta misma rama se adjudicó por aproximadamente ${amountVal}.`,
           tips_ganadores: [
-            "Destacar certificaciones ISO en la propuesta técnica.",
-            "Ofrecer un plazo de garantía extendido (ej. 24 meses en lugar de 12) como valor agregado sin costo.",
-            "Evitar intermediarios en las marcas propuestas; presentar cartas del fabricante directo."
+            "[DEMO SIMULADO] Enfocar la propuesta en tiempos de entrega rápidos.",
+            "Asegurar que todas las cartas del fabricante estén notariadas.",
+            `Considerar las regulaciones específicas de ${proc?.state || 'esta región'}.`
           ],
           fase_tecnica: [
-            "Requisito Crítico: Presentar Currículum de al menos 3 ingenieros certificados en la marca.",
-            "Formato: Asegurarse de foliar todas las hojas y anexar la declaración de integridad firmada en original.",
-            "Ojo: Revisar el Anexo 4, pide pruebas de laboratorio que tardan 5 días en emitirse. ¡Tramitar ya!"
+            "[DEMO SIMULADO] Requisito Crítico: Presentar Currículum del personal clave.",
+            "Formato: Foliar todas las hojas y firmar en tinta azul.",
+            "Ojo: Revisar el Anexo Técnico detalladamente, suelen descalificar por omisiones menores."
           ],
           fase_economica: [
-            "Margen Sugerido: Se estima que el precio ganador debe rondar entre el 12% y 15% de utilidad bruta.",
+            `[DEMO SIMULADO] Margen Sugerido para ${depName}: 12% a 18% de utilidad bruta.`,
             "Fianza: Preparar fianza de cumplimiento por el 10% del monto total sin IVA.",
-            "Anticipo: La convocatoria NO contempla anticipos. Considerar fondeo propio para los primeros 60 días."
+            "Anticipo: Verificar si las bases permiten anticipo del 30%."
           ]
         }
       }));
