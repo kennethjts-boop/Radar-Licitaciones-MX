@@ -16,7 +16,8 @@ import { withLock } from "../core/lock";
 import { withTimeout } from "../core/errors";
 import { nowISO, formatDuration, isDateExpired, isPublicationTooOld } from "../core/time";
 import { healthTracker } from "../core/healthcheck";
-import { existsSync, readFileSync, unlinkSync } from "fs";
+import { existsSync, unlinkSync } from "fs";
+import { readFile } from "fs/promises";
 import {
   collectComprasMx,
   recheckComprasMx,
@@ -188,7 +189,7 @@ async function processAttachmentsForProcurement(
         }
 
         try {
-          const rawPdfText = readFileSync(file.tempFilePath).toString("latin1");
+          const rawPdfText = (await readFile(file.tempFilePath)).toString("latin1");
           const excludedKeyword = detectExcludedKeyword(rawPdfText);
           if (excludedKeyword) {
             const skipJustification = `Excluida por keyword bloqueada: ${excludedKeyword}`;
