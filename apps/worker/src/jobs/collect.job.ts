@@ -480,46 +480,45 @@ async function processAttachmentsForProcurement(
               "Análisis de IA completado para adjunto",
             );
 
-            Promise.all(
-              chunksForMemory.map(async (chunk, chunkIndex) => {
-                const embedding = await generateEmbedding(chunk);
-                const { error: insertEmbeddingErr } = await db
-                  .from("procurement_embeddings")
-                  .insert({
-                    attachment_id: insertedAttachment.id,
-                    chunk_index: chunkIndex,
-                    content_chunk: chunk,
-                    embedding,
-                  });
+            try {
+              await Promise.all(
+                chunksForMemory.map(async (chunk, chunkIndex) => {
+                  const embedding = await generateEmbedding(chunk);
+                  const { error: insertEmbeddingErr } = await db
+                    .from("procurement_embeddings")
+                    .insert({
+                      attachment_id: insertedAttachment.id,
+                      chunk_index: chunkIndex,
+                      content_chunk: chunk,
+                      embedding,
+                    });
 
-                if (insertEmbeddingErr) {
-                  throw new Error(insertEmbeddingErr.message);
-                }
-              }),
-            )
-              .then(() => {
-                log.info(
-                  {
-                    event: "RAG_MEMORY_STORED",
-                    procurementId,
-                    fileName: file.fileName,
-                    chunksStored: chunksForMemory.length,
-                  },
-                  "Embeddings del documento guardados en memoria vectorial",
-                );
-              })
-              .catch((memoryErr) => {
-                log.warn(
-                  {
-                    event: "RAG_MEMORY_STORE_FAILED",
-                    err: memoryErr,
-                    procurementId,
-                    fileName: file.fileName,
-                    chunksAttempted: chunksForMemory.length,
-                  },
-                  "No se pudo guardar memoria vectorial del documento",
-                );
-              });
+                  if (insertEmbeddingErr) {
+                    throw new Error(insertEmbeddingErr.message);
+                  }
+                }),
+              );
+              log.info(
+                {
+                  event: "RAG_MEMORY_STORED",
+                  procurementId,
+                  fileName: file.fileName,
+                  chunksStored: chunksForMemory.length,
+                },
+                "Embeddings del documento guardados en memoria vectorial",
+              );
+            } catch (memoryErr) {
+              log.warn(
+                {
+                  event: "RAG_MEMORY_STORE_FAILED",
+                  err: memoryErr,
+                  procurementId,
+                  fileName: file.fileName,
+                  chunksAttempted: chunksForMemory.length,
+                },
+                "No se pudo guardar memoria vectorial del documento",
+              );
+            }
           }
         } catch (aiErr) {
           log.warn(
