@@ -232,8 +232,9 @@ function App() {
 
   const uniqueStates = Array.from(new Set(procurements.map(p => p.state).filter(Boolean))) as string[];
 
+  // La fecha principal es siempre cuándo fue encontrada (created_at)
   const getDisplayDate = (p: Procurement) => {
-    return p.publication_date || p.opening_date || p.created_at;
+    return p.created_at || p.publication_date || p.opening_date;
   };
 
   const formatDate = (dateString: string | null) => {
@@ -579,9 +580,15 @@ function App() {
                   <span className="detail-value">{selectedProcurement.state || 'N/D'}</span>
                 </div>
                 <div className="detail-item">
-                  <span className="detail-label">Fecha de Publicación</span>
-                  <span className="detail-value">{formatDate(getDisplayDate(selectedProcurement))}</span>
+                  <span className="detail-label">Encontrada el</span>
+                  <span className="detail-value">{formatDate(selectedProcurement.created_at)}</span>
                 </div>
+                {(selectedProcurement.publication_date || selectedProcurement.opening_date) && (
+                  <div className="detail-item">
+                    <span className="detail-label">Fecha en Fuente</span>
+                    <span className="detail-value">{formatDate(selectedProcurement.publication_date || selectedProcurement.opening_date)}</span>
+                  </div>
+                )}
               </div>
 
               {/* SECTION: AI ANALYSIS SAAS */}
