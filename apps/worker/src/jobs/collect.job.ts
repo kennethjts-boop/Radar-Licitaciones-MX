@@ -56,7 +56,7 @@ import { sanitizeForKeywordRegex } from "../core/text";
 import { sendCapufePeajeDeepReportToTelegram } from "../scripts/capufe-peaje-deep-report";
 
 const log = createModuleLogger("collect-job");
-const MAX_ALERTS_PER_CYCLE = 10;
+
 const AI_VIP_ALERT_SCORE_THRESHOLD = 70;
 const AI_VIP_ALERT_WIN_PROBABILITY_THRESHOLD = 50;
 const RAG_MATCH_THRESHOLD = 0.7;
@@ -1000,17 +1000,6 @@ export async function runRecheckJob(): Promise<void> {
                 const enriched = await enrichMatch(normalized, enrichableMatch);
                 const alertId = await createAlert(enriched, (row as DbProcurement).id, radarDbId);
 
-                if (alertsSentThisCycle >= MAX_ALERTS_PER_CYCLE) {
-                  if (!alertsOverflowNotified) {
-                    alertsOverflowNotified = true;
-                    await sendTelegramMessage(
-                      `⚠️ Límite de ${MAX_ALERTS_PER_CYCLE} alertas alcanzado en recheck diario. Hay más matches en Supabase.`,
-                      "HTML"
-                    ).catch(() => {});
-                  }
-                  await markAlertFailed(alertId);
-                  continue;
-                }
 
                 const msgId = await sendMatchAlert(enriched);
                 if (msgId) {
