@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react';
 import { supabase } from './lib/supabase';
-import { Search, FileText, AlertTriangle, ExternalLink, Building, Filter, X, Zap, Target, Download, Coins, LogIn, Lock, CheckCircle2, Activity, Settings, UserCircle } from 'lucide-react';
+import { 
+  Search, FileText, AlertTriangle, ExternalLink, Building, Filter, X, Zap, 
+  Target, Download, Coins, LogIn, Lock, CheckCircle2, Activity, Settings, 
+  UserCircle, MapPin, Calendar, CreditCard, ChevronRight, Sparkles, AlertCircle
+} from 'lucide-react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 
@@ -8,721 +12,394 @@ interface Procurement {
   id: string;
   source_id: string;
   external_id: string;
-  licitation_number: string;
   title: string;
-  description: string;
+  description: string | null;
   status: string;
-  type: string;
+  dependency_name: string | null;
+  licitation_number: string | null;
+  opening_date: string | null;
+  publication_date: string | null;
   amount: number | null;
   currency: string | null;
-  dependency_name: string | null;
+  url: string | null;
   state: string | null;
-  publication_date: string | null;
-  opening_date: string | null;
-  source_url: string;
   created_at: string;
 }
 
-interface Attachment {
-  id: string;
-  procurement_id: string;
-  file_name: string;
-  file_url: string;
-}
-
-interface ExpertAnalysis {
-  antecedentes: string;
-  resumen_ejecutivo: string;
-  tips_ganadores: string[];
-  alertas_riesgo: string[];
-  fase_tecnica: string[];
-  fase_economica: string[];
-  score_oportunidad: number;
-  probabilidad_ganar: number;
-  veredicto: 'ALTA_OPORTUNIDAD' | 'OPORTUNIDAD_MODERADA' | 'RIESGO_ELEVADO' | 'POSIBLE_DIRIGIDA';
-}
-
-// TIPOS SAAS
-type UserRole = 'admin' | 'guest' | 'user';
-
-interface LocalUser {
+interface User {
   email: string;
-  role: UserRole;
+  role: 'admin' | 'user' | 'guest';
   tokens: number;
 }
 
-function App() {
+interface AnalysisResult {
+  resumen_ejecutivo: string;
+  veredicto: 'ALTA_OPORTUNIDAD' | 'MODERADA' | 'POSIBLE_DIRIGIDA' | 'RIESGO_ALTO';
+  score_oportunidad: number;
+  probabilidad_exito: number;
+  puntos_clave: string[];
+  riesgos_detectados: string[];
+  tips_ganadores: string[];
+  analisis_tecnico: string;
+  analisis_economico: string;
+}
+
+export default function App() {
   const [procurements, setProcurements] = useState<Procurement[]>([]);
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
-  
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterState, setFilterState] = useState('');
-  
   const [selectedProcurement, setSelectedProcurement] = useState<Procurement | null>(null);
-
-  // SAAS STATES (Mocked Auth)
-  const [user, setUser] = useState<LocalUser | null>(null);
+  
+  // Auth & SaaS State
+  const [user, setUser] = useState<User | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
-  
-  const [analyzingItem, setAnalyzingItem] = useState<string | null>(null);
-  const [generatedAnalyses, setGeneratedAnalyses] = useState<Record<string, ExpertAnalysis>>({});
-
-  // VIEW STATES
   const [currentView, setCurrentView] = useState<'radar' | 'admin'>('radar');
+  
+  // AI Analysis State
+  const [analyzing, setAnalyzing] = useState(false);
+  const [generatedAnalyses, setGeneratedAnalyses] = useState<Record<string, AnalysisResult>>({});
 
   useEffect(() => {
-    // Intentar recuperar sesión mockeada
-    const savedUser = localStorage.getItem('radar_mock_user');
-    if (savedUser) {
-      const parsed = JSON.parse(savedUser);
-      setUser(parsed);
-      if (parsed) fetchData();
-    }
+    fetchProcurements();
+    // Check local session
+    const savedUser = localStorage.getItem('radar_user');
+    if (savedUser) setUser(JSON.parse(savedUser));
   }, []);
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthLoading(true);
-    
-    setTimeout(() => {
-      let loggedInUser: LocalUser;
-      
-      if (email === 'admin@radar.com' && password === 'admin123') {
-        loggedInUser = { email: 'admin@radar.com', role: 'admin', tokens: 999999 };
-      } else {
-        // Simulamos un usuario normal
-        loggedInUser = { email, role: 'user', tokens: 100 };
-      }
-      
-      localStorage.setItem('radar_mock_user', JSON.stringify(loggedInUser));
-      setUser(loggedInUser);
-      setAuthLoading(false);
-      fetchData();
-    }, 1000);
-  };
-
-  const handleGuestLogin = () => {
-    const guestUser: LocalUser = { email: 'invitado@demo.com', role: 'guest', tokens: 0 };
-    localStorage.setItem('radar_mock_user', JSON.stringify(guestUser));
-    setUser(guestUser);
-    fetchData();
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem('radar_mock_user');
-    setUser(null);
-    setCurrentView('radar');
-  };
-
-  const fetchData = async () => {
-    setLoading(true);
+  const fetchProcurements = async () => {
     try {
-      const { data: procData, error: procError } = await supabase
+      const { data, error } = await supabase
         .from('procurements')
         .select('*')
         .order('created_at', { ascending: false })
         .limit(100);
-
-      if (procError) throw procError;
-      const fetchedProcurements = procData || [];
-      setProcurements(fetchedProcurements);
-
-      if (fetchedProcurements.length > 0) {
-        const procIds = fetchedProcurements.map(p => p.id);
-        const { data: attData } = await supabase
-          .from('attachments')
-          .select('id, procurement_id, file_name, file_url')
-          .in('procurement_id', procIds);
-          
-        setAttachments(attData || []);
-      }
-    } catch (error) {
-      console.error('Error fetching data:', error);
+      
+      if (error) throw error;
+      setProcurements(data || []);
+    } catch (err) {
+      console.error('Error fetching procurements:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  const generateExpertAnalysis = async (procId: string) => {
-    if (!user) return;
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setTimeout(() => {
+      let role: 'admin' | 'user' = 'user';
+      if (email === 'admin@radar.com') role = 'admin';
+      const userData: User = { email, role, tokens: role === 'admin' ? 999999 : 50 };
+      setUser(userData);
+      localStorage.setItem('radar_user', JSON.stringify(userData));
+      setAuthLoading(false);
+    }, 800);
+  };
 
-    if (user.tokens < 50 && user.role !== 'admin') {
-      alert('No tienes suficientes tokens. Adquiere más para continuar.');
+  const handleGuestLogin = () => {
+    const guest: User = { email: 'invitado@demo.com', role: 'guest', tokens: 0 };
+    setUser(guest);
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    localStorage.removeItem('radar_user');
+  };
+
+  const generateExpertAnalysis = async (procurement: Procurement) => {
+    if (user?.tokens === 0 && user.role !== 'admin') {
+      alert("No tienes tokens suficientes. Por favor, recarga tu cuenta.");
       return;
     }
 
-    setAnalyzingItem(procId);
-
-    const proc = procurements.find(p => p.id === procId);
-
+    setAnalyzing(true);
     try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-      const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      const { data: { session } } = await supabase.auth.getSession();
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      
+      const res = await fetch(`${supabaseUrl}/functions/v1/analyze-procurement`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+        },
+        body: JSON.stringify({ procurementId: procurement.id })
+      });
 
-      const res = await fetch(
-        `${supabaseUrl}/functions/v1/analyze-procurement`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${supabaseKey}`,
-            'apikey': supabaseKey,
-          },
-          body: JSON.stringify({
-            procurement_id: procId,
-            title: proc?.title,
-            dependency_name: proc?.dependency_name,
-            state: proc?.state,
-            amount: proc?.amount,
-            licitation_number: proc?.licitation_number,
-          }),
-        }
-      );
-
-      const data = await res.json();
-
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Error desconocido en Edge Function');
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Error en el análisis');
       }
 
-      const analysis: ExpertAnalysis = {
-        antecedentes: data.analysis.antecedentes || 'No disponible.',
-        resumen_ejecutivo: data.analysis.resumen_ejecutivo || '',
-        tips_ganadores: Array.isArray(data.analysis.tips_ganadores) ? data.analysis.tips_ganadores : [],
-        alertas_riesgo: Array.isArray(data.analysis.alertas_riesgo) ? data.analysis.alertas_riesgo : [],
-        fase_tecnica: Array.isArray(data.analysis.fase_tecnica) ? data.analysis.fase_tecnica : [],
-        fase_economica: Array.isArray(data.analysis.fase_economica) ? data.analysis.fase_economica : [],
-        score_oportunidad: typeof data.analysis.score_oportunidad === 'number' ? data.analysis.score_oportunidad : 0,
-        probabilidad_ganar: typeof data.analysis.probabilidad_ganar === 'number' ? data.analysis.probabilidad_ganar : 0,
-        veredicto: data.analysis.veredicto || 'OPORTUNIDAD_MODERADA',
-      };
-
-      // Descontar tokens
-      if (user.role !== 'admin') {
-        const updatedUser = { ...user, tokens: user.tokens - 50 };
+      const analysis: AnalysisResult = await res.json();
+      setGeneratedAnalyses(prev => ({ ...prev, [procurement.id]: analysis }));
+      
+      // Deduct token (mock)
+      if (user && user.role !== 'admin') {
+        const updatedUser = { ...user, tokens: user.tokens - 10 };
         setUser(updatedUser);
-        localStorage.setItem('radar_mock_user', JSON.stringify(updatedUser));
+        localStorage.setItem('radar_user', JSON.stringify(updatedUser));
       }
-
-      setGeneratedAnalyses(prev => ({ ...prev, [procId]: analysis }));
     } catch (err: any) {
-      console.error('Error en Consultor IA:', err);
-      alert(`Error generando análisis: ${err.message}. Verifica que la Edge Function está desplegada y OPENAI_API_KEY está configurada en Supabase.`);
+      alert(`Error generando análisis: ${err.message}`);
     } finally {
-      setAnalyzingItem(null);
+      setAnalyzing(false);
     }
   };
 
-  const getAttachmentsForProcurement = (procId: string) => {
-    return attachments.filter(a => a.procurement_id === procId);
-  };
-
-  const filteredProcurements = procurements.filter((p) => {
-    const matchesSearch = 
-      (p.title || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (p.licitation_number || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (p.dependency_name || '').toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesState = filterState === '' || p.state === filterState;
+  const filteredProcurements = procurements.filter(p => {
+    const matchesSearch = p.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                         (p.licitation_number?.toLowerCase().includes(searchTerm.toLowerCase()));
+    const matchesState = filterState ? p.state === filterState : true;
     return matchesSearch && matchesState;
   });
 
   const uniqueStates = Array.from(new Set(procurements.map(p => p.state).filter(Boolean))) as string[];
 
-
-  const formatDate = (dateString: string | null, showTime = false) => {
-    if (!dateString) return 'N/D';
+  const formatDate = (dateString: string | null) => {
+    if (!dateString) return 'Pendiente';
     try {
-      const pattern = showTime ? 'dd MMM yyyy, h:mm a' : 'dd MMM yyyy';
-      return format(new Date(dateString), pattern, { locale: es });
+      return format(new Date(dateString), "dd MMM yyyy", { locale: es });
     } catch (e) {
       return dateString;
     }
   };
 
-  const getStatusBadgeClass = (status: string) => {
-    const s = status.toLowerCase();
-    if (s.includes('vigente') || s.includes('publicad')) return 'badge-success';
-    if (s.includes('desierta') || s.includes('cancelad')) return 'badge-danger';
-    if (s.includes('evaluaci') || s.includes('fallo')) return 'badge-warning';
-    return 'badge-neutral';
-  };
-
-  // -----------------------------
-  // VISTA DE LOGIN
-  // -----------------------------
   if (!user) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen login-wrapper">
-        <div className="login-card">
-          <div className="flex justify-center mb-8">
-            <div className="logo-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M2 17L12 22L22 17" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M2 12L12 17L22 12" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
+      <div className="flex items-center justify-center min-h-screen login-bg">
+        <div className="login-premium-card animate-slide">
+          <div className="flex justify-center mb-10">
+            <div className="logo-box">
+              <Sparkles size={28} />
             </div>
           </div>
-          <h1 style={{ fontSize: '1.8rem', textAlign: 'center', marginBottom: '0.5rem' }}>Radar OSINT</h1>
-          <p style={{ textAlign: 'center', color: 'var(--text-subtle)', marginBottom: '2.5rem', fontSize: '0.95rem' }}>Plataforma avanzada de inteligencia comercial.</p>
-
-          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <h1 style={{ fontSize: '2.5rem', textAlign: 'center', marginBottom: '0.75rem' }}>Radar OSINT</h1>
+          <p style={{ textAlign: 'center', color: 'var(--text-secondary)', marginBottom: '3rem' }}>Inteligencia estratégica para licitaciones públicas.</p>
+          
+          <form onSubmit={handleLogin} className="flex flex-col gap-5">
             <div className="flex flex-col gap-2">
-              <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)' }}>Correo Electrónico</label>
-              <input 
-                type="email" required className="search-input" 
-                style={{ background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid transparent' }} 
-                value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@radar.com" 
-              />
+              <label style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Email</label>
+              <input type="email" required className="input-premium" value={email} onChange={e => setEmail(e.target.value)} placeholder="tu@empresa.com" />
             </div>
             <div className="flex flex-col gap-2">
-              <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)' }}>Contraseña</label>
-              <input 
-                type="password" required className="search-input" 
-                style={{ background: 'var(--bg-input)', borderRadius: '12px', border: '1px solid transparent' }} 
-                value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" 
-              />
+              <label style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Contraseña</label>
+              <input type="password" required className="input-premium" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
             </div>
-            <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '0.8rem', marginTop: '0.5rem' }} disabled={authLoading}>
-              {authLoading ? <div style={{ width: '20px', height: '20px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div> : <><LogIn size={18} /> Iniciar Sesión</>}
+            <button type="submit" className="btn-premium btn-blue" style={{ width: '100%', marginTop: '1rem' }} disabled={authLoading}>
+              {authLoading ? 'Verificando...' : 'Entrar al Radar'}
             </button>
           </form>
 
-          <div style={{ marginTop: '2rem', textAlign: 'center', borderTop: '1px solid var(--border)', paddingTop: '2rem' }}>
-            <button onClick={handleGuestLogin} className="btn btn-secondary" style={{ width: '100%' }}>
-              <UserCircle size={18} /> Entrar como Invitado
+          <div style={{ marginTop: '2.5rem', textAlign: 'center' }}>
+            <button onClick={handleGuestLogin} className="btn-premium btn-white" style={{ width: '100%' }}>
+              Explorar como Invitado
             </button>
-          </div>
-
-          <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'var(--primary-light)', borderRadius: '12px', fontSize: '0.8rem', color: 'var(--primary)', border: '1px solid rgba(37, 99, 235, 0.1)' }}>
-            <strong>Acceso de Prueba:</strong><br/>
-            admin@radar.com / admin123
           </div>
         </div>
       </div>
     );
   }
 
-  // -----------------------------
-  // VISTA DE ADMIN DASHBOARD
-  // -----------------------------
-  if (currentView === 'admin' && user.role === 'admin') {
-    return (
-      <div className="app">
-        <header className="header">
-          <div className="container flex justify-between items-center">
-            <div className="flex items-center gap-4">
-              <div style={{ background: 'var(--google-red)', padding: '10px', borderRadius: '12px', color: 'white' }}>
-                <Settings size={28} />
-              </div>
-              <div>
-                <h1 style={{ fontSize: '1.4rem', marginBottom: 0, fontWeight: 700 }}>Panel Administrativo</h1>
-                <p className="text-muted" style={{ fontSize: '0.85rem' }}>Control SaaS y Usuarios</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-4">
-              <button className="btn btn-secondary" onClick={() => setCurrentView('radar')}>
-                Volver al Radar
-              </button>
-            </div>
-          </div>
-        </header>
-        
-        <main className="container" style={{ marginTop: '2rem', paddingBottom: '4rem' }}>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            <div className="card flex flex-col gap-2">
-              <span className="text-muted" style={{ fontWeight: 600, textTransform: 'uppercase', fontSize: '0.8rem' }}>Usuarios Activos</span>
-              <span style={{ fontSize: '2.5rem', fontWeight: 800, color: 'var(--google-blue)' }}>124</span>
-              <span className="text-muted" style={{ fontSize: '0.85rem' }}>+12 este mes</span>
-            </div>
-            <div className="card flex flex-col gap-2">
-              <span className="text-muted" style={{ fontWeight: 600, textTransform: 'uppercase', fontSize: '0.8rem' }}>Análisis IA Generados</span>
-              <span style={{ fontSize: '2.5rem', fontWeight: 800, color: 'var(--google-green)' }}>892</span>
-              <span className="text-muted" style={{ fontSize: '0.85rem' }}>~44,600 tokens gastados</span>
-            </div>
-            <div className="card flex flex-col gap-2">
-              <span className="text-muted" style={{ fontWeight: 600, textTransform: 'uppercase', fontSize: '0.8rem' }}>Ingresos Estimados (MRR)</span>
-              <span style={{ fontSize: '2.5rem', fontWeight: 800, color: 'var(--google-yellow)' }}>$4,200</span>
-              <span className="text-muted" style={{ fontSize: '0.85rem' }}>USD recurrentes</span>
-            </div>
-          </div>
-
-          <div className="card">
-            <h2 style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Activity size={20} color="var(--google-blue)" /> Actividad Reciente de Usuarios (Mock)
-            </h2>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              {[
-                { time: 'Hace 2 min', user: 'juan.perez@constructora.com', action: 'Generó un Análisis de IA (Gasto: 50 tokens)', type: 'ia' },
-                { time: 'Hace 15 min', user: 'invitado@demo.com', action: 'Intentó generar un análisis pero no tenía tokens', type: 'error' },
-                { time: 'Hace 1 hora', user: 'contacto@techsolutions.mx', action: 'Compró Paquete Básico (1,000 tokens)', type: 'payment' },
-                { time: 'Hace 3 horas', user: 'maria.g@gobierno.com', action: 'Inició sesión en la plataforma', type: 'login' },
-              ].map((log, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '1rem', padding: '1rem', background: 'var(--bg-surface-variant)', borderRadius: '8px' }}>
-                  <div style={{ padding: '8px', background: 'white', borderRadius: '50%' }}>
-                    {log.type === 'ia' && <Zap size={16} color="var(--google-blue)" />}
-                    {log.type === 'error' && <AlertTriangle size={16} color="var(--google-red)" />}
-                    {log.type === 'payment' && <Coins size={16} color="var(--google-green)" />}
-                    {log.type === 'login' && <LogIn size={16} color="var(--text-muted)" />}
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
-                      <strong style={{ fontSize: '0.9rem' }}>{log.user}</strong>
-                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{log.time}</span>
-                    </div>
-                    <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>{log.action}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </main>
-      </div>
-    );
-  }
-
-  // -----------------------------
-  // VISTA PRINCIPAL RADAR (DASHBOARD)
-  // -----------------------------
   return (
-    <div className="app">
+    <div className="animate-fade">
       <header className="header">
         <div className="container flex justify-between items-center">
-          <div className="logo-container">
-            <div className="logo-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M2 17L12 22L22 17" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M2 12L12 17L22 12" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
+          <div className="logo-wrap">
+            <div className="logo-box">
+              <Sparkles size={24} />
             </div>
-            <h1 className="logo-text">Radar <span>OSINT</span></h1>
+            <h1 className="logo-text">Radar OSINT</h1>
           </div>
           
-          <div className="flex items-center gap-4">
-            {user.role === 'admin' && (
-              <button className="btn btn-secondary" style={{ padding: '0.4rem 1rem', fontSize: '0.8rem' }} onClick={() => setCurrentView('admin')}>
-                Admin
-              </button>
-            )}
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--bg-subtle)', padding: '6px 14px', borderRadius: '20px', fontWeight: 600, fontSize: '0.85rem', border: '1px solid var(--border)' }}>
-              <Coins size={14} color="var(--warning)" />
-              {user.role === 'admin' ? '∞' : user.tokens} <span style={{color: 'var(--text-muted)', fontWeight: 400}}>tokens</span>
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2" style={{ background: 'white', padding: '0.6rem 1.2rem', borderRadius: '14px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}>
+              <Coins size={16} color="var(--brand-primary)" />
+              <span style={{ fontWeight: 800, fontSize: '0.9rem' }}>{user.role === 'admin' ? 'ILIMITADO' : `${user.tokens} TOKENS`}</span>
             </div>
             
-            <div style={{ borderLeft: '1px solid var(--border)', height: '24px', margin: '0 4px' }}></div>
-            
-            <button className="btn btn-secondary" onClick={handleLogout} style={{ padding: '0.4rem', borderRadius: '50%' }} title="Cerrar Sesión">
-              <LogIn size={16} />
+            <button className="btn-premium btn-white" style={{ padding: '0.6rem' }} onClick={handleLogout}>
+              <LogIn size={18} />
             </button>
           </div>
         </div>
       </header>
 
-      <main className="container" style={{ marginTop: '2rem', paddingBottom: '4rem' }}>
-        
-        {/* Search Bar */}
-        <div className="flex flex-col md:flex-row gap-4 justify-between" style={{ marginBottom: '2.5rem' }}>
-          <div className="search-bar-wrapper" style={{ flex: '1', maxWidth: '600px' }}>
-            <Search size={22} color="var(--text-muted)" />
+      <main className="container" style={{ marginTop: '3rem', paddingBottom: '6rem' }}>
+        <div className="flex flex-col md:flex-row gap-6 mb-12 items-center">
+          <div className="search-bar-wrapper" style={{ flex: 1, maxWidth: '800px' }}>
+            <Search size={20} color="var(--text-muted)" />
             <input 
-              type="text" 
               className="search-input" 
-              placeholder="Buscar por título, expediente o dependencia..." 
+              placeholder="Buscar por licitación, dependencia o expediente..." 
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={e => setSearchTerm(e.target.value)}
             />
           </div>
-          
-          <div style={{ position: 'relative' }}>
-            <Filter size={18} style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-            <select 
-              className="select-input" 
-              value={filterState}
-              onChange={(e) => setFilterState(e.target.value)}
-            >
-              <option value="">Cualquier Estado</option>
-              {uniqueStates.map(state => (
-                <option key={state} value={state}>{state}</option>
-              ))}
-            </select>
-          </div>
+          <select className="input-premium" style={{ width: 'auto', minWidth: '200px', padding: '0.6rem 1.2rem' }} value={filterState} onChange={e => setFilterState(e.target.value)}>
+            <option value="">Todos los Estados</option>
+            {uniqueStates.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
         </div>
 
         {loading ? (
-          <div style={{ padding: '5rem 0', textAlign: 'center' }}>
-            <div style={{ width: '40px', height: '40px', border: '4px solid var(--google-blue-light)', borderTopColor: 'var(--google-blue)', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto' }}></div>
-            <p className="text-muted" style={{ marginTop: '1.5rem', fontWeight: 500 }}>Descargando base de datos nacional...</p>
-          </div>
-        ) : filteredProcurements.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '5rem 0' }}>
-            <AlertTriangle size={48} color="var(--google-yellow)" style={{ margin: '0 auto 1rem' }} />
-            <h2>Sin resultados</h2>
-            <p className="text-muted" style={{ marginTop: '0.5rem', marginBottom: '1.5rem' }}>Intenta cambiar los filtros o los términos de búsqueda.</p>
-            <button className="btn btn-secondary" onClick={() => {setSearchTerm(''); setFilterState('');}}>
-              Limpiar filtros
-            </button>
+          <div style={{ textAlign: 'center', padding: '10rem 0' }}>
+            <Sparkles className="animate-spin" size={48} color="var(--brand-primary)" style={{ margin: '0 auto 2rem' }} />
+            <h2 style={{ color: 'var(--text-secondary)' }}>Sincronizando Base de Datos Nacional...</h2>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {filteredProcurements.map((procurement, index) => {
-              const hasAnalysis = !!generatedAnalyses[procurement.id];
-              return (
-                <div 
-                  key={procurement.id} 
-                  className="card animate-item"
-                  style={{ animationDelay: `${index * 0.03}s`, cursor: 'pointer', borderColor: hasAnalysis ? 'var(--primary)' : 'var(--border)' }}
-                  onClick={() => setSelectedProcurement(procurement)}
-                >
-                  <div className="flex justify-between items-center mb-4">
-                    <span className={`badge ${getStatusBadgeClass(procurement.status)}`}>
-                      {procurement.status}
-                    </span>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--primary)', fontWeight: 600, background: 'var(--primary-light)', padding: '2px 8px', borderRadius: '4px' }}>
-                      {formatDate(procurement.created_at)}
-                    </span>
-                  </div>
-                  
-                  <h3 className="card-title">{procurement.title}</h3>
-                  
-                  <div className="flex flex-col gap-2 mb-4">
-                    <div className="flex items-center gap-2 text-xs text-slate-500">
-                      <Building size={12} className="text-slate-400" />
-                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {procurement.dependency_name || 'Sin dependencia'}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 text-xs text-slate-500">
-                      <FileText size={12} className="text-slate-400" />
-                      <span>{procurement.licitation_number || 'S/N'}</span>
-                    </div>
-                  </div>
-                  
-                  <div className="mt-auto pt-4 border-t border-slate-100 flex justify-between items-center">
-                    <div className="text-sm font-bold text-slate-900">
-                      {procurement.amount ? `$${procurement.amount.toLocaleString()}` : 'Monto abierto'}
-                    </div>
-                    {hasAnalysis && (
-                      <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 uppercase tracking-wider">
-                        <CheckCircle2 size={12} /> IA Ok
-                      </div>
-                    )}
+          <div className="grid xl:grid-cols-4 lg:grid-cols-3 md:grid-cols-2 gap-8">
+            {filteredProcurements.map((p, i) => (
+              <div key={p.id} className="card-premium animate-slide" style={{ animationDelay: `${i * 0.05}s`, cursor: 'pointer' }} onClick={() => setSelectedProcurement(p)}>
+                <div className="flex justify-between items-start mb-6">
+                  <span className={`badge-premium ${p.status.includes('ACTIVA') ? 'badge-green' : 'badge-blue'}`}>{p.status}</span>
+                  <div className="flex items-center gap-1 text-[11px] font-bold text-slate-400">
+                    <Calendar size={12} /> {formatDate(p.created_at)}
                   </div>
                 </div>
-              );
-            })}
+                
+                <h3 className="card-title">{p.title}</h3>
+                
+                <div className="flex flex-col gap-3 mb-8">
+                  <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
+                    <Building size={14} className="text-slate-300" />
+                    {p.dependency_name || 'N/D'}
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
+                    <MapPin size={14} className="text-slate-300" />
+                    {p.state || 'Nacional'}
+                  </div>
+                </div>
+                
+                <div className="mt-auto pt-6 border-t border-slate-50 flex justify-between items-center">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Monto Est.</span>
+                    <span style={{ fontWeight: 800, color: 'var(--text-primary)' }}>{p.amount ? `$${p.amount.toLocaleString()}` : 'ABIERT'}</span>
+                  </div>
+                  {generatedAnalyses[p.id] ? (
+                    <div className="flex items-center gap-1 text-emerald-500">
+                      <Zap size={16} fill="currentColor" />
+                      <span className="text-[11px] font-black">PRO</span>
+                    </div>
+                  ) : (
+                    <ChevronRight size={20} className="text-slate-200" />
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </main>
 
-      {/* Slide-in Details Panel */}
       {selectedProcurement && (
-        <div className="modal-backdrop" onClick={() => setSelectedProcurement(null)}>
-          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2 style={{ fontSize: '1.25rem' }}>Detalle de Licitación</h2>
-              <button className="btn-icon" onClick={() => setSelectedProcurement(null)}>
-                <X size={24} />
+        <div className="panel-backdrop" onClick={() => setSelectedProcurement(null)}>
+          <div className="panel-content" onClick={e => e.stopPropagation()}>
+            <div className="panel-header">
+              <div className="flex items-center gap-4">
+                <div className="badge-premium badge-blue">Expediente {selectedProcurement.licitation_number}</div>
+              </div>
+              <button className="btn-premium btn-white" style={{ padding: '0.6rem', borderRadius: '50%' }} onClick={() => setSelectedProcurement(null)}>
+                <X size={20} />
               </button>
             </div>
             
-            <div className="modal-content">
-              <div className="flex justify-between items-center" style={{ marginBottom: '1.5rem' }}>
-                <span className={`badge ${getStatusBadgeClass(selectedProcurement.status)}`}>
-                  {selectedProcurement.status}
-                </span>
-                <a href={selectedProcurement.source_url} target="_blank" rel="noopener noreferrer" className="btn btn-primary" style={{ padding: '0.4rem 1rem' }}>
-                  Ir a Fuente <ExternalLink size={16} />
-                </a>
-              </div>
+            <div className="panel-body">
+              <h1 style={{ fontSize: '2rem', marginBottom: '1.5rem', lineHeight: 1.2 }}>{selectedProcurement.title}</h1>
               
-              <h1 style={{ fontSize: '1.75rem', marginBottom: '1.5rem', lineHeight: '1.3' }}>{selectedProcurement.title}</h1>
-              
-              <div className="detail-grid">
-                <div className="detail-item">
-                  <span className="detail-label">Número de Licitación</span>
-                  <span className="detail-value">{selectedProcurement.licitation_number}</span>
+              <div className="grid md:grid-cols-2 gap-4 mb-10">
+                <div className="detail-section">
+                  <div className="detail-label">Dependencia</div>
+                  <div className="detail-value">{selectedProcurement.dependency_name}</div>
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">Dependencia</span>
-                  <span className="detail-value">{selectedProcurement.dependency_name || 'N/D'}</span>
+                <div className="detail-section">
+                  <div className="detail-label">Lugar</div>
+                  <div className="detail-value">{selectedProcurement.state || 'México'}</div>
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">Estado Geográfico</span>
-                  <span className="detail-value">{selectedProcurement.state || 'N/D'}</span>
+                <div className="detail-section">
+                  <div className="detail-label">Detección Radar</div>
+                  <div className="detail-value">{formatDate(selectedProcurement.created_at)}</div>
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">Encontrada el</span>
-                  <span className="detail-value">{formatDate(selectedProcurement.created_at)}</span>
+                <div className="detail-section">
+                  <div className="detail-label">Monto Referencia</div>
+                  <div className="detail-value">{selectedProcurement.amount ? `$${selectedProcurement.amount.toLocaleString()} MXN` : 'Abierto'}</div>
                 </div>
-                {(selectedProcurement.publication_date || selectedProcurement.opening_date) && (
-                  <div className="detail-item">
-                    <span className="detail-label">Fecha en Fuente</span>
-                    <span className="detail-value">{formatDate(selectedProcurement.publication_date || selectedProcurement.opening_date)}</span>
-                  </div>
-                )}
               </div>
 
-              {/* SECTION: AI ANALYSIS SAAS */}
-              <div className="ai-card" style={{ background: generatedAnalyses[selectedProcurement.id] ? 'var(--bg-surface)' : 'var(--bg-surface-variant)', border: generatedAnalyses[selectedProcurement.id] ? '2px solid var(--google-blue-light)' : 'none' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem', color: 'var(--google-blue)' }}>
-                  <Zap size={24} />
-                  <h2 style={{ fontSize: '1.25rem', color: 'var(--google-blue)', margin: 0 }}>Consultor Experto IA</h2>
-                </div>
-                
-                {generatedAnalyses[selectedProcurement.id] ? (
-                  <div className="ai-results animate-item">
-
-                    {/* VEREDICTO + SCORES */}
-                    {(() => {
-                      const a = generatedAnalyses[selectedProcurement.id];
-                      const veredictoStyles: Record<string, {bg: string; color: string; label: string}> = {
-                        ALTA_OPORTUNIDAD:    { bg: 'var(--google-green-light)',  color: '#0d652d', label: '🚀 Alta Oportunidad' },
-                        OPORTUNIDAD_MODERADA:{ bg: 'var(--google-blue-light)',   color: 'var(--google-blue)', label: '📊 Oportunidad Moderada' },
-                        RIESGO_ELEVADO:      { bg: '#fff3cd',                    color: '#856404', label: '⚠️ Riesgo Elevado' },
-                        POSIBLE_DIRIGIDA:    { bg: 'var(--google-red-light)',    color: 'var(--google-red)', label: '🔒 Posible Licitación Dirigida' },
-                      };
-                      const v = veredictoStyles[a.veredicto] || veredictoStyles.OPORTUNIDAD_MODERADA;
-                      return (
-                        <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
-                          <div style={{ flex: '1 1 200px', background: v.bg, color: v.color, padding: '0.75rem 1rem', borderRadius: '8px', fontWeight: 700, fontSize: '0.95rem', display: 'flex', alignItems: 'center' }}>
-                            {v.label}
-                          </div>
-                          <div style={{ flex: '0 0 auto', background: 'var(--bg-surface-variant)', padding: '0.75rem 1.25rem', borderRadius: '8px', textAlign: 'center' }}>
-                            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--google-blue)' }}>{a.score_oportunidad}</div>
-                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Score /100</div>
-                          </div>
-                          <div style={{ flex: '0 0 auto', background: 'var(--bg-surface-variant)', padding: '0.75rem 1.25rem', borderRadius: '8px', textAlign: 'center' }}>
-                            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--google-green)' }}>{a.probabilidad_ganar}%</div>
-                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Prob. Ganar</div>
-                          </div>
-                        </div>
-                      );
-                    })()}
-
-                    {/* RESUMEN EJECUTIVO */}
-                    {generatedAnalyses[selectedProcurement.id].resumen_ejecutivo && (
-                      <div style={{ marginBottom: '1.5rem', padding: '1rem', background: 'var(--bg-surface-variant)', borderRadius: '8px', borderLeft: '3px solid var(--google-blue)' }}>
-                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', margin: 0, lineHeight: 1.6 }}>
-                          {generatedAnalyses[selectedProcurement.id].resumen_ejecutivo}
-                        </p>
-                      </div>
-                    )}
-
-                    {/* ANTECEDENTES */}
-                    <div style={{ marginBottom: '1.5rem' }}>
-                      <h4 style={{ color: 'var(--text-primary)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <FileText size={16} color="var(--google-blue)" /> Antecedentes
-                      </h4>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', background: 'var(--bg-surface-variant)', padding: '1rem', borderRadius: '8px', margin: 0 }}>
-                        {generatedAnalyses[selectedProcurement.id].antecedentes}
-                      </p>
+              {generatedAnalyses[selectedProcurement.id] ? (
+                <div className="ai-premium-card">
+                  <div className="flex justify-between items-start mb-8">
+                    <div>
+                      <h2 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Análisis Estratégico IA</h2>
+                      <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.9rem' }}>Resultados basados en RAG y modelos expertos de contratación pública.</p>
                     </div>
-
-                    {/* TIPS PARA GANAR */}
-                    {generatedAnalyses[selectedProcurement.id].tips_ganadores.length > 0 && (
-                      <div style={{ marginBottom: '1.5rem' }}>
-                        <h4 style={{ color: 'var(--google-green)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          <Target size={16} /> Tips para Ganar
-                        </h4>
-                        <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: 0, margin: 0 }}>
-                          {generatedAnalyses[selectedProcurement.id].tips_ganadores.map((tip, i) => (
-                            <li key={i} style={{ position: 'relative', paddingLeft: '1.5rem', fontSize: '0.95rem', color: 'var(--text-secondary)' }}>
-                              <span style={{ position: 'absolute', left: 0, color: 'var(--google-green)', fontWeight: 'bold' }}>✓</span> {tip}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-
-                    {/* ALERTAS DE RIESGO */}
-                    {generatedAnalyses[selectedProcurement.id].alertas_riesgo.length > 0 && (
-                      <div style={{ marginBottom: '1.5rem' }}>
-                        <h4 style={{ color: 'var(--google-red)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          <AlertTriangle size={16} /> Alertas y Candados
-                        </h4>
-                        <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: 0, margin: 0 }}>
-                          {generatedAnalyses[selectedProcurement.id].alertas_riesgo.map((alerta, i) => (
-                            <li key={i} style={{ position: 'relative', paddingLeft: '1.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-                              <span style={{ position: 'absolute', left: 0, color: 'var(--google-red)' }}>⚠</span> {alerta}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-
-                    {/* FASE TÉCNICA + ECONÓMICA */}
-                    <div className="detail-grid" style={{ marginBottom: 0 }}>
-                      <div className="detail-item" style={{ background: 'var(--bg-color)', padding: '1rem', borderRadius: '8px' }}>
-                        <span className="detail-label" style={{ color: 'var(--google-blue)' }}>Fase Técnica</span>
-                        <ul style={{ listStyle: 'none', marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: 0 }}>
-                          {generatedAnalyses[selectedProcurement.id].fase_tecnica.map((t, i) => (
-                            <li key={i} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>• {t}</li>
-                          ))}
-                        </ul>
-                      </div>
-                      <div className="detail-item" style={{ background: 'var(--bg-color)', padding: '1rem', borderRadius: '8px' }}>
-                        <span className="detail-label" style={{ color: 'var(--google-yellow)' }}>Fase Económica</span>
-                        <ul style={{ listStyle: 'none', marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: 0 }}>
-                          {generatedAnalyses[selectedProcurement.id].fase_economica.map((e, i) => (
-                            <li key={i} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>• {e}</li>
-                          ))}
-                        </ul>
-                      </div>
+                    <div className="logo-box" style={{ background: 'rgba(255,255,255,0.1)', boxShadow: 'none' }}>
+                      <Zap size={24} color="var(--brand-primary)" />
                     </div>
                   </div>
-                ) : (
-                  <div style={{ textAlign: 'center', padding: '1rem 0' }}>
-                    <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.95rem' }}>
-                      Obtén un desglose estratégico completo, antecedentes históricos y consejos para armar la propuesta técnica y económica perfecta.
-                    </p>
-                    <button 
-                      className="btn btn-primary" 
-                      style={{ width: '100%', padding: '1rem', fontSize: '1rem' }}
-                      onClick={() => generateExpertAnalysis(selectedProcurement.id)}
-                      disabled={analyzingItem === selectedProcurement.id}
-                    >
-                      {analyzingItem === selectedProcurement.id ? (
-                        <>
-                          <div style={{ width: '20px', height: '20px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
-                          Procesando documentos con IA...
-                        </>
-                      ) : (
-                        <>
-                          <Lock size={18} /> Generar Análisis Experto (🪙 50 Tokens)
-                        </>
-                      )}
-                    </button>
-                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
-                      Se descargarán los anexos y se procesarán utilizando LLMs avanzados.
-                    </p>
-                  </div>
-                )}
-              </div>
 
-              {getAttachmentsForProcurement(selectedProcurement.id).length > 0 && (
-                <div style={{ marginTop: '2.5rem' }}>
-                  <h3 style={{ marginBottom: '1rem', fontSize: '1.2rem' }}>Documentos Base</h3>
-                  <div>
-                    {getAttachmentsForProcurement(selectedProcurement.id).map(att => (
-                      <a key={att.id} href={att.file_url} target="_blank" rel="noopener noreferrer" className="doc-item">
-                        <div className="doc-icon">
-                          <FileText size={20} />
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{att.file_name}</div>
-                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Anexo Oficial</div>
-                        </div>
-                        <Download size={20} color="var(--google-blue)" />
-                      </a>
-                    ))}
+                  <div className="grid md:grid-cols-2 gap-6 mb-10">
+                    <div style={{ background: 'rgba(255,255,255,0.05)', padding: '1.5rem', borderRadius: '20px' }}>
+                      <div className="detail-label" style={{ color: 'rgba(255,255,255,0.4)' }}>Score de Oportunidad</div>
+                      <div style={{ fontSize: '2.5rem', fontWeight: 900 }}>{generatedAnalyses[selectedProcurement.id].score_oportunidad}/100</div>
+                    </div>
+                    <div style={{ background: 'rgba(255,255,255,0.05)', padding: '1.5rem', borderRadius: '20px' }}>
+                      <div className="detail-label" style={{ color: 'rgba(255,255,255,0.4)' }}>Probabilidad Ganar</div>
+                      <div style={{ fontSize: '2.5rem', fontWeight: 900 }}>{generatedAnalyses[selectedProcurement.id].probabilidad_exito}%</div>
+                    </div>
                   </div>
+
+                  <div className="mb-8">
+                    <h3 style={{ color: '#60a5fa', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <CheckCircle2 size={20} /> Veredicto del Consultor
+                    </h3>
+                    <p style={{ fontSize: '1.1rem', lineHeight: 1.6, color: 'rgba(255,255,255,0.9)' }}>
+                      {generatedAnalyses[selectedProcurement.id].resumen_ejecutivo}
+                    </p>
+                  </div>
+
+                  <div className="grid md:grid-cols-2 gap-8">
+                    <div>
+                      <h4 style={{ fontSize: '0.9rem', color: '#10b981', marginBottom: '1rem' }}>PUNTOS CLAVE</h4>
+                      <ul style={{ listStyle: 'none' }}>
+                        {generatedAnalyses[selectedProcurement.id].puntos_clave.map((item, i) => (
+                          <li key={i} style={{ fontSize: '0.85rem', marginBottom: '0.5rem', display: 'flex', gap: '0.5rem' }}>
+                            <ChevronRight size={14} className="text-emerald-500" /> {item}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div>
+                      <h4 style={{ fontSize: '0.9rem', color: '#f43f5e', marginBottom: '1rem' }}>RIESGOS</h4>
+                      <ul style={{ listStyle: 'none' }}>
+                        {generatedAnalyses[selectedProcurement.id].riesgos_detectados.map((item, i) => (
+                          <li key={i} style={{ fontSize: '0.85rem', marginBottom: '0.5rem', display: 'flex', gap: '0.5rem' }}>
+                            <AlertCircle size={14} className="text-rose-500" /> {item}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ background: '#0f172a', padding: '3rem', borderRadius: '32px', textAlign: 'center', color: 'white' }}>
+                  <Zap size={48} className="mb-6" style={{ margin: '0 auto 1.5rem', color: 'var(--brand-primary)' }} />
+                  <h2 style={{ marginBottom: '1rem' }}>Desbloquear Análisis Experto</h2>
+                  <p style={{ color: 'rgba(255,255,255,0.6)', marginBottom: '2rem' }}>Obtén el análisis de riesgos, score de oportunidad y tips técnicos para ganar esta licitación.</p>
+                  <button 
+                    className="btn-premium btn-blue" 
+                    onClick={() => generateExpertAnalysis(selectedProcurement)}
+                    disabled={analyzing}
+                  >
+                    {analyzing ? (
+                      <>Procesando Inteligencia...</>
+                    ) : (
+                      <><Sparkles size={20} /> Generar Reporte PRO</>
+                    )}
+                  </button>
+                  <p style={{ marginTop: '1.5rem', fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)' }}>Costo: 10 Tokens • Tiempo est.: 15 segundos</p>
                 </div>
               )}
             </div>
@@ -732,5 +409,3 @@ function App() {
     </div>
   );
 }
-
-export default App;
