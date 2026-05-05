@@ -1,10 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from './lib/supabase';
-import { 
-  Search, FileText, AlertTriangle, ExternalLink, Building, Filter, X, Zap, 
-  Target, Download, Coins, LogIn, Lock, CheckCircle2, Activity, Settings, 
-  UserCircle, MapPin, Calendar, CreditCard, ChevronRight, Sparkles, AlertCircle
-} from 'lucide-react';
+import { Search, Building, X, Zap, Coins, LogIn, CheckCircle2, MapPin, Calendar, ChevronRight, Sparkles, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 
@@ -56,8 +52,7 @@ export default function App() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
-  const [currentView, setCurrentView] = useState<'radar' | 'admin'>('radar');
-  
+
   // AI Analysis State
   const [analyzing, setAnalyzing] = useState(false);
   const [generatedAnalyses, setGeneratedAnalyses] = useState<Record<string, AnalysisResult>>({});
@@ -117,7 +112,6 @@ export default function App() {
 
     setAnalyzing(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       
       const res = await fetch(`${supabaseUrl}/functions/v1/analyze-procurement`, {

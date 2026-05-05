@@ -41,6 +41,8 @@ export function isRetryableNetworkError(error: unknown): boolean {
     "gateway",
     "fetch failed",
     "net::err",
+    "429",
+    "too many requests",
   ];
 
   return candidates.some(
