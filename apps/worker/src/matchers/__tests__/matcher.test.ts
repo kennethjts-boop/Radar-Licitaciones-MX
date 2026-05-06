@@ -32,7 +32,8 @@ function makeProcurement(overrides: Partial<NormalizedProcurement> = {}): Normal
     canonicalFingerprint: "abc123",
     lightweightFingerprint: "def456",
     rawJson: {},
-    fetchedAt: "2026-01-01T00:00:00.000Z",
+    fetchedAt: new Date().toISOString(),
+    canonicalHash: null,
     ...overrides,
   };
 }

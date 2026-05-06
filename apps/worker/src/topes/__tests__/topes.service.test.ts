@@ -41,6 +41,7 @@ function makeProcurement(
     lightweightFingerprint: null,
     rawJson: {},
     fetchedAt: new Date().toISOString(),
+    canonicalHash: null,
     ...overrides,
   };
 }

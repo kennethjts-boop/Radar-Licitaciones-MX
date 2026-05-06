@@ -17,6 +17,13 @@
  */
 
 import "dotenv/config";
+
+// Mock environment variables to allow isolated execution without .env
+process.env.SUPABASE_URL = process.env.SUPABASE_URL || "https://mock.supabase.co";
+process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "mock-key-1234567890";
+process.env.TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "123456789:mock-token";
+process.env.TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "123456789";
+
 import { normalizeObjectText, tokenizeObject, textSimilarity, isFormalTenderNumber } from "../modules/financial-ceiling-radar/normalizer";
 import { calculateSimilarityScore } from "../modules/financial-ceiling-radar/scorer";
 import { estimateCeiling } from "../modules/financial-ceiling-radar/estimator";
