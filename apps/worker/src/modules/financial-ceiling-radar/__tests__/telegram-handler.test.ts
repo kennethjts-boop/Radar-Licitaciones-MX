@@ -33,20 +33,37 @@ describe("handleTechoCommand", () => {
     );
   });
 
-  it("debe enviar mensaje de inicio antes de analizar", async () => {
-    // Mock de analyze para que no falle
+  it("debe manejar fallos internos del análisis con mensaje fallback", async () => {
     const analyzer = require("../analyzer");
-    jest.spyOn(analyzer, "analyzeFinancialCeiling").mockResolvedValue({
-      financialCeiling: { type: "confirmado", confidence: "ALTA", amount: 100 },
-      sourcesConsulted: [],
-      warnings: []
-    } as any);
+    jest.spyOn(analyzer, "analyzeFinancialCeiling").mockRejectedValue(new Error("Timeout de fuente externa"));
 
-    await handleTechoCommand(mockBot, chatId, "LA-050GYR019-E11-2026");
+    await handleTechoCommand(mockBot, chatId, "LA-TIMEOUT-TEST");
     
     expect(mockSendMessage).toHaveBeenCalledWith(
       chatId,
-      expect.stringContaining("Analizando techo financiero"),
+      expect.stringContaining("No pude estimar el techo financiero"),
+      expect.any(Object)
+    );
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      chatId,
+      expect.stringContaining("Error interno"),
+      expect.any(Object)
+    );
+  });
+
+  it("debe mostrar 'no determinado' con warnings si no hay datos suficientes", async () => {
+    const analyzer = require("../analyzer");
+    jest.spyOn(analyzer, "analyzeFinancialCeiling").mockResolvedValue({
+      financialCeiling: { type: "no_determinado", confidence: "BAJA", amount: null },
+      sourcesConsulted: [{ document: "PNT", status: "not_found" }],
+      warnings: ["Sin coincidencias exactas"]
+    } as any);
+
+    await handleTechoCommand(mockBot, chatId, "LIC-SIN-DATOS");
+    
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      chatId,
+      expect.stringContaining("No pude estimar un techo financiero confiable"),
       expect.any(Object)
     );
   });

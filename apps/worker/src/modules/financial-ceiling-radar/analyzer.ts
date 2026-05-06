@@ -34,10 +34,12 @@ export async function analyzeFinancialCeiling(
   query: string,
 ): Promise<FinancialCeilingReport> {
   const analyzedAt = new Date().toISOString();
+  const requestId = Math.random().toString(36).substring(7);
+  const startTime = Date.now();
   const errors: string[] = [];
   const sourcesConsulted: SourceConsulted[] = [];
 
-  log.info({ query }, "🔍 Iniciando análisis de techo financiero");
+  log.info({ query, requestId }, "🔍 Iniciando análisis de techo financiero");
 
   // ── 1. Buscar licitación actual ──────────────────────────────────────────────
   let currentContractRaw = null;
@@ -141,8 +143,19 @@ export async function analyzeFinancialCeiling(
     log.warn({ err }, "No se pudo guardar el reporte en disco");
   }
 
+  const durationMs = Date.now() - startTime;
+  const failedSources = sourcesConsulted.filter((s) => s.status === "error" || s.status === "blocked" || s.status === "captcha").length;
+
   log.info(
-    { confidence: ceiling.confidence, type: ceiling.type, amount: ceiling.amount },
+    { 
+      requestId,
+      durationMs,
+      confidence: ceiling.confidence, 
+      type: ceiling.type, 
+      amount: ceiling.amount,
+      sourcesCount: sourcesConsulted.length,
+      failedSourcesCount: failedSources
+    },
     "✅ Análisis completado",
   );
 

@@ -127,7 +127,14 @@ export async function fetchFromCompranet(
       source.status = "error";
       source.errorReason = axErr.message ?? "Error desconocido";
     }
-    log.warn({ url, err: source.errorReason }, "Error consultando ComprasMX");
+    log.warn(
+      { 
+        url, 
+        err: source.errorReason, 
+        durationMs: Date.now() - Date.parse(consultedAt) 
+      }, 
+      "Error consultando ComprasMX"
+    );
     return { data: null, source };
   }
 }
