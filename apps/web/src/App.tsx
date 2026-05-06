@@ -3,6 +3,7 @@ import { supabase } from './lib/supabase';
 import { Search, Building, X, Zap, Coins, LogIn, CheckCircle2, MapPin, ChevronRight, Sparkles, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
+import './App.css';
 
 interface Procurement {
   id: string;
