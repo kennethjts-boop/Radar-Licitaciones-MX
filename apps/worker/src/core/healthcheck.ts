@@ -9,6 +9,11 @@ import { nowISO } from "./time";
 
 const log = createModuleLogger("healthcheck");
 
+/** Sin ciclos durante este tiempo → sistema estancado (3 ciclos de 30 min). */
+const STALL_THRESHOLD_MS = 90 * 60 * 1000;
+/** No reportar stalled hasta que el worker lleve este tiempo corriendo. */
+const STALL_GRACE_PERIOD_MS = 15 * 60 * 1000;
+
 export type ServiceHealth = "ok" | "degraded" | "down" | "unknown";
 
 export interface SchemaHealth {
@@ -35,6 +40,8 @@ export interface HealthStatus {
   lastCycleMatches: number | null;
   uptimeMs: number;
   runtimeDbMode: "supabase-rest";
+  stalled: boolean;
+  stalledForMs: number | null;
 }
 
 // ─── Tracker singleton ────────────────────────────────────────────────────────
@@ -112,11 +119,22 @@ class HealthTracker {
   // ── Estado completo ─────────────────────────────────────────────────────────
 
   getStatus(): HealthStatus {
+    const now = Date.now();
+    const uptimeMs = now - this.startedAt;
+
     const services = {
       database: this.dbHealth,
       telegram: this.telegramHealth,
       playwright: this.playwrightHealth,
     };
+
+    // Stalled: uptime superó el período de gracia y no hay ciclos recientes
+    const pastGrace = uptimeMs > STALL_GRACE_PERIOD_MS;
+    const msSinceLastCycle = this.lastCycleAt
+      ? now - new Date(this.lastCycleAt).getTime()
+      : uptimeMs;
+    const stalled = pastGrace && msSinceLastCycle > STALL_THRESHOLD_MS;
+    const stalledForMs = stalled ? msSinceLastCycle : null;
 
     // Overall: down si DB no conectada o schema inválido o telegram caído
     const criticalDown =
@@ -125,6 +143,7 @@ class HealthTracker {
       this.telegramHealth === "down";
 
     const anyDegraded =
+      stalled ||
       Object.values(services).some((s) => s === "degraded") ||
       Object.values(services).some((s) => s === "unknown");
 
@@ -144,8 +163,10 @@ class HealthTracker {
       lastCycleAt: this.lastCycleAt,
       lastCycleDurationMs: this.lastCycleDurationMs,
       lastCycleMatches: this.lastCycleMatches,
-      uptimeMs: Date.now() - this.startedAt,
+      uptimeMs,
       runtimeDbMode: "supabase-rest",
+      stalled,
+      stalledForMs,
     };
   }
 }

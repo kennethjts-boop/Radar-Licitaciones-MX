@@ -112,6 +112,10 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       const nextRun = nextRunEstimate(config.COLLECT_INTERVAL_MINUTES);
       const bootTime = bootState?.bootedAt ? formatMexicoDate(String(bootState.bootedAt)) : "N/D";
 
+      const stalledLine = status.stalled
+        ? [`⚠️ <b>SIN CICLOS: +${Math.floor((status.stalledForMs ?? 0) / 60_000)} min — revisar scheduler</b>`]
+        : [];
+
       const lines = [
         `🔍 <b>ESTADO — Radar Licitaciones MX</b>`,
         "",
@@ -119,6 +123,7 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `${dbIcon} DB: <b>${serviceLabel(status.services.database)}</b> (${status.dbConnected ? "Conectada" : "Desconectada"})`,
         `🧱 Schema: <b>${status.dbSchemaValid ? "Válido" : "Inválido"}</b>`,
         `${tgIcon} Telegram: <b>${serviceLabel(status.services.telegram)}</b>`,
+        ...stalledLine,
         "",
         `⏰ Última: <b>${lastRunState?.startedAt ? formatMexicoDate(String(lastRunState.startedAt)) : "Sin ciclos"}</b>`,
         `🔜 Próxima: ~<b>${nextRun} MX</b>`,
