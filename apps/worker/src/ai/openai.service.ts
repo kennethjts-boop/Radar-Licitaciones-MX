@@ -1,10 +1,13 @@
 import OpenAI from "openai";
 import { createModuleLogger } from "../core/logger";
 import { BUSINESS_PROFILE, BusinessCategory } from "../config/business_profile";
+import companyProfile from "../config/company_profile.json";
 
-const log = createModuleLogger("openai-service");
+const log = createModuleLogger("ai-service");
 
-const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+const AI_PROVIDER = process.env.AI_PROVIDER || "openai";
+const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
+const PRIMARY_AI_MODEL = process.env.PRIMARY_AI_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini";
 const OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
 
 export interface TenderDocumentAnalysis {
@@ -21,8 +24,14 @@ export interface TenderDocumentAnalysis {
     guarantees: string;
   };
   summary: string;
+  audio_summary?: string;
   opportunities: string[];
   risks: string[];
+  fraud_radar?: {
+    is_likely_fractioned: boolean;
+    is_likely_directed: boolean;
+    evidence: string;
+  };
   opportunity_engine: {
     win_probability: number;
     competitor_threat_level: "LOW" | "MEDIUM" | "HIGH";
@@ -34,34 +43,28 @@ export interface TenderDocumentAnalysis {
   relevance_justification: string;
 }
 
-const systemPrompt = `Actúas como Director de Ventas a Gobierno (C-Level) para un proveedor privado en México.
-Tu objetivo es detectar oportunidades reales de negocio, riesgos y probabilidad de ganar.
+const systemPrompt = `Actúas como Director de Estrategia para la empresa "${companyProfile.company_name}".
+Tu objetivo es analizar licitaciones y determinar si son una oportunidad real basándote en nuestro PERFIL MAESTRO.
 
-Analiza señales como: "adjudicación directa", "segunda convocatoria", "urgente", ampliaciones de plazo, requisitos técnicos, garantías, penalizaciones, cumplimiento legal y viabilidad operativa.
+PERFIL DE NUESTRA EMPRESA:
+- Descripción: ${companyProfile.business_description}
+- Experiencia: ${companyProfile.experience.join(", ")}
+- Certificaciones: ${companyProfile.certifications.join(", ")}
+- Capacidad Financiera: Capital de $${companyProfile.financial_capacity.capital_social}
+- Regiones de interés: ${companyProfile.target_regions.join(", ")}
 
-Debes detectar posibles "licitaciones dirigidas" (incumbent threat) buscando candados como:
-- Certificaciones o acreditaciones inusuales, demasiado específicas o poco comunes en el mercado.
-- Tiempos de entrega o implementación imposibles/no realistas para un competidor nuevo.
-- Especificaciones de marca/modelo disfrazadas (equivalencias restrictivas, compatibilidades cerradas, requisitos calcados).
-- Requisitos comerciales/legales limitantes que favorezcan claramente a un proveedor incumbente.
+INSTRUCCIONES DE ANÁLISIS:
+1. Analiza señales de "licitación dirigida" (incumbent threat) buscando candados.
+2. Compara los requisitos técnicos de la licitación contra nuestras certificaciones. 
+   - Si piden una certificación que NO tenemos (${companyProfile.certifications.join(", ")} son las que sí tenemos), reduce drásticamente la win_probability.
+3. **DETECCIÓN DE FRACCIONAMIENTO:** Si te proporcionan antecedentes históricos, busca si hay licitaciones recurrentes con objetos muy similares y montos bajos (justo por debajo del límite de licitación pública). Advierte si parece que están dividiendo un contrato grande para evitar un concurso abierto.
+4. Evalúa si el monto de la licitación es manejable para nuestra capacidad financiera.
+5. Detecta oportunidades reales, riesgos y probabilidad de ganar.
 
-Si detectas estos candados:
-- Sube competitor_threat_level.
-- Reduce win_probability de forma consistente con la evidencia.
-- Registra los candados concretos en red_flags.
-
-Contexto de negocio (perfil maestro):
+Contexto de negocio (categorías):
 {{BUSINESS_CATEGORIES}}
 
-Instrucción: Eres un experto en licitaciones mexicanas. Evalúa si el documento pertenece a alguna de estas categorías.
-Si es CAPUFE, busca productos específicos. Si es ISSSTE o IMSS Morelos, busca servicios integrales o suministros técnicos.
-
-Evalúa explícitamente la relevancia real del documento:
-- category_detected: categoría exacta detectada o "NONE" si no hay match.
-- is_relevant=true solo si hay evidencia sustantiva de coincidencia con alguna categoría.
-- relevance_justification debe explicar por qué sí/no aplica en máximo 15 palabras.
-
-Debes responder EXCLUSIVAMENTE en JSON válido con este formato exacto:
+Debes responder EXCLUSIVAMENTE en JSON válido con este formato:
 {
   "scores": {
     "total": number (0-100),
@@ -76,35 +79,38 @@ Debes responder EXCLUSIVAMENTE en JSON válido con este formato exacto:
     "guarantees": string
   },
   "summary": string (máximo 15 palabras),
-  "opportunities": string[] (máximo 3, bullets cortos),
-  "risks": string[] (máximo 3, bullets cortos),
+  "audio_summary": string (máximo 40 palabras, estilo locutor de noticias, entusiasta pero profesional),
+  "opportunities": string[] (máximo 3),
+  "risks": string[] (máximo 3),
+  "fraud_radar": {
+    "is_likely_fractioned": boolean,
+    "is_likely_directed": boolean,
+    "evidence": string (máximo 20 palabras)
+  },
   "opportunity_engine": {
     "win_probability": number (0-100),
     "competitor_threat_level": "LOW" | "MEDIUM" | "HIGH",
     "implementation_complexity": "LOW" | "MEDIUM" | "HIGH",
-    "red_flags": string[] (máximo 5, candados o requisitos limitantes)
+    "red_flags": string[] (máximo 5, candados o requisitos que NO cumplimos)
   },
-  "category_detected": "CAPUFE_VEHICULOS" | "CAPUFE_PEAJE" | "CAPUFE_OPORTUNIDADES" | "CONAVI_FEDERAL" | "IMSS_MORELOS" | "ISSSTE_CENTRAL" | "NONE",
+  "category_detected": string,
   "is_relevant": boolean,
-  "relevance_justification": string (máximo 15 palabras)
+  "relevance_justification": string
 }
 
-Reglas:
-- No inventes información que no esté en el documento.
-- Si hay poca evidencia, reduce scores y expresa incertidumbre.
-- summary debe ser directo y corto (estilo titular, sin narrativa).
-- opportunities y risks deben ser balazos accionables, concretos y no vacíos.
-- Si falta dato en key_data usa "No especificado".
-- scores.total=0 mala oportunidad / scores.total=100 oportunidad alta con riesgo controlado.
-- win_probability=0 casi imposible de ganar / win_probability=100 muy alta probabilidad real de adjudicación.
-- competitor_threat_level: LOW (abierto), MEDIUM (hay señales mixtas), HIGH (múltiples candados claros o fuerte sesgo a incumbente).
-- implementation_complexity evalúa dificultad real de ejecución para cumplir alcance, tiempos y requisitos.
-- Si is_relevant=false, no maquilles scores: mantén coherencia entre baja relevancia y scoring.`;
+Reglas de Oro:
+- Sé honesto y cínico: si la licitación parece "amañada" para alguien más, dilo.
+- Si detectas fraccionamiento, márcalo en el campo fraud_radar.
+- Si nos falta una certificación crítica, la probabilidad de ganar debe ser menor al 30%.
+- El resumen debe ser directo y corto.`;
 
 function ensureApiKey(): string {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = AI_PROVIDER === "openrouter" 
+    ? process.env.OPENROUTER_API_KEY 
+    : process.env.OPENAI_API_KEY;
+    
   if (!apiKey) {
-    throw new Error("OPENAI_API_KEY no está configurada");
+    throw new Error(`${AI_PROVIDER.toUpperCase()}_API_KEY no está configurada`);
   }
   return apiKey;
 }
@@ -148,6 +154,14 @@ function normalizeResult(payload: unknown): TenderDocumentAnalysis {
   const risks = Array.isArray(obj.risks)
     ? obj.risks.map((item) => String(item).trim()).filter(Boolean).slice(0, 3)
     : [];
+  
+  const fraudRadarObj = (obj.fraud_radar ?? {}) as Record<string, unknown>;
+  const fraud_radar = {
+    is_likely_fractioned: fraudRadarObj.is_likely_fractioned === true,
+    is_likely_directed: fraudRadarObj.is_likely_directed === true,
+    evidence: ensureString(fraudRadarObj.evidence, "No se detectó evidencia clara.")
+  };
+
   const opportunityEngineObj = (obj.opportunity_engine ?? {}) as Record<string, unknown>;
   const normalizeThreatLevel = (
     value: unknown,
@@ -179,8 +193,10 @@ function normalizeResult(payload: unknown): TenderDocumentAnalysis {
       guarantees: ensureString(keyDataObj.guarantees),
     },
     summary,
+    audio_summary: ensureString(obj.audio_summary as string, "Sin resumen de audio disponible."),
     opportunities,
     risks,
+    fraud_radar,
     opportunity_engine: {
       win_probability: normalizeScore(opportunityEngineObj.win_probability),
       competitor_threat_level: normalizeThreatLevel(
@@ -216,14 +232,21 @@ export async function analyzeTenderDocument(
     throw new Error("Texto vacío: no se puede analizar el documento");
   }
 
-  const client = new OpenAI({ apiKey: ensureApiKey() });
+  const FREE_MODELS_POOL = [
+      PRIMARY_AI_MODEL,
+      "google/gemma-2-9b-it:free",
+      "meta-llama/llama-3-8b-instruct:free",
+      "mistralai/mistral-7b-instruct:free"
+    ];
 
-  try {
-    const normalizedHistoricalContext = historicalContext?.trim() ?? "";
-    const categoriesBlock = Object.entries(BUSINESS_PROFILE.CATEGORIES)
-      .map(([category, terms]) => `- ${category}: ${terms.join(", ")}`)
-      .join("\n");
-    const excludedKeywordsList = BUSINESS_PROFILE.EXCLUDED_KEYWORDS.join(", ");
+    const client = new OpenAI({ 
+      apiKey: ensureApiKey(),
+      baseURL: AI_PROVIDER === "openrouter" ? OPENROUTER_BASE_URL : undefined,
+      defaultHeaders: AI_PROVIDER === "openrouter" ? {
+        "HTTP-Referer": "https://radar-licitaciones.mx",
+        "X-Title": "Radar Licitaciones MX",
+      } : undefined
+    });
 
     const userPrompt = normalizedHistoricalContext
       ? [
@@ -254,127 +277,48 @@ export async function analyzeTenderDocument(
           text,
         ].join("\n");
 
-    const completion = await client.chat.completions.create({
-      model: OPENAI_MODEL,
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "tender_document_analysis",
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            required: [
-              "scores",
-              "key_data",
-              "summary",
-              "opportunities",
-              "risks",
-              "opportunity_engine",
-              "category_detected",
-              "is_relevant",
-              "relevance_justification",
-            ],
-            properties: {
-              scores: {
-                type: "object",
-                additionalProperties: false,
-                required: [
-                  "total",
-                  "technical",
-                  "commercial",
-                  "urgency",
-                  "viability",
-                ],
-                properties: {
-                  total: { type: "integer", minimum: 0, maximum: 100 },
-                  technical: { type: "integer", minimum: 0, maximum: 100 },
-                  commercial: { type: "integer", minimum: 0, maximum: 100 },
-                  urgency: { type: "integer", minimum: 0, maximum: 100 },
-                  viability: { type: "integer", minimum: 0, maximum: 100 },
-                },
-              },
-              key_data: {
-                type: "object",
-                additionalProperties: false,
-                required: ["contract_type", "deadline", "guarantees"],
-                properties: {
-                  contract_type: { type: "string" },
-                  deadline: { type: "string" },
-                  guarantees: { type: "string" },
-                },
-              },
-              summary: { type: "string", maxLength: 200 },
-              opportunities: {
-                type: "array",
-                maxItems: 3,
-                items: { type: "string" },
-              },
-              risks: {
-                type: "array",
-                maxItems: 3,
-                items: { type: "string" },
-              },
-              opportunity_engine: {
-                type: "object",
-                additionalProperties: false,
-                required: [
-                  "win_probability",
-                  "competitor_threat_level",
-                  "implementation_complexity",
-                  "red_flags",
-                ],
-                properties: {
-                  win_probability: { type: "integer", minimum: 0, maximum: 100 },
-                  competitor_threat_level: {
-                    type: "string",
-                    enum: ["LOW", "MEDIUM", "HIGH"],
-                  },
-                  implementation_complexity: {
-                    type: "string",
-                    enum: ["LOW", "MEDIUM", "HIGH"],
-                  },
-                  red_flags: {
-                    type: "array",
-                    maxItems: 5,
-                    items: { type: "string" },
-                  },
-                },
-              },
-              category_detected: {
-                type: "string",
-                enum: [
-                  "CAPUFE_VEHICULOS",
-                  "CAPUFE_PEAJE",
-                  "CAPUFE_OPORTUNIDADES",
-                  "CONAVI_FEDERAL",
-                  "IMSS_MORELOS",
-                  "ISSSTE_CENTRAL",
-                  "NONE",
-                ],
-              },
-              is_relevant: { type: "boolean" },
-              relevance_justification: { type: "string", maxLength: 200 },
-            },
-          },
-          strict: true,
-        },
-      },
-      temperature: 0.2,
-      messages: [
-        {
-          role: "system",
-          content: `${systemPrompt
-            .replace("{{BUSINESS_CATEGORIES}}", categoriesBlock)}
+    let lastError = null;
+
+    if (AI_PROVIDER === "openrouter") {
+      for (const model of FREE_MODELS_POOL) {
+        try {
+          log.info({ model }, "Intentando análisis con modelo del pool");
+          const completion = await client.chat.completions.create({
+            model: model,
+            temperature: 0.2,
+            response_format: { type: "json_object" },
+            messages: [
+              {
+                role: "system",
+                content: `${systemPrompt.replace("{{BUSINESS_CATEGORIES}}", categoriesBlock)}
 - Si te proporcionan antecedentes históricos reales (RAG), utilízalos para detectar recurrencia y patrones de riesgo/oportunidad.
 - No trates esos antecedentes como hechos del documento actual; úsalo como contexto comparativo.
 - Integra esos hallazgos en summary y opportunities solo cuando haya evidencia.`,
-        },
-        {
-          role: "user",
-          content: userPrompt,
-        },
-      ],
-    });
+              },
+              {
+                role: "user",
+                content: userPrompt,
+              },
+            ],
+          });
+
+          const content = completion.choices[0]?.message?.content;
+          if (!content) throw new Error("Respuesta vacía");
+          
+          const parsed = JSON.parse(content) as unknown;
+          return normalizeResult(parsed);
+        } catch (err) {
+          lastError = err;
+          log.warn({ model, err: err.message }, "Fallo en modelo del pool, reintentando...");
+          continue;
+        }
+      }
+      throw new Error(`Todos los modelos del pool fallaron. Último error: ${lastError?.message}`);
+    }
+
+    // Fallback OpenAI legacy
+    const completion = await client.chat.completions.create({
+ = await client.chat.completions.create(options);
 
     const content = completion.choices[0]?.message?.content;
     if (!content) {
@@ -386,7 +330,64 @@ export async function analyzeTenderDocument(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.error({ err: message }, "Fallo en analyzeTenderDocument");
-    throw new Error(`Error analizando documento con OpenAI: ${message}`);
+    throw new Error(`Error analizando documento con ${AI_PROVIDER.toUpperCase()}: ${message}`);
+  }
+}
+
+export async function detectAbusiveClauses(text: string): Promise<{
+  abusive_clauses: Array<{ clause: string; reason: string; severity: "LOW" | "MEDIUM" | "HIGH" }>;
+  is_likely_directed: boolean;
+  score: number;
+}> {
+  if (!text.trim()) {
+    throw new Error("Texto vacío: no se puede analizar");
+  }
+
+  const client = new OpenAI({ 
+    apiKey: ensureApiKey(),
+    baseURL: AI_PROVIDER === "openrouter" ? OPENROUTER_BASE_URL : undefined,
+    defaultHeaders: AI_PROVIDER === "openrouter" ? {
+      "HTTP-Referer": "https://radar-licitaciones.mx",
+      "X-Title": "Radar Licitaciones MX",
+    } : undefined
+  });
+
+  const systemPromptAbusive = `Eres un Auditor Forense Especializado en Licitaciones Públicas Mexicanas.
+Tu objetivo es detectar CLÁUSULAS ABUSIVAS o CANDADOS que sugieran que una licitación está dirigida a un proveedor específico.
+
+Busca:
+1. Certificaciones ultra-específicas o poco comunes.
+2. Tiempos de entrega imposibles (ej. 24 horas para suministros complejos).
+3. Especificaciones de marca/modelo sin permitir equivalentes reales.
+4. Experiencia excesiva o contratos previos con montos irreales.
+5. Requisitos de capital social desproporcionados al monto del contrato.
+
+Responde ÚNICAMENTE en JSON con este formato:
+{
+  "abusive_clauses": [
+    { "clause": "texto de la cláusula", "reason": "por qué es abusiva", "severity": "LOW"|"MEDIUM"|"HIGH" }
+  ],
+  "is_likely_directed": boolean,
+  "score": number (0-100, donde 100 es totalmente dirigida/corrupta)
+}`;
+
+  try {
+    const response = await client.chat.completions.create({
+      model: PRIMARY_AI_MODEL,
+      temperature: 0.1,
+      response_format: AI_PROVIDER === "openai" ? { type: "json_object" } : { type: "json_object" },
+      messages: [
+        { role: "system", content: systemPromptAbusive },
+        { role: "user", content: `Analiza este texto de licitación:\n\n${text.slice(0, 50000)}` }
+      ]
+    });
+
+    const content = response.choices[0]?.message?.content;
+    if (!content) throw new Error("Respuesta vacía");
+    return JSON.parse(content);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Error detectando cláusulas abusivas: ${message}`);
   }
 }
 
@@ -396,7 +397,10 @@ export async function generateEmbedding(text: string): Promise<number[]> {
     throw new Error("Texto vacío: no se puede generar embedding");
   }
 
-  const client = new OpenAI({ apiKey: ensureApiKey() });
+  const client = new OpenAI({ 
+    apiKey: AI_PROVIDER === "openrouter" ? process.env.OPENROUTER_API_KEY : process.env.OPENAI_API_KEY,
+    baseURL: AI_PROVIDER === "openrouter" ? OPENROUTER_BASE_URL : undefined
+  });
 
   try {
     const response = await client.embeddings.create({
@@ -413,6 +417,6 @@ export async function generateEmbedding(text: string): Promise<number[]> {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.error({ err: message }, "Fallo en generateEmbedding");
-    throw new Error(`Error generando embedding con OpenAI: ${message}`);
+    throw new Error(`Error generando embedding con ${AI_PROVIDER.toUpperCase()}: ${message}`);
   }
 }

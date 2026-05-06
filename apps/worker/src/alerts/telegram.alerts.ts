@@ -55,6 +55,12 @@ export interface AiVipAlertPayload {
   deadline: string;
   risks: string[];
   opportunities: string[];
+  fraudRadar?: {
+    isLikelyFractioned: boolean;
+    isLikelyDirected: boolean;
+    evidence: string;
+  };
+  audioSummary?: string;
   opportunityEngine: {
     winProbability: number;
     competitorThreatLevel: "LOW" | "MEDIUM" | "HIGH";
@@ -131,6 +137,11 @@ export function formatAiVipAlertMessage(payload: AiVipAlertPayload): string | nu
       "",
       `⚠️ <b>Riesgo Principal:</b> ${escapeHtml(riskPrincipal)}`,
       `✅ <b>Oportunidad:</b> ${escapeHtml(opportunityPrincipal)}`,
+      "",
+      payload?.fraudRadar?.isLikelyDirected || payload?.fraudRadar?.isLikelyFractioned 
+        ? `🚨 <b>FRAUD RADAR:</b> ${escapeHtml(safeText(payload?.fraudRadar?.evidence, "Se detectaron anomalías."))}\n`
+        : "",
+      `🎙 <b>RESUMEN RÁPIDO:</b> <i>${escapeHtml(safeText(payload?.audioSummary, "No disponible."))}</i>`,
       "",
       `🔗 <a href="${escapeHtml(safeText(payload?.link, "https://comprasmx.buengobierno.gob.mx"))}">Ver Documento</a>`,
     ];

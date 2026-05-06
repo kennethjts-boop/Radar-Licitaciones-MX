@@ -1,8 +1,8 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
-const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = "gpt-4o-mini";
+const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
+const PRIMARY_MODEL = "google/gemma-4-31b-it:free";
 
 const EXPERT_SYSTEM_PROMPT = `Eres un Consultor Experto en Licitaciones Públicas Mexicanas con 20 años de experiencia ayudando a empresas privadas a ganar contratos gubernamentales.
 
@@ -62,11 +62,11 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+    const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
     const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-    if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY no configurada en Edge Function");
+    if (!OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY no configurada en Edge Function");
     if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) throw new Error("Variables de Supabase no configuradas");
 
     const body: RequestBody = await req.json();
@@ -145,16 +145,15 @@ INSTRUCCIONES:
 - Si el monto no está especificado, no inventes una cifra.`;
 
     // Llamar a OpenAI
-    const openAiResponse = await fetch(OPENAI_API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+        "HTTP-Referer": "https://radar-licitaciones.mx",
+        "X-Title": "Radar Licitaciones MX",
       },
       body: JSON.stringify({
-        model: OPENAI_MODEL,
+        model: PRIMARY_MODEL,
         temperature: 0.3,
-        response_format: { type: "json_object" },
+        // Gemma 4 maneja bien JSON sin necesidad de response_format específico si se le pide en el prompt, 
+        // pero OpenRouter lo soporta para algunos modelos. Lo mantendremos si es posible o lo omitiremos si falla.
         messages: [
           { role: "system", content: EXPERT_SYSTEM_PROMPT },
           { role: "user", content: userPrompt },
@@ -178,7 +177,7 @@ INSTRUCCIONES:
     await db.from("saas_analyses").upsert({
       procurement_id,
       analysis_json: analysis,
-      model_used: OPENAI_MODEL,
+      model_used: PRIMARY_MODEL,
       created_at: new Date().toISOString(),
     }, { onConflict: "procurement_id" }).select().single();
 

@@ -1,0 +1,26 @@
+{
+  "company_name": "Radar Licitaciones Intelligence",
+  "business_description": "Consultoría especializada en inteligencia de mercado y análisis de adquisiciones gubernamentales en México.",
+  "experience": [
+    "Más de 10 años en el sector público.",
+    "Especialistas en licitaciones federales y estatales (CAPUFE, IMSS, ISSSTE).",
+    "Historial de cumplimiento en contratos de servicios de TI y consultoría técnica."
+  ],
+  "certifications": [
+    "ISO 9001:2015 (Gestión de Calidad)",
+    "NOM-035-STPS-2018 (Factores de riesgo psicosocial)"
+  ],
+  "financial_capacity": {
+    "capital_social": 500000,
+    "max_guarantee_capacity": 100000
+  },
+  "target_regions": ["Morelos", "Ciudad de México", "Federal"],
+  "excluded_categories": ["Armamento", "Construcción pesada", "Limpieza"],
+  "interest_keywords": [
+    "Desarrollo de software",
+    "Análisis de datos",
+    "Consultoría administrativa",
+    "Mantenimiento preventivo",
+    "Suministros de oficina"
+  ]
+}
