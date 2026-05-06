@@ -240,6 +240,72 @@ async function handleGetFicha(
   });
 }
 
+async function handleGetRecientes(
+  url: URL,
+  res: http.ServerResponse,
+): Promise<void> {
+  const limiteParam = parseInt(url.searchParams.get("limite") ?? "20", 10);
+  const clampedLimit = Math.min(50, Math.max(1, isNaN(limiteParam) ? 20 : limiteParam));
+  const radarFilter = url.searchParams.get("radar")?.trim() || null;
+  const estadoFilter = url.searchParams.get("estado")?.trim() || null;
+
+  const db = getSupabaseClient();
+
+  // Fetch recent matches with embedded radar key and procurement data.
+  // Fetch extra rows to absorb deduplication by procurement_id.
+  const { data: rows, error } = await db
+    .from("matches")
+    .select(
+      "match_score, " +
+      "radars(key), " +
+      "procurements!inner(id, title, dependency_name, status, amount, publication_date)",
+    )
+    .order("created_at", { ascending: false })
+    .limit(Math.min(200, clampedLimit * 6));
+
+  if (error) throw error;
+
+  const seen = new Set<string>();
+  const licitaciones: unknown[] = [];
+
+  for (const row of (rows ?? []) as unknown as Record<string, unknown>[]) {
+    const proc = row["procurements"] as Record<string, unknown> | null;
+    if (!proc?.["id"]) continue;
+    const procId = String(proc["id"]);
+
+    const radarKey = (row["radars"] as Record<string, unknown> | null)?.["key"] as string | null ?? null;
+
+    // Client-side filters
+    if (radarFilter && (!radarKey || !radarKey.toLowerCase().includes(radarFilter.toLowerCase()))) continue;
+    if (estadoFilter) {
+      const st = (proc["status"] as string | null) ?? "";
+      if (!st.toLowerCase().includes(estadoFilter.toLowerCase())) continue;
+    }
+
+    if (seen.has(procId)) continue;
+    seen.add(procId);
+
+    licitaciones.push({
+      id: procId,
+      titulo: proc["title"] ?? null,
+      dependencia: proc["dependency_name"] ?? null,
+      estado: proc["status"] ?? null,
+      monto: proc["amount"] ?? null,
+      fecha_publicacion: proc["publication_date"] ?? null,
+      radar_key: radarKey,
+      score: (row["match_score"] as number | null) ?? null,
+    });
+
+    if (licitaciones.length >= clampedLimit) break;
+  }
+
+  sendJson(res, 200, {
+    total: licitaciones.length,
+    licitaciones,
+    generado_en: new Date().toISOString(),
+  });
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 function isAuthorized(req: http.IncomingMessage): boolean {
@@ -283,6 +349,16 @@ export function createHttpServer(): http.Server {
           return;
         }
         await handlePostEvaluarModalidad(req, res);
+        return;
+      }
+
+      // GET /api/licitaciones/recientes  (antes del patrón /:id/ficha)
+      if (req.method === "GET" && url.pathname === "/api/licitaciones/recientes") {
+        if (!isApiKeyAuthorized(req)) {
+          sendJson(res, 401, { error: "Unauthorized" });
+          return;
+        }
+        await handleGetRecientes(url, res);
         return;
       }
 
