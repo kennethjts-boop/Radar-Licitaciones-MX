@@ -1,15 +1,18 @@
 /**
- * HTTP SERVER — Expone endpoints de salud y topes financieros.
+ * HTTP SERVER — Expone endpoints de salud, topes financieros y fichas de licitaciones.
  * Puerto: HEALTH_PORT (default 8080).
  *
  * Rutas:
  *   GET  /health
  *   GET  /api/topes/federales?anio=&tipo=&presupuesto_autorizado=
  *   POST /api/licitaciones/evaluar-modalidad
+ *   GET  /api/licitaciones/:id/ficha          (auth: x-api-key)
+ *   GET  /api/licitaciones/recientes?limite=&radar=&estado=  (auth: x-api-key)
  */
 import http from "node:http";
 import { createModuleLogger } from "./logger";
 import { getConfig } from "../config/env";
+import { getSupabaseClient } from "../storage/client";
 import { consultarTopes, evaluarModalidad } from "../topes/topes.service";
 import type { TipoContratacion } from "../topes/topes.types";
 
@@ -50,8 +53,6 @@ function parseBody(req: http.IncomingMessage): Promise<unknown> {
     req.on("error", reject);
   });
 }
-
-// ── Handlers ──────────────────────────────────────────────────────────────────
 
 async function handleGetTopes(
   url: URL,
@@ -179,12 +180,78 @@ async function handlePostEvaluarModalidad(
   });
 }
 
+// ── Handlers: fichas de licitaciones ─────────────────────────────────────────
+
+async function handleGetFicha(
+  id: string,
+  res: http.ServerResponse,
+): Promise<void> {
+  const db = getSupabaseClient();
+  const FICHA_SELECT = [
+    "id", "title", "dependency_name", "buying_unit", "licitation_number",
+    "expediente_id", "procedure_number", "status", "amount", "currency",
+    "publication_date", "opening_date", "award_date", "state", "source_url",
+  ].join(", ");
+
+  const { data: raw, error } = await db
+    .from("procurements")
+    .select(FICHA_SELECT)
+    .or(
+      `external_id.ilike.%${id}%,` +
+      `licitation_number.ilike.%${id}%,` +
+      `procedure_number.ilike.%${id}%`,
+    )
+    .order("last_seen_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+
+  if (!raw) {
+    sendJson(res, 404, { error: "No encontrada" });
+    return;
+  }
+
+  // Supabase no infiere tipos en selects dinámicos; cast explícito.
+  const data = raw as unknown as Record<string, unknown>;
+
+  sendJson(res, 200, {
+    ficha: {
+      id: data["id"],
+      titulo: data["title"],
+      dependencia: data["dependency_name"],
+      unidad_compradora: data["buying_unit"],
+      numero_licitacion: data["licitation_number"],
+      numero_expediente: data["expediente_id"],
+      procedimiento: data["procedure_number"],
+      estado: data["status"],
+      monto: data["amount"],
+      moneda: data["currency"],
+      fecha_publicacion: data["publication_date"],
+      fecha_apertura: data["opening_date"],
+      fecha_limite: data["award_date"],
+      entidad_federativa: data["state"],
+      url_convocatoria: data["source_url"],
+    },
+    techo: { disponible: false, nota: "Consultar vía /techo en Telegram" },
+    antecedentes: { disponible: false, nota: "Módulo en desarrollo" },
+    riesgo: { disponible: false, nota: "Módulo en desarrollo" },
+    generado_en: new Date().toISOString(),
+  });
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 function isAuthorized(req: http.IncomingMessage): boolean {
   const token = process.env.INTERNAL_API_TOKEN;
   if (!token) return false; // endpoints deshabilitados si no hay token configurado
   return req.headers["x-internal-token"] === token;
+}
+
+function isApiKeyAuthorized(req: http.IncomingMessage): boolean {
+  const key = getConfig().INTERNAL_API_KEY;
+  if (!key) return false;
+  return req.headers["x-api-key"] === key;
 }
 
 export function createHttpServer(): http.Server {
@@ -216,6 +283,18 @@ export function createHttpServer(): http.Server {
           return;
         }
         await handlePostEvaluarModalidad(req, res);
+        return;
+      }
+
+      // GET /api/licitaciones/:id/ficha
+      const fichaMatch = url.pathname.match(/^\/api\/licitaciones\/(.+)\/ficha$/);
+      if (req.method === "GET" && fichaMatch) {
+        if (!isApiKeyAuthorized(req)) {
+          sendJson(res, 401, { error: "Unauthorized" });
+          return;
+        }
+        const id = decodeURIComponent(fichaMatch[1]);
+        await handleGetFicha(id, res);
         return;
       }
 
