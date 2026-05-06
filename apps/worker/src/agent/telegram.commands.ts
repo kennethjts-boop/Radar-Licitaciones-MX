@@ -45,10 +45,12 @@ export async function initCommandBot(): Promise<TelegramBot> {
 
   // Iniciar polling
   _bot.startPolling({ restart: true });
+  log.info("telegram_polling_started");
 
   registerCommands(_bot, config.TELEGRAM_CHAT_ID);
 
   log.info("✅ Bot de comandos Telegram iniciado con polling");
+  log.info("telegram_bot_initialized");
   return _bot;
 }
 
@@ -84,10 +86,15 @@ function nextRunEstimate(intervalMinutes: number): string {
 // ─── Registro de comandos ─────────────────────────────────────────────────────
 
 function registerCommands(bot: TelegramBot, chatId: string): void {
-  // ── /prueba ──────────────────────────────────────────────────────────────
-  bot.onText(/\/prueba/, async (msg) => {
-    if (String(msg.chat.id) !== chatId) return;
-    log.info({ from: msg.from?.username }, "📥 /prueba");
+  // ── /prueba | /estado ────────────────────────────────────────────────────
+  bot.onText(/\/(prueba|estado)/, async (msg) => {
+    const chatIdPartial = String(msg.chat.id).slice(-4);
+    log.info({ command: msg.text, chatIdPartial, from: msg.from?.username }, "command_received");
+
+    if (String(msg.chat.id) !== chatId) {
+      log.warn({ expected: chatId, actual: msg.chat.id }, "Ignorando comando de chat no autorizado");
+      return;
+    }
 
     try {
       const config = getConfig();
@@ -131,6 +138,8 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
 
   // ── /buscar ──────────────────────────────────────────────────────────────
   bot.onText(/\/buscar (.+)/, async (msg, match) => {
+    const chatIdPartial = String(msg.chat.id).slice(-4);
+    log.info({ command: "/buscar", chatIdPartial, from: msg.from?.username }, "command_received");
     if (String(msg.chat.id) !== chatId) return;
     const query = match?.[1]?.trim();
     if (!query) return;
@@ -179,6 +188,8 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
 
   // ── /monto ────────────────────────────────────────────────────────────────
   bot.onText(/\/monto (.+)/, async (msg, match) => {
+    const chatIdPartial = String(msg.chat.id).slice(-4);
+    log.info({ command: "/monto", chatIdPartial, from: msg.from?.username }, "command_received");
     if (String(msg.chat.id) !== chatId) return;
     const query = match?.[1]?.trim();
     if (!query) return;
@@ -240,6 +251,8 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
 
   // ── /debug_resumen ────────────────────────────────────────────────────────
   bot.onText(/\/debug_resumen/, async (msg) => {
+    const chatIdPartial = String(msg.chat.id).slice(-4);
+    log.info({ command: "/debug_resumen", chatIdPartial, from: msg.from?.username }, "command_received");
     if (String(msg.chat.id) !== chatId) return;
     log.info({ from: msg.from?.username }, "📥 /debug_resumen");
 
@@ -278,6 +291,8 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
 
   // ── /scan ──────────────────────────────────────────────────────────────
   bot.onText(/\/scan/, async (msg) => {
+    const chatIdPartial = String(msg.chat.id).slice(-4);
+    log.info({ command: "/scan", chatIdPartial, from: msg.from?.username }, "command_received");
     if (String(msg.chat.id) !== chatId) return;
     log.info({ from: msg.from?.username }, "📥 /scan");
 
@@ -296,6 +311,8 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
 
   // ── /recuperar ──────────────────────────────────────────────────────────
   bot.onText(/\/recuperar/, async (msg) => {
+    const chatIdPartial = String(msg.chat.id).slice(-4);
+    log.info({ command: "/recuperar", chatIdPartial, from: msg.from?.username }, "command_received");
     if (String(msg.chat.id) !== chatId) return;
     log.info({ from: msg.from?.username }, "📥 /recuperar");
 
@@ -316,6 +333,8 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
   // Módulo: financial-ceiling-radar (aislado, solo bajo demanda del usuario)
   // Para desactivar: ENABLE_FINANCIAL_CEILING_COMMAND=false
   bot.onText(/\/techo (.+)/, async (msg, match) => {
+    const chatIdPartial = String(msg.chat.id).slice(-4);
+    log.info({ command: "/techo", chatIdPartial, from: msg.from?.username }, "command_received");
     if (String(msg.chat.id) !== chatId) return;
     const query = match?.[1]?.trim() ?? "";
     log.info({ from: msg.from?.username, query }, "📥 /techo");
@@ -330,5 +349,26 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     }
   });
 
-  log.info("✅ Comandos registrados: /prueba, /buscar, /monto, /debug_resumen, /scan, /recuperar, /techo");
+  // ── /radares ─────────────────────────────────────────────────────────────
+  bot.onText(/\/radares/, async (msg) => {
+    const chatIdPartial = String(msg.chat.id).slice(-4);
+    log.info({ command: msg.text, chatIdPartial, from: msg.from?.username }, "command_received");
+
+    if (String(msg.chat.id) !== chatId) return;
+
+    try {
+      const radars = getActiveRadars();
+      const lines = [
+        `📡 <b>Radares Activos (${radars.length})</b>`,
+        "",
+        ...radars.map(r => `• <b>${r.name}</b> [<code>${r.key}</code>] (Prio: ${r.priority})`)
+      ];
+      await bot.sendMessage(chatId, lines.join("\n"), { parse_mode: "HTML" });
+    } catch (err) {
+      log.error({ err }, "❌ Error en /radares");
+    }
+  });
+
+  log.info("telegram_handlers_registered");
+  log.info("✅ Comandos registrados: /prueba, /estado, /radares, /buscar, /monto, /debug_resumen, /scan, /recuperar, /techo");
 }

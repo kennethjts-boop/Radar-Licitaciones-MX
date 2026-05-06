@@ -26,6 +26,7 @@ async function main(): Promise<void> {
   const log = getLogger();
 
   log.info("Worker booting...");
+  log.info("worker_started");
 
 
   if (process.env.RUN_MAESTROS === "true") {
