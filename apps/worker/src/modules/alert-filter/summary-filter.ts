@@ -6,7 +6,7 @@ import type { SummaryData, SummarySection } from './types';
 
 const log = createModuleLogger('summary-filter');
 
-const ACTIVE_STATUSES = ['publicada', 'activa', 'en_proceso'];
+const ACTIVE_STATUSES = ['publicada', 'activa', 'en_proceso', 'en proceso', 'unknown'];
 
 /**
  * Construye los datos estructurados del resumen diario consultando la DB.
@@ -141,8 +141,16 @@ export async function buildSummaryData(): Promise<SummaryData> {
     .gte('created_at', yesterday)
     .eq('telegram_status', 'sent');
 
-  const alertableCount = newActive.length + recentDesierta.length + soonExpiring.length + highScore.length;
-  const excludedCount = Math.max(0, (totalSeen ?? 0) - alertableCount);
+  // excludedCount = total visto - los que entraron en alguna sección de oportunidad.
+  // Nota: las secciones están limitadas por DAILY_SUMMARY_MAX_ITEMS, por lo que
+  // este número puede incluir activas no mostradas. Es un estimado conservador.
+  const uniqueAlertableIds = new Set([
+    ...newActive.map(s => s.externalId),
+    ...recentDesierta.map(s => s.externalId),
+    ...soonExpiring.map(s => s.externalId),
+    ...highScore.map(s => s.externalId),
+  ]);
+  const excludedCount = Math.max(0, (totalSeen ?? 0) - uniqueAlertableIds.size);
 
   return {
     summaryDate: todayMexicoStr(),

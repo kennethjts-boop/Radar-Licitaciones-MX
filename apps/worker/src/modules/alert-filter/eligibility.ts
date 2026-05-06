@@ -1,6 +1,6 @@
 import type { NormalizedProcurement } from '../../types/procurement';
 import type { UpsertProcurementResult } from '../../storage/procurement.repo';
-import type { AlertClassification, AlertFilterOptions, NormalizedTenderStatus } from './types';
+import type { AlertClassification, AlertExclusionReason, AlertFilterOptions, NormalizedTenderStatus } from './types';
 import { normalizeTenderStatus } from './status-normalizer';
 import { extractTenderDates, isTenderStillActionable, isWithinDays } from './date-utils';
 
@@ -11,7 +11,7 @@ const DEFAULT_OPTIONS: AlertFilterOptions = {
 
 const CLOSED_STATUSES: NormalizedTenderStatus[] = ['CLOSED', 'AWARDED', 'CANCELLED', 'EXPIRED'];
 
-const CLOSED_REASON_MAP: Partial<Record<NormalizedTenderStatus, string>> = {
+const CLOSED_REASON_MAP: Partial<Record<NormalizedTenderStatus, AlertExclusionReason>> = {
   CLOSED: 'new_but_closed',
   AWARDED: 'new_but_awarded',
   CANCELLED: 'new_but_cancelled',
@@ -30,7 +30,7 @@ export function classifyAlert(
 
   if (upsertResult.isNew) {
     if (CLOSED_STATUSES.includes(normalizedStatus)) {
-      const reason = (CLOSED_REASON_MAP[normalizedStatus] ?? 'new_but_closed') as any;
+      const reason = CLOSED_REASON_MAP[normalizedStatus] ?? 'new_but_closed';
       return { decision: 'NOT_ALERTABLE', reason, normalizedStatus, hasActionableDates };
     }
 

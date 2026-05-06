@@ -27,7 +27,7 @@ export async function runDailySummaryJob(): Promise<void> {
 
     // Guardar en DB (formato legado compatible)
     const db = getSupabaseClient();
-    await db.from('daily_summaries').insert({
+    const { error: insertErr } = await db.from('daily_summaries').insert({
       id: uuidv4(),
       summary_date: today,
       total_seen: summaryData.totalSeen,
@@ -38,6 +38,10 @@ export async function runDailySummaryJob(): Promise<void> {
       summary_text: JSON.stringify(summaryData),
       created_at: nowISO(),
     });
+    if (insertErr) {
+      log.warn({ err: insertErr }, 'No se pudo guardar resumen en DB; continuando con envío Telegram');
+      summaryData.technicalIncidents.push('Error al guardar resumen en DB');
+    }
 
     // Enviar a Telegram con nuevo formato de secciones
     await sendEnhancedDailySummary(summaryData);

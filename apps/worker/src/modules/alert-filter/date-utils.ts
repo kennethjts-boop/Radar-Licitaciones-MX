@@ -32,6 +32,8 @@ export function isTenderStillActionable(dates: TenderDates, now: Date): boolean 
   const actionableDates = [dates.openingDate, dates.rulingDate, dates.clarificationDate].filter(
     (d): d is Date => d !== null,
   );
+  // Sin fechas conocidas → beneficio de la duda (solo se aplica a ítems ACTIVE).
+  // Los ítems CLOSED/AWARDED/CANCELLED son excluidos antes de llegar aquí en classifyAlert.
   if (actionableDates.length === 0) return true;
   return actionableDates.some((d) => d > now);
 }
