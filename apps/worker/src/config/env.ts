@@ -80,6 +80,8 @@ const envSchema = z.object({
 
   // HTTP Server
   HEALTH_PORT: z.string().default("8080").transform(Number),
+  // Token para endpoints /api/licitaciones/* (header: x-api-key)
+  INTERNAL_API_KEY: z.string().min(1).optional(),
 
   // Alert Filter — ventanas de tiempo y límites
   ALERT_NEW_LOOKBACK_HOURS: z.string().default('48').transform(Number),
