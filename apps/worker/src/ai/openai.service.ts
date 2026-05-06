@@ -248,6 +248,13 @@ export async function analyzeTenderDocument(
       } : undefined
     });
 
+  try {
+    const normalizedHistoricalContext = historicalContext?.trim() ?? "";
+    const categoriesBlock = Object.entries(BUSINESS_PROFILE.CATEGORIES)
+      .map(([category, terms]) => `- ${category}: ${terms.join(", ")}`)
+      .join("\n");
+    const excludedKeywordsList = BUSINESS_PROFILE.EXCLUDED_KEYWORDS.join(", ");
+
     const userPrompt = normalizedHistoricalContext
       ? [
           "Analiza el siguiente documento de licitación y devuelve el JSON solicitado.",
@@ -307,18 +314,31 @@ export async function analyzeTenderDocument(
           
           const parsed = JSON.parse(content) as unknown;
           return normalizeResult(parsed);
-        } catch (err) {
+        } catch (err: any) {
           lastError = err;
-          log.warn({ model, err: err.message }, "Fallo en modelo del pool, reintentando...");
+          log.warn({ model, err: err.message || String(err) }, "Fallo en modelo del pool, reintentando...");
           continue;
         }
       }
-      throw new Error(`Todos los modelos del pool fallaron. Último error: ${lastError?.message}`);
+      throw new Error(`Todos los modelos del pool fallaron. Último error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
     }
 
     // Fallback OpenAI legacy
     const completion = await client.chat.completions.create({
- = await client.chat.completions.create(options);
+      model: PRIMARY_AI_MODEL,
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: `${systemPrompt.replace("{{BUSINESS_CATEGORIES}}", categoriesBlock)}`,
+        },
+        {
+          role: "user",
+          content: userPrompt,
+        },
+      ],
+    });
 
     const content = completion.choices[0]?.message?.content;
     if (!content) {
