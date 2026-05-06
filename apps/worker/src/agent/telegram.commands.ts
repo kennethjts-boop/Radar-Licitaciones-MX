@@ -312,5 +312,23 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     }
   });
 
-  log.info("✅ Comandos registrados: /prueba, /buscar, /monto, /debug_resumen, /scan, /recuperar");
+  // ── /techo ────────────────────────────────────────────────────────────────
+  // Módulo: financial-ceiling-radar (aislado, solo bajo demanda del usuario)
+  // Para desactivar: ENABLE_FINANCIAL_CEILING_COMMAND=false
+  bot.onText(/\/techo (.+)/, async (msg, match) => {
+    if (String(msg.chat.id) !== chatId) return;
+    const query = match?.[1]?.trim() ?? "";
+    log.info({ from: msg.from?.username, query }, "📥 /techo");
+
+    // Importación dinámica — el módulo no se carga hasta que se pide
+    try {
+      const { handleTechoCommand } = await import("../modules/financial-ceiling-radar/telegram-handler");
+      await handleTechoCommand(bot, chatId, query);
+    } catch (err) {
+      log.error({ err }, "❌ Error importando módulo /techo");
+      await bot.sendMessage(chatId, "❌ Error cargando el módulo de análisis financiero").catch(() => {});
+    }
+  });
+
+  log.info("✅ Comandos registrados: /prueba, /buscar, /monto, /debug_resumen, /scan, /recuperar, /techo");
 }
