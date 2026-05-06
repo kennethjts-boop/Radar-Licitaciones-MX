@@ -936,8 +936,6 @@ export async function runRecheckJob(): Promise<void> {
 
     let totalSeen = 0;
     let totalMatches = 0;
-    let alertsSentThisCycle = 0;
-    let alertsOverflowNotified = false;
     let errorMessage: string | null = null;
 
     try {
@@ -954,18 +952,6 @@ export async function runRecheckJob(): Promise<void> {
           radarDbIds.set(row.key, row.id);
         }
       }
-
-      // Obtener mensajes de alertas enviadas en las últimas 48h para dedup
-      const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-      const { data: recentAlerts } = await db
-        .from("alerts")
-        .select("telegram_message")
-        .eq("status", "sent")
-        .gte("sent_at", cutoff);
-
-      const recentMessages = new Set<string>(
-        (recentAlerts ?? []).map((a: { telegram_message: string | null }) => a.telegram_message ?? "")
-      );
 
       // Paginar todos los procurements del source
       const PAGE_SIZE = 100;
@@ -993,46 +979,16 @@ export async function runRecheckJob(): Promise<void> {
             const matches = evaluateAllRadars(normalized, radars, false, null);
 
             for (const match of matches) {
-              // Dedup: skip si el externalId ya aparece en mensajes recientes de Telegram
-              const extId = normalized.externalId ?? "";
-              if (extId && [...recentMessages].some(msg => msg.includes(extId))) continue;
-
               totalMatches++;
-
               try {
                 const enrichableMatch = { ...match, procurementId: (row as DbProcurement).id };
                 const radarDbId = radarDbIds.get(match.radarKey);
-
+                // Modo 2: solo persiste el match para métricas. NO envía alertas a Telegram.
                 if (radarDbId) {
                   await upsertMatch(enrichableMatch, radarDbId);
                 }
-
-                const enriched = await enrichMatch(normalized, enrichableMatch);
-                const alertId = await createAlert(enriched, (row as DbProcurement).id, radarDbId);
-
-                if (alertsSentThisCycle >= MAX_ALERTS_PER_CYCLE) {
-                  if (!alertsOverflowNotified) {
-                    alertsOverflowNotified = true;
-                    await sendTelegramMessage(
-                      `⚠️ Límite de ${MAX_ALERTS_PER_CYCLE} alertas alcanzado en recheck diario. Hay más matches en Supabase.`,
-                      "HTML"
-                    ).catch(() => {});
-                  }
-                  await markAlertFailed(alertId);
-                  continue;
-                }
-
-                const msgId = await sendMatchAlert(enriched);
-                if (msgId) {
-                  alertsSentThisCycle++;
-                  await markAlertSent(alertId, msgId);
-                  // Añadir al set en-memoria para evitar duplicados en el mismo ciclo
-                  if (enriched.telegramMessage) recentMessages.add(enriched.telegramMessage);
-                } else {
-                  await markAlertFailed(alertId);
-                }
               } catch (err) {
-                log.error({ err }, "Error procesando match en recheck DB");
+                log.error({ err }, 'Error registrando match en recheck DB');
               }
             }
           } catch (e) {
@@ -1054,7 +1010,7 @@ export async function runRecheckJob(): Promise<void> {
         itemsCreated: 0,
         itemsUpdated: 0,
         errorMessage,
-        metadata: { totalMatches, alertsSent: alertsSentThisCycle, mode: "daily_recheck_db" },
+        metadata: { totalMatches, mode: "daily_recheck_db" },
       });
 
       const { setState, STATE_KEYS: SK } = await import("../core/system-state");
@@ -1086,7 +1042,6 @@ export async function runRecheckJob(): Promise<void> {
           duration: formatDuration(durationMs),
           totalSeen,
           totalMatches,
-          alertsSent: alertsSentThisCycle,
           status: errorMessage ? "error" : "success",
         },
         "🏁 MODO 2 — DB recheck completado",
