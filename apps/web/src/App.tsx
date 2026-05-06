@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from './lib/supabase';
-import { Search, Building, X, Zap, Coins, LogIn, CheckCircle2, MapPin, ChevronRight, Sparkles, AlertCircle, Bell, Download, LayoutGrid, Rows3 } from 'lucide-react';
+import { Search, Building, X, Zap, Coins, LogIn, MapPin, ChevronRight, Sparkles, Bell, Download, LayoutGrid, Rows3 } from 'lucide-react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 import './App.css';
