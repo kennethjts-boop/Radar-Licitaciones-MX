@@ -12,3 +12,4 @@ export type {
   SummarySection,
   TenderDates,
 } from './types';
+export { buildSummaryData } from './summary-filter';
