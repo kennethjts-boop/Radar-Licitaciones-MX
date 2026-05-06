@@ -52,6 +52,9 @@ import { analyzeTenderDocument, generateEmbedding } from "../ai/openai.service";
 import { BUSINESS_PROFILE } from "../config/business_profile";
 import { sanitizeForKeywordRegex } from "../core/text";
 import { sendCapufePeajeDeepReportToTelegram } from "../scripts/capufe-peaje-deep-report";
+import { classifyAlert } from '../modules/alert-filter';
+import type { CycleMetrics } from '../modules/alert-filter';
+import { getConfig } from '../config/env';
 
 const log = createModuleLogger("collect-job");
 const MAX_ALERTS_PER_CYCLE = 9999;
@@ -567,6 +570,15 @@ export async function runCollectJob(): Promise<void> {
     let itemsUpdated = 0;
     let totalMatches = 0;
     const capufeDeepReportsSent = new Set<string>();
+    let alertsSentThisCycle = 0;
+    const cycleMetrics: CycleMetrics = {
+      found: 0, alertable: 0, sent: 0, excluded: 0, excludedClosed: 0, excludedOld: 0,
+    };
+    const config = getConfig();
+    const alertFilterOptions = {
+      desertaLookbackDays: config.ALERT_DESIERTA_LOOKBACK_DAYS,
+      activeMaxAgeDays: config.ALERT_ACTIVE_MAX_AGE_DAYS,
+    };
     let errorMessage: string | null = null;
     let collectResult: ComprasMxCollectResult | null = null;
 
@@ -623,8 +635,10 @@ export async function runCollectJob(): Promise<void> {
             item.rawJson = { ...item.rawJson, fecha_publicacion: fechaPublicacion };
           }
 
-          // Filtrar licitaciones vencidas: no generar alertas si ya pasó la fecha de apertura
-          if (isDateExpired(item.openingDate)) {
+          // Filtrar licitaciones vencidas: no generar alertas si ya pasó la fecha de apertura.
+          // Excepción: las DESIERTA siempre pasan (classifyAlert decidirá si son recientes).
+          const isDesiertaItem = item.status.toLowerCase().includes('desierta');
+          if (isDateExpired(item.openingDate) && !isDesiertaItem) {
             log.debug(
               { externalId: item.externalId, openingDate: item.openingDate },
               "Licitación con fecha de apertura vencida, omitiendo match",
@@ -709,6 +723,46 @@ export async function runCollectJob(): Promise<void> {
                 }
               }
 
+              // ── Filtro de elegibilidad ────────────────────────────────────────────
+              cycleMetrics.found++;
+              const classification = classifyAlert(item, upsertResult, alertFilterOptions);
+
+              if (classification.decision === 'NOT_ALERTABLE') {
+                log.debug(
+                  {
+                    externalId: item.externalId,
+                    status: item.status,
+                    normalizedStatus: classification.normalizedStatus,
+                    reason: classification.reason,
+                  },
+                  '[alert-filter] excluded',
+                );
+                const closedReasons = ['old_closed_status', 'new_but_closed', 'new_but_awarded', 'new_but_cancelled', 'new_but_expired'];
+                if (closedReasons.includes(classification.reason)) {
+                  cycleMetrics.excludedClosed++;
+                } else {
+                  cycleMetrics.excludedOld++;
+                }
+                cycleMetrics.excluded++;
+                const _radarDbIdExcluded = radarDbIds.get(match.radarKey);
+                const _excludedMatch = { ...match, procurementId: upsertResult.procurementId };
+                if (_radarDbIdExcluded) {
+                  await upsertMatch(_excludedMatch, _radarDbIdExcluded).catch(() => {});
+                }
+                continue;
+              }
+
+              cycleMetrics.alertable++;
+
+              // Límite duro por ciclo
+              if (alertsSentThisCycle >= config.ALERT_MAX_PER_CYCLE) {
+                log.warn(
+                  { limit: config.ALERT_MAX_PER_CYCLE, externalId: item.externalId },
+                  '[alert-filter] límite de ciclo alcanzado, alerta omitida',
+                );
+                continue;
+              }
+
               // Usar procurement_id real de DB si está disponible
               const enrichableMatch = {
                 ...match,
@@ -728,6 +782,8 @@ export async function runCollectJob(): Promise<void> {
               const msgId = await sendMatchAlert(enriched);
 
               if (msgId) {
+                alertsSentThisCycle++;
+                cycleMetrics.sent++;
                 await markAlertSent(alertId, msgId);
               } else {
                 await markAlertFailed(alertId);
@@ -807,6 +863,7 @@ export async function runCollectJob(): Promise<void> {
       const durationMs = Date.now() - cycleStart;
       healthTracker.recordCycle(durationMs, totalMatches);
 
+      log.info(cycleMetrics, '[alert-filter] métricas del ciclo');
       log.info(
         {
           mode: "listing_scan",
