@@ -15,6 +15,7 @@ import type {
   DailySummary,
   MatchLevel,
 } from "../types/procurement";
+import type { SummaryData } from '../modules/alert-filter';
 
 const log = createModuleLogger("telegram-alerts");
 
@@ -404,4 +405,75 @@ export async function sendDailySummary(
 
 export async function sendSystemMessage(text: string): Promise<number | null> {
   return sendTelegramMessage(text, "HTML");
+}
+
+/**
+ * Formatea el resumen diario mejorado con secciones por categoría.
+ */
+export function formatEnhancedDailySummaryMessage(data: SummaryData): string {
+  const config = getConfig();
+  const maxItems = config.DAILY_SUMMARY_MAX_ITEMS;
+
+  const fmtShortDate = (d: string | null): string => {
+    if (!d) return '?';
+    try {
+      return formatMexicoDate(d, 'dd/MM');
+    } catch {
+      return d.slice(0, 10);
+    }
+  };
+
+  const fmtSection = (items: typeof data.newActive, max = 5): string => {
+    return items
+      .slice(0, max)
+      .map((s, i) => {
+        const dep = s.dependencyName ? escapeHtml(s.dependencyName.slice(0, 30)) : 'N/D';
+        const date = fmtShortDate(s.openingDate);
+        const title = escapeHtml(s.title.slice(0, 50));
+        return `  ${i + 1}. ${title} — ${dep} — apertura ${date}`;
+      })
+      .join('\n');
+  };
+
+  const topItems = [
+    ...data.recentDesierta,
+    ...data.newActive,
+    ...data.soonExpiring,
+    ...data.highScore,
+  ]
+    .filter((s, i, arr) => arr.findIndex((x) => x.externalId === s.externalId) === i)
+    .slice(0, maxItems);
+
+  const lines: string[] = [
+    `📊 <b>RESUMEN RADAR — ${escapeHtml(data.summaryDate)}</b>`,
+    `<i>Radar Licitaciones MX</i>`,
+    '',
+    `✅ <b>Nuevas vigentes detectadas hoy:</b> ${data.newActive.length}`,
+    `🏜 <b>Desiertas recientes:</b> ${data.recentDesierta.length}`,
+    `⏳ <b>Próximas a vencer (≤5 días):</b> ${data.soonExpiring.length}`,
+    `🔥 <b>Alto score (≥70%):</b> ${data.highScore.length}`,
+    `🗑 <b>Excluidas viejas/cerradas:</b> ${data.excludedCount}`,
+    '',
+  ];
+
+  if (topItems.length > 0) {
+    lines.push('<b>🏆 Top oportunidades:</b>');
+    lines.push(fmtSection(topItems, Math.min(10, maxItems)));
+    lines.push('');
+  }
+
+  if (data.technicalIncidents.length > 0) {
+    lines.push('<b>⚠️ Incidencias:</b>');
+    data.technicalIncidents.forEach((inc) => lines.push(`  • ${escapeHtml(inc)}`));
+    lines.push('');
+  }
+
+  return truncateForTelegram(lines.filter(Boolean).join('\n'));
+}
+
+export async function sendEnhancedDailySummary(
+  data: SummaryData,
+): Promise<number | null> {
+  const message = formatEnhancedDailySummaryMessage(data);
+  return sendTelegramMessage(message, 'HTML');
 }

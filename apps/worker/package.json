@@ -24,7 +24,8 @@
     "test:alerts": "ts-node src/scripts/force-test-alerts.ts",
     "ai:test": "ts-node src/scripts/analyze-abusive-clauses.ts data/licitacion-capufe-2024-resumen.pdf",
     "financial:analyze": "ts-node-dev --transpile-only src/scripts/financial-analyze.ts",
-    "financial:sample": "ts-node-dev --transpile-only src/scripts/financial-sample.ts"
+    "financial:sample": "ts-node-dev --transpile-only src/scripts/financial-sample.ts",
+    "alert-filter:sample": "ts-node-dev --transpile-only src/modules/alert-filter/sample-runner.ts"
   },
   "engines": {
     "node": ">=20.0.0"

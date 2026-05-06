@@ -1,133 +1,69 @@
 /**
  * DAILY SUMMARY JOB — Genera y envía el resumen de las últimas 24 horas.
+ * Versión mejorada con secciones por categoría de alertabilidad.
  */
-import { v4 as uuidv4 } from "uuid";
-import { createModuleLogger } from "../core/logger";
-import { todayMexicoStr, nowISO } from "../core/time";
-import { getSupabaseClient } from "../storage/client";
-import { sendDailySummary } from "../alerts/telegram.alerts";
-import { healthTracker } from "../core/healthcheck";
-import type { DailySummary } from "../types/procurement";
+import { v4 as uuidv4 } from 'uuid';
+import { createModuleLogger } from '../core/logger';
+import { todayMexicoStr, nowISO } from '../core/time';
+import { getSupabaseClient } from '../storage/client';
+import { sendEnhancedDailySummary } from '../alerts/telegram.alerts';
+import { buildSummaryData } from '../modules/alert-filter';
+import { healthTracker } from '../core/healthcheck';
 
-const log = createModuleLogger("daily-summary-job");
+const log = createModuleLogger('daily-summary-job');
 
 export async function runDailySummaryJob(): Promise<void> {
-  log.info("Generando resumen diario");
+  log.info('Generando resumen diario mejorado');
 
-  const db = getSupabaseClient();
   const today = todayMexicoStr();
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const since = yesterday.toISOString();
 
   try {
-    // Contar expedientes vistos en las últimas 24h (por last_seen_at)
-    const { count: totalSeen } = await db
-      .from("procurements")
-      .select("*", { count: "exact", head: true })
-      .gte("last_seen_at", since);
-
-    const { count: totalNew } = await db
-      .from("procurements")
-      .select("*", { count: "exact", head: true })
-      .gte("created_at", since);
-
-    // Expedientes cuyo updated_at > created_at (es decir, tuvieron al menos 1 actualización)
-    const { count: totalUpdated } = await db
-      .from("procurement_versions")
-      .select("*", { count: "exact", head: true })
-      .gte("created_at", since)
-      .gt("version_number", 1);
-
-    const { count: totalMatches } = await db
-      .from("matches")
-      .select("*", { count: "exact", head: true })
-      .gte("created_at", since);
-
-    const { count: totalAlerts } = await db
-      .from("alerts")
-      .select("*", { count: "exact", head: true })
-      .gte("created_at", since)
-      .eq("telegram_status", "sent");
-
-    // Matches por radar
-    const { data: matchData } = await db
-      .from("matches")
-      .select("radar_id")
-      .gte("created_at", since);
-
-    const matchesByRadar: Record<string, number> = {};
-    (matchData ?? []).forEach((m) => {
-      matchesByRadar[m.radar_id] = (matchesByRadar[m.radar_id] ?? 0) + 1;
-    });
-
-    // Top dependencias
-    const { data: depsData } = await db
-      .from("procurements")
-      .select("dependency_name")
-      .gte("last_seen_at", since)
-      .not("dependency_name", "is", null);
-
-    const depCounts: Record<string, number> = {};
-    (depsData ?? []).forEach((d) => {
-      if (d.dependency_name) {
-        depCounts[d.dependency_name] = (depCounts[d.dependency_name] ?? 0) + 1;
-      }
-    });
-    const topDependencies = Object.entries(depCounts)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 5)
-      .map(([name, count]) => ({ name, count }));
+    const summaryData = await buildSummaryData();
 
     const healthStatus = healthTracker.getStatus();
-
-    // En Fase 1 no hay scraping — incluir nota técnica en el resumen
-    const technicalIncidents: string[] = [];
-    if (totalSeen === 0) {
-      technicalIncidents.push(
-        "Fase 1 activa: sin scraping todavía (Compras MX pendiente Fase 2)",
-      );
-    }
-    if (healthStatus.services.database !== "ok") {
-      technicalIncidents.push(
-        "DB con problemas de conectividad en algún ciclo",
-      );
+    if (healthStatus.services.database !== 'ok') {
+      summaryData.technicalIncidents.push('DB con problemas de conectividad en algún ciclo');
     }
 
-    const summary: DailySummary = {
-      summaryDate: today,
-      totalSeen: totalSeen ?? 0,
-      totalNew: totalNew ?? 0,
-      totalUpdated: totalUpdated ?? 0,
-      totalMatches: totalMatches ?? 0,
-      totalAlerts: totalAlerts ?? 0,
-      matchesByRadar,
-      topDependencies,
-      technicalIncidents,
-      telegramMessage: "",
-    };
-
-    // Guardar en DB
-    await db.from("daily_summaries").insert({
+    // Guardar en DB (formato legado compatible)
+    const db = getSupabaseClient();
+    const totalMatchesDeduped = new Set([
+      ...summaryData.newActive.map(s => s.externalId),
+      ...summaryData.recentDesierta.map(s => s.externalId),
+      ...summaryData.soonExpiring.map(s => s.externalId),
+      ...summaryData.highScore.map(s => s.externalId),
+    ]).size;
+    const { error: insertErr } = await db.from('daily_summaries').insert({
       id: uuidv4(),
       summary_date: today,
-      total_seen: summary.totalSeen,
-      total_new: summary.totalNew,
-      total_updated: summary.totalUpdated,
-      total_matches: summary.totalMatches,
-      total_alerts: summary.totalAlerts,
-      summary_text: JSON.stringify(summary),
+      total_seen: summaryData.totalSeen,
+      total_new: summaryData.totalNew,
+      total_updated: 0,
+      total_matches: totalMatchesDeduped,
+      total_alerts: summaryData.totalAlerts,
+      summary_text: JSON.stringify(summaryData),
       created_at: nowISO(),
     });
+    if (insertErr) {
+      log.warn({ err: insertErr }, 'No se pudo guardar resumen en DB; continuando con envío Telegram');
+      summaryData.technicalIncidents.push('Error al guardar resumen en DB');
+    }
 
-    // Enviar a Telegram
-    await sendDailySummary(summary);
+    // Enviar a Telegram con nuevo formato de secciones
+    await sendEnhancedDailySummary(summaryData);
 
     log.info(
-      { today, totalSeen, totalNew, totalMatches },
-      "Resumen diario enviado",
+      {
+        today,
+        newActive: summaryData.newActive.length,
+        recentDesierta: summaryData.recentDesierta.length,
+        soonExpiring: summaryData.soonExpiring.length,
+        highScore: summaryData.highScore.length,
+        excluded: summaryData.excludedCount,
+      },
+      'Resumen diario enviado',
     );
   } catch (err) {
-    log.error({ err }, "Error generando resumen diario");
+    log.error({ err }, 'Error generando resumen diario');
   }
 }

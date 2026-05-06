@@ -80,6 +80,21 @@ const envSchema = z.object({
 
   // HTTP Server
   HEALTH_PORT: z.string().default("8080").transform(Number),
+
+  // Alert Filter — ventanas de tiempo y límites
+  ALERT_NEW_LOOKBACK_HOURS: z.string().default('48').transform(Number),
+  ALERT_ACTIVE_MAX_AGE_DAYS: z.string().default('21').transform(Number),
+  ALERT_DESIERTA_LOOKBACK_DAYS: z.string().default('10').transform(Number),
+  ALERT_INCLUDE_HISTORICAL: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true'),
+  ALERT_MAX_PER_CYCLE: z.string().default('25').transform(Number),
+  DAILY_SUMMARY_MAX_ITEMS: z.string().default('40').transform(Number),
+  DAILY_SUMMARY_EXCLUDE_OLD_CLOSED: z
+    .string()
+    .default('true')
+    .transform((v) => v === 'true'),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;
