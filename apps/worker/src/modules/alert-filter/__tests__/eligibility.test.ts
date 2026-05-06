@@ -125,4 +125,24 @@ describe('classifyAlert — CASO B: isNew=false', () => {
     expect(result.decision).toBe('NOT_ALERTABLE');
     expect(result.reason).toBe('unknown_status_old');
   });
+
+  it('NOT_ALERTABLE para activa no-nueva con publicationDate > activeMaxAgeDays', () => {
+    const item = { ...makeItem('activa', FUTURE), publicationDate: OLD };
+    const result = classifyAlert(item, makeUpsert(false), OPTIONS, NOW);
+    expect(result.decision).toBe('NOT_ALERTABLE');
+    expect(result.reason).toBe('too_old_not_new');
+  });
+
+  it('ALERTABLE para activa no-nueva con publicationDate reciente y fecha futura', () => {
+    const item = { ...makeItem('activa', FUTURE), publicationDate: RECENT };
+    const result = classifyAlert(item, makeUpsert(false), OPTIONS, NOW);
+    expect(result.decision).toBe('ALERTABLE');
+    expect(result.reason).toBe('active_with_future_dates');
+  });
+
+  it('ALERTABLE para activa no-nueva con publicationDate null y fecha futura (age check saltado)', () => {
+    const result = classifyAlert(makeItem('activa', FUTURE), makeUpsert(false), OPTIONS, NOW);
+    expect(result.decision).toBe('ALERTABLE');
+    expect(result.reason).toBe('active_with_future_dates');
+  });
 });

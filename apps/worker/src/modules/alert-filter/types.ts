@@ -19,7 +19,8 @@ export type AlertExclusionReason =
   | 'old_no_future_dates'
   | 'old_closed_status'
   | 'desierta_too_old'
-  | 'unknown_status_old';
+  | 'unknown_status_old'
+  | 'too_old_not_new';
 
 export type AlertInclusionReason =
   | 'new_active'

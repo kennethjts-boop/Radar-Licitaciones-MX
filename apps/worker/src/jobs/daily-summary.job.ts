@@ -27,13 +27,19 @@ export async function runDailySummaryJob(): Promise<void> {
 
     // Guardar en DB (formato legado compatible)
     const db = getSupabaseClient();
+    const totalMatchesDeduped = new Set([
+      ...summaryData.newActive.map(s => s.externalId),
+      ...summaryData.recentDesierta.map(s => s.externalId),
+      ...summaryData.soonExpiring.map(s => s.externalId),
+      ...summaryData.highScore.map(s => s.externalId),
+    ]).size;
     const { error: insertErr } = await db.from('daily_summaries').insert({
       id: uuidv4(),
       summary_date: today,
       total_seen: summaryData.totalSeen,
       total_new: summaryData.totalNew,
       total_updated: 0,
-      total_matches: summaryData.highScore.length,
+      total_matches: totalMatchesDeduped,
       total_alerts: summaryData.totalAlerts,
       summary_text: JSON.stringify(summaryData),
       created_at: nowISO(),

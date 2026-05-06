@@ -57,6 +57,9 @@ export function classifyAlert(
   }
 
   if (normalizedStatus === 'ACTIVE') {
+    if (dates.publicationDate && !isWithinDays(dates.publicationDate, options.activeMaxAgeDays, now)) {
+      return { decision: 'NOT_ALERTABLE', reason: 'too_old_not_new', normalizedStatus, hasActionableDates };
+    }
     if (hasActionableDates) {
       return { decision: 'ALERTABLE', reason: 'active_with_future_dates', normalizedStatus, hasActionableDates };
     }
