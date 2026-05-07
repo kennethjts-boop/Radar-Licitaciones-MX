@@ -493,6 +493,7 @@ export interface EnrichedAlertData {
   documentsFound: DocumentLink[];
   documentsDownloaded: DownloadResult[];
   errors: string[];
+  budgetSignal?: { hasSignals: boolean; highestAmount: number | null };
 }
 
 /**
@@ -519,6 +520,15 @@ export function formatEnrichedAlert(data: EnrichedAlertData): string {
       "",
       "📄 <b>Estado:</b> sin documentos públicos disponibles aún.",
     ];
+
+    if (data.budgetSignal !== undefined) {
+      lines.push("");
+      if (data.budgetSignal.hasSignals && data.budgetSignal.highestAmount !== null) {
+        lines.push(`💰 <b>Techo presupuestal detectado:</b> ${formatCurrency(data.budgetSignal.highestAmount, "MXN")}`);
+      } else {
+        lines.push("📊 <b>Techo presupuestal:</b> No localizado");
+      }
+    }
 
     if (data.errors.length > 0) {
       lines.push("");
@@ -566,6 +576,15 @@ export function formatEnrichedAlert(data: EnrichedAlertData): string {
     "",
     `📊 <b>Estado del análisis:</b> ${escapeHtml(analysisStatus)}`,
   ];
+
+  if (data.budgetSignal !== undefined) {
+    lines.push("");
+    if (data.budgetSignal.hasSignals && data.budgetSignal.highestAmount !== null) {
+      lines.push(`💰 <b>Techo presupuestal detectado:</b> ${formatCurrency(data.budgetSignal.highestAmount, "MXN")}`);
+    } else {
+      lines.push("📊 <b>Techo presupuestal:</b> No localizado");
+    }
+  }
 
   if (data.errors.length > 0) {
     lines.push("");

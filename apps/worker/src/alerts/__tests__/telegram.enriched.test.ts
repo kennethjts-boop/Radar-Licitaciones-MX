@@ -104,4 +104,27 @@ describe("formatEnrichedAlert", () => {
     const msg = formatEnrichedAlert(baseData);
     expect(msg).toContain("información pública");
   });
+
+  it("muestra techo presupuestal cuando hasSignals=true", () => {
+    const msg = formatEnrichedAlert({
+      ...baseData,
+      budgetSignal: { hasSignals: true, highestAmount: 1_500_000 },
+    });
+    expect(msg).toContain("💰");
+    expect(msg).toContain("1,500,000");
+  });
+
+  it("muestra 'No localizado' cuando hasSignals=false", () => {
+    const msg = formatEnrichedAlert({
+      ...baseData,
+      budgetSignal: { hasSignals: false, highestAmount: null },
+    });
+    expect(msg).toContain("📊");
+    expect(msg).toContain("No localizado");
+  });
+
+  it("no muestra sección de techo si budgetSignal es undefined", () => {
+    const msg = formatEnrichedAlert({ ...baseData });
+    expect(msg).not.toContain("Techo presupuestal");
+  });
 });

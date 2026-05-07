@@ -11,6 +11,12 @@ import { nowISO, formatDuration } from "../core/time";
 import { collectComprasMxDetail } from "../collectors/comprasmx-detail/index";
 import { downloadDocuments } from "../services/document-downloader";
 import { sendTelegramMessage, formatEnrichedAlert } from "../alerts/telegram.alerts";
+import { parsePdf } from "../parsers/pdf-parser";
+import { parseDocx } from "../parsers/docx-parser";
+import { parseXlsx } from "../parsers/xlsx-parser";
+import { parseZip } from "../parsers/zip-parser";
+import { extractBudgetSignals } from "../services/budget-signal-extractor";
+import type { BudgetSignalResult } from "../services/budget-signal-extractor";
 
 const log = createModuleLogger("enrich-procurement-job");
 
@@ -35,6 +41,22 @@ export interface EnrichmentResult {
   documentsDownloaded: number;
   errors: string[];
   enrichedAt: string;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+async function parseDocumentFile(localPath: string, fileType: string): Promise<string> {
+  if (fileType === "pdf") return (await parsePdf(localPath)).text;
+  if (fileType === "docx") return (await parseDocx(localPath)).text;
+  if (fileType === "xlsx") return (await parseXlsx(localPath)).text;
+  if (fileType === "zip") {
+    const r = await parseZip(localPath);
+    return r.files
+      .filter((f) => f.parseResult !== null)
+      .map((f) => f.parseResult!.text)
+      .join("\n");
+  }
+  return "";
 }
 
 // ── Función principal ──────────────────────────────────────────────────────────
@@ -125,6 +147,24 @@ export async function enrichProcurement(
       status = "failed";
     }
 
+    // 5b. Parsear documentos y extraer señal de presupuesto
+    const allTexts: string[] = [];
+    for (let i = 0; i < downloadable.length; i++) {
+      const dlResult = downloadResults[i];
+      if (
+        (dlResult.downloadStatus === "ok" || dlResult.downloadStatus === "skipped_duplicate") &&
+        dlResult.localPath
+      ) {
+        try {
+          const text = await parseDocumentFile(dlResult.localPath, dlResult.fileType);
+          if (text) allTexts.push(text);
+        } catch (parseErr) {
+          log.warn({ err: parseErr, localPath: dlResult.localPath }, "⚠️ Error parseando documento");
+        }
+      }
+    }
+    const budgetSignal: BudgetSignalResult = extractBudgetSignals(allTexts.join("\n\n"));
+
     log.info(
       {
         jobId,
@@ -146,6 +186,7 @@ export async function enrichProcurement(
       documentsFound: documents,
       documentsDownloaded: downloadResults,
       errors,
+      budgetSignal: { hasSignals: budgetSignal.hasSignals, highestAmount: budgetSignal.highestAmount },
     });
 
     sendTelegramMessage(enrichedMessage, "HTML").catch((err: unknown) => {

@@ -1,18 +1,27 @@
 import { enrichProcurement } from "../enrich-procurement.job";
 import type { EnrichmentInput } from "../enrich-procurement.job";
 
-// Mock D2, D3, and Telegram alerts
+// Mock D2, D3, Telegram alerts, parsers, and budget extractor
 jest.mock("../../collectors/comprasmx-detail/index");
 jest.mock("../../services/document-downloader");
 jest.mock("../../alerts/telegram.alerts");
+jest.mock("../../parsers/pdf-parser");
+jest.mock("../../parsers/docx-parser");
+jest.mock("../../parsers/xlsx-parser");
+jest.mock("../../parsers/zip-parser");
+jest.mock("../../services/budget-signal-extractor");
 
 import { collectComprasMxDetail } from "../../collectors/comprasmx-detail/index";
 import { downloadDocuments } from "../../services/document-downloader";
 import { sendTelegramMessage } from "../../alerts/telegram.alerts";
+import { parsePdf } from "../../parsers/pdf-parser";
+import { extractBudgetSignals } from "../../services/budget-signal-extractor";
 
 const mockedCollect = collectComprasMxDetail as jest.MockedFunction<typeof collectComprasMxDetail>;
 const mockedDownload = downloadDocuments as jest.MockedFunction<typeof downloadDocuments>;
 const mockedSend = sendTelegramMessage as jest.MockedFunction<typeof sendTelegramMessage>;
+const mockedParsePdf = parsePdf as jest.MockedFunction<typeof parsePdf>;
+const mockedExtractBudget = extractBudgetSignals as jest.MockedFunction<typeof extractBudgetSignals>;
 
 const baseInput: EnrichmentInput = {
   procurementId: "proc-001",
@@ -66,6 +75,8 @@ describe("enrichProcurement", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockedSend.mockResolvedValue(12345);
+    mockedParsePdf.mockResolvedValue({ text: "", parseStatus: "empty", errors: [] });
+    mockedExtractBudget.mockReturnValue({ signals: [], hasSignals: false, highestAmount: null });
   });
 
   it("sourceUrl null → skipped_no_documents, sin llamar a collector", async () => {
@@ -137,5 +148,31 @@ describe("enrichProcurement", () => {
     expect(result.status).toBe("failed");
     expect(result.errors.length).toBeGreaterThan(0);
     expect(result.errors[0]).toContain("Playwright crashed");
+  });
+
+  it("extrae señales de presupuesto de documentos descargados", async () => {
+    const url = "https://example.com/bases.pdf";
+    mockedCollect.mockResolvedValue(makeCollectorResult([{ title: "Bases", fileUrl: url }]));
+    mockedDownload.mockResolvedValue(makeDownloadResults([url], ["ok"]));
+    mockedParsePdf.mockResolvedValue({ text: "Presupuesto total $1,500,000.00 para el proyecto.", parseStatus: "ok", errors: [] });
+    mockedExtractBudget.mockReturnValue({
+      signals: [{ rawText: "$1,500,000.00", amount: 1500000, confidence: "alta" }],
+      hasSignals: true,
+      highestAmount: 1500000,
+    });
+
+    const result = await enrichProcurement(baseInput);
+
+    expect(result.status).toBe("success");
+    expect(mockedExtractBudget).toHaveBeenCalled();
+  });
+
+  it("no falla si parser lanza error", async () => {
+    const url = "https://example.com/bases.pdf";
+    mockedCollect.mockResolvedValue(makeCollectorResult([{ title: "Bases", fileUrl: url }]));
+    mockedDownload.mockResolvedValue(makeDownloadResults([url], ["ok"]));
+    mockedParsePdf.mockRejectedValue(new Error("PDF corrupto"));
+
+    await expect(enrichProcurement(baseInput)).resolves.toBeDefined();
   });
 });
