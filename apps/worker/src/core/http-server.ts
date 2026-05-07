@@ -24,6 +24,71 @@ const TIPOS_VALIDOS = new Set<TipoContratacion>([
   "obra_publica",
 ]);
 
+// ── Tipos de enriquecimiento ──────────────────────────────────────────────────
+
+type EnrichmentStore = {
+  ceiling?: {
+    directCeiling: number | null;
+    estimatedMin: number | null;
+    estimatedMax: number | null;
+    average: number | null;
+    confidence: string;
+    explanation: string;
+    legalWarning: string;
+  } | null;
+  similar?: Array<{
+    procedureId: string | null;
+    source: string;
+    title: string | null;
+    similarityScore: number;
+    awardedAmount: number | null;
+    year: number | null;
+  }> | null;
+};
+
+export function mapEnrichmentToSections(enrichmentData: unknown): {
+  techo: unknown;
+  antecedentes: unknown;
+} {
+  if (
+    enrichmentData === null ||
+    enrichmentData === undefined ||
+    typeof enrichmentData !== "object"
+  ) {
+    return {
+      techo: { disponible: false, nota: "Enriquecimiento pendiente" },
+      antecedentes: { disponible: false, nota: "Enriquecimiento pendiente" },
+    };
+  }
+
+  const ed = enrichmentData as EnrichmentStore;
+
+  const techo =
+    ed.ceiling != null
+      ? {
+          disponible: true,
+          directCeiling: ed.ceiling.directCeiling,
+          estimatedMin: ed.ceiling.estimatedMin,
+          estimatedMax: ed.ceiling.estimatedMax,
+          average: ed.ceiling.average,
+          confidence: ed.ceiling.confidence,
+          explanation: ed.ceiling.explanation,
+          legalWarning: ed.ceiling.legalWarning,
+        }
+      : { disponible: false, nota: "Enriquecimiento pendiente" };
+
+  const antecedentes =
+    Array.isArray(ed.similar)
+      ? {
+          disponible: true,
+          totalSimilares: ed.similar.length,
+          contratos: ed.similar.slice(0, 5),
+        }
+      : { disponible: false, nota: "Enriquecimiento pendiente" };
+
+  return { techo, antecedentes };
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function sendJson(
@@ -215,6 +280,9 @@ async function handleGetFicha(
   // Supabase no infiere tipos en selects dinámicos; cast explícito.
   const data = raw as unknown as Record<string, unknown>;
 
+  const enrichmentRaw = (data["enrichment_data"] as unknown) ?? null;
+  const { techo, antecedentes } = mapEnrichmentToSections(enrichmentRaw);
+
   sendJson(res, 200, {
     ficha: {
       id: data["id"],
@@ -233,8 +301,8 @@ async function handleGetFicha(
       entidad_federativa: data["state"],
       url_convocatoria: data["source_url"],
     },
-    techo: { disponible: false, nota: "Consultar vía /techo en Telegram" },
-    antecedentes: { disponible: false, nota: "Módulo en desarrollo" },
+    techo,
+    antecedentes,
     riesgo: { disponible: false, nota: "Módulo en desarrollo" },
     generado_en: new Date().toISOString(),
   });
