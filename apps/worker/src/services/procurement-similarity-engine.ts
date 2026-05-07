@@ -14,7 +14,9 @@ export interface SimilarityInput {
   dependency: string | null;
   state: string | null;
   contractType: string | null;
+  /** Informational; full title tokenization is used for scoring. */
   keywords: string[];
+  /** Passed through to SimilarityResult.scopeApplied; filtering is done upstream by collectors. */
   scope: "MORELOS_ONLY" | "NATIONAL_CAPUFE_DESIERTA";
   historico: HistoricoContract[];
   sipot: SipotContract[];
@@ -131,16 +133,16 @@ function normalizeCandidates(
 
 // ── Función principal ──────────────────────────────────────────────────────────
 
-export async function findSimilarProcurements(
+export function findSimilarProcurements(
   input: SimilarityInput,
-): Promise<SimilarityResult> {
+): SimilarityResult {
   const inputTokens = tokenize(input.title);
   const normalizedDep = (input.dependency ?? "").toLowerCase().trim();
   const normalizedState = (input.state ?? "").toLowerCase().trim();
 
   const candidates = normalizeCandidates(input.historico, input.sipot, input.ocds);
 
-  const scored: SimilarProcedure[] = candidates
+  const allScored: SimilarProcedure[] = candidates
     .map((c): SimilarProcedure | null => {
       const candidateTokens = tokenize(c.title);
       let score = jaccardSimilarity(inputTokens, candidateTokens);
@@ -174,12 +176,12 @@ export async function findSimilarProcurements(
       };
     })
     .filter((p): p is SimilarProcedure => p !== null)
-    .sort((a, b) => b.similarityScore - a.similarityScore)
-    .slice(0, MAX_RESULTS);
+    .sort((a, b) => b.similarityScore - a.similarityScore);
+  // Do NOT slice here yet
 
   return {
-    similarProcedures: scored,
-    totalFound: scored.length,
+    similarProcedures: allScored.slice(0, MAX_RESULTS),
+    totalFound: allScored.length,  // total matched, not total returned
     scopeApplied: input.scope,
   };
 }

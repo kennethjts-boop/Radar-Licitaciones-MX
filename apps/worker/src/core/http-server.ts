@@ -280,7 +280,11 @@ async function handleGetFicha(
   // Supabase no infiere tipos en selects dinámicos; cast explícito.
   const data = raw as unknown as Record<string, unknown>;
 
-  const enrichmentRaw = (data["enrichment_data"] as unknown) ?? null;
+  // enrichment_data is intentionally NOT in FICHA_SELECT — the column does not
+  // exist in the DB schema yet. Reading it here returns undefined, and
+  // mapEnrichmentToSections() returns the "Enriquecimiento pendiente" fallback.
+  // Add "enrichment_data" to FICHA_SELECT once the column is migrated.
+  const enrichmentRaw = data["enrichment_data"] ?? null;
   const { techo, antecedentes } = mapEnrichmentToSections(enrichmentRaw);
 
   sendJson(res, 200, {

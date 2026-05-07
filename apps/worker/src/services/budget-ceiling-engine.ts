@@ -10,9 +10,12 @@ import type { SimilarProcedure } from "./procurement-similarity-engine";
 export interface CeilingInput {
   directCeilingFound: boolean;
   directCeilingAmount: number | null;
+  /** Raw budget signals from document parser; used for directCeilingFound/directCeilingAmount. */
   budgetSignals: BudgetSignal[];
   similarProcedures: SimilarProcedure[];
+  /** Reserved for future display/logging. */
   title: string | null;
+  /** Reserved for future display/logging. */
   dependency: string | null;
 }
 
@@ -80,8 +83,8 @@ export function estimateBudgetCeiling(input: CeilingInput): CeilingResult {
 
   // NIVEL 2 — Inferido de contratos similares
   const amounts = input.similarProcedures
-    .map((s) => s.awardedAmount ?? 0)
-    .filter((a) => a > 0);
+    .map((s) => s.awardedAmount)
+    .filter((a): a is number => a !== null && a > 0);
 
   if (amounts.length > 0) {
     const confidence: CeilingResult["confidence"] =
