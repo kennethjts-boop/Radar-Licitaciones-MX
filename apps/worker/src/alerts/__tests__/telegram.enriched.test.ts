@@ -127,4 +127,28 @@ describe("formatEnrichedAlert", () => {
     const msg = formatEnrichedAlert({ ...baseData });
     expect(msg).not.toContain("Techo presupuestal");
   });
+
+  it("muestra sección de antecedentes cuando hay contratos", () => {
+    const msg = formatEnrichedAlert({
+      ...baseData,
+      antecedentes: { compranetCount: 3, compranetHighestAmount: 2500000, sipotCount: 1, ocdsCount: 0 },
+    });
+    expect(msg).toContain("🔎");
+    expect(msg).toContain("CompraNet");
+    expect(msg).toContain("2,500,000");
+  });
+
+  it("muestra 'Sin antecedentes' cuando todos son 0", () => {
+    const msg = formatEnrichedAlert({
+      ...baseData,
+      antecedentes: { compranetCount: 0, compranetHighestAmount: null, sipotCount: 0, ocdsCount: 0 },
+    });
+    expect(msg).toContain("🔎");
+    expect(msg).toContain("Sin antecedentes");
+  });
+
+  it("no muestra sección de antecedentes si antecedentes es undefined", () => {
+    const msg = formatEnrichedAlert({ ...baseData });
+    expect(msg).not.toContain("Antecedentes encontrados");
+  });
 });

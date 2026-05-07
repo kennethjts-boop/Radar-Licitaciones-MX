@@ -10,6 +10,9 @@ jest.mock("../../parsers/docx-parser");
 jest.mock("../../parsers/xlsx-parser");
 jest.mock("../../parsers/zip-parser");
 jest.mock("../../services/budget-signal-extractor");
+jest.mock("../../collectors/compranet-historico/index");
+jest.mock("../../collectors/pnt-sipot/index");
+jest.mock("../../collectors/contrataciones-abiertas/index");
 
 import { collectComprasMxDetail } from "../../collectors/comprasmx-detail/index";
 import { downloadDocuments } from "../../services/document-downloader";
@@ -22,6 +25,14 @@ const mockedDownload = downloadDocuments as jest.MockedFunction<typeof downloadD
 const mockedSend = sendTelegramMessage as jest.MockedFunction<typeof sendTelegramMessage>;
 const mockedParsePdf = parsePdf as jest.MockedFunction<typeof parsePdf>;
 const mockedExtractBudget = extractBudgetSignals as jest.MockedFunction<typeof extractBudgetSignals>;
+
+import { fetchCompranetHistorico } from "../../collectors/compranet-historico/index";
+import { fetchPntSipot } from "../../collectors/pnt-sipot/index";
+import { fetchContratacionesAbiertas } from "../../collectors/contrataciones-abiertas/index";
+
+const mockedCompranet = fetchCompranetHistorico as jest.MockedFunction<typeof fetchCompranetHistorico>;
+const mockedSipot = fetchPntSipot as jest.MockedFunction<typeof fetchPntSipot>;
+const mockedOcds = fetchContratacionesAbiertas as jest.MockedFunction<typeof fetchContratacionesAbiertas>;
 
 const baseInput: EnrichmentInput = {
   procurementId: "proc-001",
@@ -77,6 +88,9 @@ describe("enrichProcurement", () => {
     mockedSend.mockResolvedValue(12345);
     mockedParsePdf.mockResolvedValue({ text: "", parseStatus: "empty", errors: [] });
     mockedExtractBudget.mockReturnValue({ signals: [], hasSignals: false, highestAmount: null });
+    mockedCompranet.mockResolvedValue({ source: "compranet-historico", query: {} as any, contracts: [], totalFound: 0, status: "ok", errors: [] });
+    mockedSipot.mockResolvedValue({ source: "pnt-sipot", query: {} as any, contracts: [], status: "ok", errors: [] });
+    mockedOcds.mockResolvedValue({ source: "contrataciones-abiertas", contracts: [], status: "ok", errors: [] });
   });
 
   it("sourceUrl null → skipped_no_documents, sin llamar a collector", async () => {
@@ -172,6 +186,44 @@ describe("enrichProcurement", () => {
     mockedCollect.mockResolvedValue(makeCollectorResult([{ title: "Bases", fileUrl: url }]));
     mockedDownload.mockResolvedValue(makeDownloadResults([url], ["ok"]));
     mockedParsePdf.mockRejectedValue(new Error("PDF corrupto"));
+
+    await expect(enrichProcurement(baseInput)).resolves.toBeDefined();
+  });
+
+  it("llama a los 3 collectors de antecedentes cuando hay documentos", async () => {
+    const url = "https://example.com/bases.pdf";
+    mockedCollect.mockResolvedValue(makeCollectorResult([{ title: "Bases", fileUrl: url }]));
+    mockedDownload.mockResolvedValue(makeDownloadResults([url], ["ok"]));
+    mockedParsePdf.mockResolvedValue({ text: "Mantenimiento vial Morelos.", parseStatus: "ok", errors: [] });
+    mockedExtractBudget.mockReturnValue({ signals: [], hasSignals: false, highestAmount: null });
+    mockedCompranet.mockResolvedValue({
+      source: "compranet-historico",
+      query: {} as any,
+      contracts: [{ procedureNumber: "LPN-001", title: "Mantenimiento", dependency: "SCT",
+        supplier: "EmpresaABC", awardedAmount: 1200000, currency: "MXN", year: 2023,
+        state: "Morelos", contractType: "LP", sourceUrl: null, retrievedAt: "2026-05-07T00:00:00Z" }],
+      totalFound: 1,
+      status: "ok",
+      errors: [],
+    });
+
+    const result = await enrichProcurement(baseInput);
+
+    expect(result.status).toBe("success");
+    expect(mockedCompranet).toHaveBeenCalled();
+    expect(mockedSipot).toHaveBeenCalled();
+    expect(mockedOcds).toHaveBeenCalled();
+  });
+
+  it("continúa sin antecedentes si todos los collectors fallan", async () => {
+    const url = "https://example.com/bases.pdf";
+    mockedCollect.mockResolvedValue(makeCollectorResult([{ title: "Bases", fileUrl: url }]));
+    mockedDownload.mockResolvedValue(makeDownloadResults([url], ["ok"]));
+    mockedParsePdf.mockResolvedValue({ text: "", parseStatus: "empty", errors: [] });
+    mockedExtractBudget.mockReturnValue({ signals: [], hasSignals: false, highestAmount: null });
+    mockedCompranet.mockRejectedValue(new Error("CompraNet caído"));
+    mockedSipot.mockRejectedValue(new Error("SIPOT caído"));
+    mockedOcds.mockRejectedValue(new Error("OCDS caído"));
 
     await expect(enrichProcurement(baseInput)).resolves.toBeDefined();
   });

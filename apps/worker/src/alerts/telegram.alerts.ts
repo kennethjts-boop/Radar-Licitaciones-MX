@@ -494,6 +494,12 @@ export interface EnrichedAlertData {
   documentsDownloaded: DownloadResult[];
   errors: string[];
   budgetSignal?: { hasSignals: boolean; highestAmount: number | null };
+  antecedentes?: {
+    compranetCount: number;
+    compranetHighestAmount: number | null;
+    sipotCount: number;
+    ocdsCount: number;
+  };
 }
 
 /**
@@ -527,6 +533,24 @@ export function formatEnrichedAlert(data: EnrichedAlertData): string {
         lines.push(`💰 <b>Techo presupuestal detectado:</b> ${formatCurrency(data.budgetSignal.highestAmount, "MXN")}`);
       } else {
         lines.push("📊 <b>Techo presupuestal:</b> No localizado");
+      }
+    }
+
+    if (data.antecedentes !== undefined) {
+      const a = data.antecedentes;
+      const total = a.compranetCount + a.sipotCount + a.ocdsCount;
+      lines.push("");
+      if (total === 0) {
+        lines.push("🔎 <b>Antecedentes:</b> Sin antecedentes directos en fuentes públicas consultadas.");
+      } else {
+        lines.push("🔎 <b>Antecedentes encontrados:</b>");
+        const compranetSuffix =
+          a.compranetCount > 0 && a.compranetHighestAmount !== null
+            ? ` — mayor: ${formatCurrency(a.compranetHighestAmount, "MXN")}`
+            : "";
+        lines.push(`  • CompraNet: ${a.compranetCount} contratos${compranetSuffix}`);
+        lines.push(`  • SIPOT/PNT: ${a.sipotCount} registros`);
+        lines.push(`  • OCDS: ${a.ocdsCount} registros`);
       }
     }
 
@@ -583,6 +607,24 @@ export function formatEnrichedAlert(data: EnrichedAlertData): string {
       lines.push(`💰 <b>Techo presupuestal detectado:</b> ${formatCurrency(data.budgetSignal.highestAmount, "MXN")}`);
     } else {
       lines.push("📊 <b>Techo presupuestal:</b> No localizado");
+    }
+  }
+
+  if (data.antecedentes !== undefined) {
+    const a = data.antecedentes;
+    const total = a.compranetCount + a.sipotCount + a.ocdsCount;
+    lines.push("");
+    if (total === 0) {
+      lines.push("🔎 <b>Antecedentes:</b> Sin antecedentes directos en fuentes públicas consultadas.");
+    } else {
+      lines.push("🔎 <b>Antecedentes encontrados:</b>");
+      const compranetSuffix =
+        a.compranetCount > 0 && a.compranetHighestAmount !== null
+          ? ` — mayor: ${formatCurrency(a.compranetHighestAmount, "MXN")}`
+          : "";
+      lines.push(`  • CompraNet: ${a.compranetCount} contratos${compranetSuffix}`);
+      lines.push(`  • SIPOT/PNT: ${a.sipotCount} registros`);
+      lines.push(`  • OCDS: ${a.ocdsCount} registros`);
     }
   }
 

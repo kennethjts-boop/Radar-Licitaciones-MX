@@ -17,6 +17,9 @@ import { parseXlsx } from "../parsers/xlsx-parser";
 import { parseZip } from "../parsers/zip-parser";
 import { extractBudgetSignals } from "../services/budget-signal-extractor";
 import type { BudgetSignalResult } from "../services/budget-signal-extractor";
+import { fetchCompranetHistorico } from "../collectors/compranet-historico/index";
+import { fetchPntSipot } from "../collectors/pnt-sipot/index";
+import { fetchContratacionesAbiertas } from "../collectors/contrataciones-abiertas/index";
 
 const log = createModuleLogger("enrich-procurement-job");
 
@@ -44,6 +47,20 @@ export interface EnrichmentResult {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+const STOPWORDS = new Set([
+  "para", "con", "los", "las", "del", "que", "por", "una", "sus",
+  "este", "esta", "como", "todo", "todos", "pero", "sino", "desde",
+]);
+
+function extractKeywords(title: string): string[] {
+  return title
+    .toLowerCase()
+    .replace(/[^a-záéíóúüñ\s]/gi, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 4 && !STOPWORDS.has(w))
+    .slice(0, 5);
+}
 
 async function parseDocumentFile(localPath: string, fileType: string): Promise<string> {
   if (fileType === "pdf") return (await parsePdf(localPath)).text;
@@ -165,6 +182,41 @@ export async function enrichProcurement(
     }
     const budgetSignal: BudgetSignalResult = extractBudgetSignals(allTexts.join("\n\n"));
 
+    // 5c. Antecedentes en paralelo (Promise.allSettled — falla silenciosamente)
+    const titleKeywords = extractKeywords(input.title ?? "");
+    const [historicoSettled, sipotSettled, ocdsSettled] = await Promise.allSettled([
+      fetchCompranetHistorico({ keywords: titleKeywords, scope: input.scope, yearFrom: 2020 }),
+      fetchPntSipot({ keywords: titleKeywords, scope: input.scope }),
+      fetchContratacionesAbiertas({ keywords: titleKeywords, scope: input.scope }),
+    ]);
+
+    const historicoContracts =
+      historicoSettled.status === "fulfilled" ? historicoSettled.value.contracts : [];
+    const sipotContracts =
+      sipotSettled.status === "fulfilled" ? sipotSettled.value.contracts : [];
+    const ocdsContracts =
+      ocdsSettled.status === "fulfilled" ? ocdsSettled.value.contracts : [];
+
+    const compranetAmounts = historicoContracts
+      .map((c) => c.awardedAmount ?? 0)
+      .filter((a) => a > 0);
+    const compranetHighestAmount = compranetAmounts.length > 0
+      ? Math.max(...compranetAmounts)
+      : null;
+
+    const antecedentes = {
+      compranetCount: historicoContracts.length,
+      compranetHighestAmount,
+      sipotCount: sipotContracts.length,
+      ocdsCount: ocdsContracts.length,
+    };
+
+    log.info(
+      { jobId, compranetCount: antecedentes.compranetCount, sipotCount: antecedentes.sipotCount,
+        ocdsCount: antecedentes.ocdsCount },
+      "📊 Antecedentes encontrados",
+    );
+
     log.info(
       {
         jobId,
@@ -187,6 +239,7 @@ export async function enrichProcurement(
       documentsDownloaded: downloadResults,
       errors,
       budgetSignal: { hasSignals: budgetSignal.hasSignals, highestAmount: budgetSignal.highestAmount },
+      antecedentes,
     });
 
     sendTelegramMessage(enrichedMessage, "HTML").catch((err: unknown) => {
