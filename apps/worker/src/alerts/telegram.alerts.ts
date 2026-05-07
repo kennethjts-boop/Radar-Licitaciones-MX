@@ -7,7 +7,7 @@ import { getConfig } from "../config/env";
 import { getCommandBot } from "../agent/telegram.commands";
 import { createModuleLogger } from "../core/logger";
 import { truncateForTelegram, formatCurrency } from "../core/text";
-import { formatMexicoDate } from "../core/time";
+import { formatMexicoDate, formatDateSafe } from "../core/time";
 import { TelegramError } from "../core/errors";
 import { withRetries, isRetryableNetworkError } from "../utils/retry.util";
 import type {
@@ -271,8 +271,8 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
   const fechaVisita = (raw.fecha_visita as string | null | undefined) ?? null;
   const fechaInicioContrato = (raw.fecha_inicio_contrato as string | null | undefined) ?? null;
 
-  const fmtDate = (d: string | null) =>
-    d ? formatMexicoDate(d, "dd/MM/yyyy HH:mm") : null;
+  // null → omit the line; non-null → formatDateSafe (never "Fecha inválida")
+  const fmtDate = (d: string | null) => (d ? formatDateSafe(d) : null);
 
   const lines: string[] = [
     `${emoji} <b>NUEVO MATCH — ${alert.radarName}</b>`,
@@ -312,7 +312,7 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
       : "",
     "",
     `🔗 <a href="${p.sourceUrl}">Ver Expediente Original</a>`,
-    `⏱ <i>Detectado: ${formatMexicoDate(alert.detectedAt, "dd/MM/yyyy HH:mm")}</i>`,
+    `⏱ <i>Detectado: ${formatDateSafe(alert.detectedAt)}</i>`,
   ];
 
   return truncateForTelegram(lines.filter(Boolean).join("\n"));

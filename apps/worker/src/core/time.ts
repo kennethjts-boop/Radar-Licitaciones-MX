@@ -3,7 +3,7 @@
  * Toda la lógica de scheduling debe pasar por aquí.
  */
 import { formatInTimeZone, toZonedTime, fromZonedTime } from "date-fns-tz";
-import { format, parseISO, isValid } from "date-fns";
+import { format, parse, parseISO, isValid } from "date-fns";
 
 const MX_TIMEZONE = "America/Mexico_City";
 
@@ -23,22 +23,80 @@ export function nowISO(): string {
 
 /**
  * Formatea una fecha en la zona horaria de México.
+ * Acepta Date, string ISO, o null/undefined.
+ * Retorna "No disponible" cuando la fecha es nula o inválida.
  */
 export function formatMexicoDate(
-  date: Date | string,
+  date: Date | string | null | undefined,
   fmt = "dd/MM/yyyy HH:mm",
 ): string {
+  if (!date) return "No disponible";
   // Si es string solo-fecha (YYYY-MM-DD), interpretar como fecha local sin
   // conversión de timezone para evitar desfase de un día (parseISO la trataría
   // como medianoche UTC → día anterior en México UTC-6).
   if (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
     const d = parseISO(date + "T12:00:00");
-    if (!isValid(d)) return "Fecha inválida";
+    if (!isValid(d)) return "No disponible";
     return formatInTimeZone(d, MX_TIMEZONE, fmt);
   }
   const d = typeof date === "string" ? parseISO(date) : date;
-  if (!isValid(d)) return "Fecha inválida";
+  if (!isValid(d)) return "No disponible";
   return formatInTimeZone(d, MX_TIMEZONE, fmt);
+}
+
+const FMT_DATE_ONLY = "dd/MM/yyyy";
+const FMT_DATETIME = "dd/MM/yyyy — HH:mm 'h CDMX'";
+
+/**
+ * Formatea cualquier fecha de forma segura para mostrar en Telegram.
+ *
+ * Nunca lanza excepción, nunca retorna "Fecha inválida", "NaN" o "undefined".
+ * - null / undefined / string vacío  → "No disponible"
+ * - Solo fecha (YYYY-MM-DD)          → "dd/MM/yyyy"
+ * - Datetime ISO (contiene 'T')      → "dd/MM/yyyy — HH:mm h CDMX"
+ * - "dd/MM/yyyy HH:mm"              → "dd/MM/yyyy — HH:mm h CDMX"
+ * - "dd/MM/yyyy"                    → "dd/MM/yyyy"
+ * - String inválido                  → "No disponible"
+ */
+export function formatDateSafe(d: string | null | undefined): string {
+  if (!d || typeof d !== "string" || d.trim() === "") return "No disponible";
+
+  try {
+    // ISO date-only: YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+      const parsed = parseISO(d + "T12:00:00");
+      if (!isValid(parsed)) return "No disponible";
+      return formatInTimeZone(parsed, MX_TIMEZONE, FMT_DATE_ONLY);
+    }
+
+    // ISO datetime (contains 'T'): treat naive datetime as Mexico local time
+    if (d.includes("T")) {
+      const utcDate = fromZonedTime(d, MX_TIMEZONE);
+      if (!isValid(utcDate)) return "No disponible";
+      return formatInTimeZone(utcDate, MX_TIMEZONE, FMT_DATETIME);
+    }
+
+    // "dd/MM/yyyy HH:mm" → reformat with Mexico timezone label
+    if (/^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/.test(d)) {
+      const parsed = parse(d, "dd/MM/yyyy HH:mm", new Date());
+      if (!isValid(parsed)) return "No disponible";
+      // Extract components, then interpret them as Mexico local time
+      const naiveIso = format(parsed, "yyyy-MM-dd'T'HH:mm:ss");
+      const utcDate = fromZonedTime(naiveIso, MX_TIMEZONE);
+      return formatInTimeZone(utcDate, MX_TIMEZONE, FMT_DATETIME);
+    }
+
+    // "dd/MM/yyyy" → date only
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(d)) {
+      const parsed = parse(d, "dd/MM/yyyy", new Date());
+      if (!isValid(parsed)) return "No disponible";
+      return format(parsed, "dd/MM/yyyy");
+    }
+  } catch {
+    // intentional: any unexpected error → safe fallback
+  }
+
+  return "No disponible";
 }
 
 /**
