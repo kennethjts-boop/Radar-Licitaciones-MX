@@ -64,7 +64,7 @@ describe("formatEnrichedAlert", () => {
     expect(msg).toContain("✅");
   });
 
-  it("documento con descarga fallida → ⚠️ marker", () => {
+  it("documento con descarga fallida → ⚠️ marker en línea del documento", () => {
     const doc = makeDocLink("Anexo Técnico");
     const dl = makeDownloadResult(doc.fileUrl, "failed");
     const msg = formatEnrichedAlert({
@@ -73,7 +73,8 @@ describe("formatEnrichedAlert", () => {
       documentsDownloaded: [dl],
     });
 
-    expect(msg).toContain("⚠️");
+    // The ⚠️ icon must appear on the same line as the document title
+    expect(msg).toMatch(/⚠️.*Anexo Técnico/);
   });
 
   it("con errores → sección errores presente", () => {

@@ -499,6 +499,8 @@ export interface EnrichedAlertData {
  * Formatea el segundo mensaje Telegram con el resultado del enriquecimiento OSINT.
  * Si supera 4096 chars, trunca. Si no hay documentos, envía mensaje corto.
  */
+const MAX_ERRORS_SHOWN = 3;
+
 export function formatEnrichedAlert(data: EnrichedAlertData): string {
   const procedureNumber = escapeHtml(data.procedureNumber);
   const expedienteId = escapeHtml(data.expedienteId ?? "N/D");
@@ -515,13 +517,13 @@ export function formatEnrichedAlert(data: EnrichedAlertData): string {
       `🏛 <b>Dependencia:</b> ${dependency}`,
       `🌎 <b>Alcance:</b> ${scope}`,
       "",
-      "📄 <b>Estado:</b> Documentos aún no disponibles públicamente. sin documentos públicos",
+      "📄 <b>Estado:</b> sin documentos públicos disponibles aún.",
     ];
 
     if (data.errors.length > 0) {
       lines.push("");
       lines.push("⚠️ <b>Errores controlados:</b>");
-      data.errors.slice(0, 3).forEach((e) => lines.push(`  • ${escapeHtml(e)}`));
+      data.errors.slice(0, MAX_ERRORS_SHOWN).forEach((e) => lines.push(`  • ${escapeHtml(e)}`));
     }
 
     lines.push("");
