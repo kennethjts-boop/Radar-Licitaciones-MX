@@ -14,6 +14,7 @@ const log = createModuleLogger("document-downloader");
 
 const MAX_SIZE_BYTES = 20 * 1024 * 1024; // 20 MB
 const DOWNLOAD_TIMEOUT_MS = 30_000;
+const HEAD_TIMEOUT_MS = 10_000;
 const RATE_LIMIT_MS = 2_000;
 const DOWNLOAD_DIR = "/tmp/radar-docs";
 const USER_AGENT =
@@ -64,7 +65,7 @@ export async function downloadDocument(doc: DocumentLink): Promise<DownloadResul
     // 2. HEAD request (best-effort) para verificar Content-Length antes de descargar
     const headResp = await axios
       .head(doc.fileUrl, {
-        timeout: 10_000,
+        timeout: HEAD_TIMEOUT_MS,
         headers: { "User-Agent": USER_AGENT },
       })
       .catch(() => null);
@@ -78,14 +79,14 @@ export async function downloadDocument(doc: DocumentLink): Promise<DownloadResul
     }
 
     // 3. Descargar archivo completo
-    const response = await axios.get<Buffer>(doc.fileUrl, {
+    const response = await axios.get<ArrayBuffer>(doc.fileUrl, {
       responseType: "arraybuffer",
       timeout: DOWNLOAD_TIMEOUT_MS,
       headers: { "User-Agent": USER_AGENT },
       maxRedirects: 5,
     });
 
-    const buffer = Buffer.from(response.data as unknown as ArrayBuffer);
+    const buffer = Buffer.from(response.data);
 
     // 4. Verificar tamaño real
     if (buffer.length > MAX_SIZE_BYTES) {
@@ -95,6 +96,8 @@ export async function downloadDocument(doc: DocumentLink): Promise<DownloadResul
     // 5. SHA256 + dedup
     const sha256Hash = createHash("sha256").update(buffer).digest("hex");
     const localPath = `${DOWNLOAD_DIR}/${sha256Hash}.${doc.fileType}`;
+
+    ensureDownloadDir();
 
     if (fs.existsSync(localPath)) {
       return {
@@ -107,7 +110,6 @@ export async function downloadDocument(doc: DocumentLink): Promise<DownloadResul
     }
 
     // 6. Escribir a disco
-    ensureDownloadDir();
     fs.writeFileSync(localPath, buffer);
 
     log.info(
@@ -140,7 +142,8 @@ export async function downloadDocuments(
     const result = await downloadDocument(doc);
     results.push(result);
 
-    // Rate limit entre descargas (omitir en tests)
+    // Rate limit between downloads — skipped in test environment to avoid slow tests.
+    // In production, enforces 2s between requests to avoid hammering the server.
     if (!isTest && docs.length > 1) {
       await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_MS));
     }

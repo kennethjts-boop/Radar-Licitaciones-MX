@@ -74,6 +74,8 @@ describe("downloadDocument", () => {
     const result = await downloadDocument(makeDocLink());
 
     expect(result.downloadStatus).toBe("skipped_duplicate");
+    expect(result.sha256Hash).toBeTruthy();
+    expect(result.localPath).toContain("/tmp/radar-docs/");
     expect(mockedFs.writeFileSync).not.toHaveBeenCalled();
   });
 
