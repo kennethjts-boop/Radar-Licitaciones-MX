@@ -10,6 +10,7 @@ const log = createModuleLogger("comprasmx-detail-collector");
 
 const RATE_LIMIT_MS = 3_000;
 const LOAD_TIMEOUT_MS = 15_000;
+const CONTEXT_BUFFER_MS = 5_000;
 
 // ── Tipos ──────────────────────────────────────────────────────────────────────
 
@@ -30,7 +31,7 @@ export interface DocumentLink {
   fileType: FileType;
   source: string;
   discoveredAt: string;
-  documentHint: DocumentHint | null;
+  documentHint: DocumentHint;
   isDownloadable: boolean;
 }
 
@@ -141,8 +142,9 @@ export async function collectComprasMxDetail(
         const linkHandles = await page.$$("a[href]");
 
         for (const handle of linkHandles) {
+          let href: string | null = null;
           try {
-            const href = await handle.getAttribute("href");
+            href = await handle.getAttribute("href");
             if (!href) continue;
 
             const title = ((await handle.innerText().catch(() => "")) || "").trim();
@@ -163,7 +165,7 @@ export async function collectComprasMxDetail(
               : new URL(href, input.sourceUrl).toString();
 
             const fileName =
-              fileUrl.split("?")[0].split("/").pop() ?? null;
+              fileUrl.split("?")[0].split("/").pop() || null;
 
             const documentHint = classifyDocumentHint(fileName, title);
 
@@ -177,14 +179,14 @@ export async function collectComprasMxDetail(
               documentHint,
               isDownloadable,
             });
-          } catch {
-            // link individual falla → continuar
+          } catch (linkErr) {
+            log.warn({ href, err: linkErr }, "⚠️ Error procesando link individual");
           }
         }
 
         return found;
       },
-      { timeoutMs: LOAD_TIMEOUT_MS + RATE_LIMIT_MS + 5_000 },
+      { timeoutMs: LOAD_TIMEOUT_MS + RATE_LIMIT_MS + CONTEXT_BUFFER_MS },
     );
 
     if (documents.length === 0) {
