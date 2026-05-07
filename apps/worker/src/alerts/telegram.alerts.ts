@@ -276,7 +276,9 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
 
   const lines: string[] = [
     `${emoji} <b>NUEVO MATCH — ${alert.radarName}</b>`,
-    `Score: <b>${score}%</b> (${alert.matchLevel.toUpperCase()})`,
+    `🎯 <b>Match territorial:</b> ${score}%`,
+    `💼 <b>Potencial comercial:</b> pendiente`,
+    `📄 <b>Calidad documental:</b> pendiente`,
     "",
     `📌 <b>${escapeHtml(p.title ?? "")}</b>`,
     "",
