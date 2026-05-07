@@ -16,6 +16,8 @@ import type {
   MatchLevel,
 } from "../types/procurement";
 import type { SummaryData } from '../modules/alert-filter';
+import type { DocumentLink } from "../collectors/comprasmx-detail/index";
+import type { DownloadResult } from "../services/document-downloader";
 
 const log = createModuleLogger("telegram-alerts");
 
@@ -478,4 +480,99 @@ export async function sendEnhancedDailySummary(
 ): Promise<number | null> {
   const message = formatEnhancedDailySummaryMessage(data);
   return sendTelegramMessage(message, 'HTML');
+}
+
+// ─── Alerta enriquecida (Fase D) ──────────────────────────────────────────────
+
+export interface EnrichedAlertData {
+  procedureNumber: string;
+  expedienteId: string | null;
+  title: string | null;
+  dependency: string | null;
+  scope: string;
+  documentsFound: DocumentLink[];
+  documentsDownloaded: DownloadResult[];
+  errors: string[];
+}
+
+/**
+ * Formatea el segundo mensaje Telegram con el resultado del enriquecimiento OSINT.
+ * Si supera 4096 chars, trunca. Si no hay documentos, envía mensaje corto.
+ */
+export function formatEnrichedAlert(data: EnrichedAlertData): string {
+  const procedureNumber = escapeHtml(data.procedureNumber);
+  const expedienteId = escapeHtml(data.expedienteId ?? "N/D");
+  const title = escapeHtml(data.title ?? "N/D");
+  const dependency = escapeHtml(data.dependency ?? "N/D");
+  const scope = escapeHtml(data.scope);
+
+  // Mensaje corto si no hay documentos
+  if (data.documentsFound.length === 0) {
+    const lines = [
+      "📁 <b>EXPEDIENTE ENRIQUECIDO</b>",
+      "",
+      `🔢 <b>Licitación:</b> ${procedureNumber}`,
+      `🏛 <b>Dependencia:</b> ${dependency}`,
+      `🌎 <b>Alcance:</b> ${scope}`,
+      "",
+      "📄 <b>Estado:</b> Documentos aún no disponibles públicamente. sin documentos públicos",
+    ];
+
+    if (data.errors.length > 0) {
+      lines.push("");
+      lines.push("⚠️ <b>Errores controlados:</b>");
+      data.errors.slice(0, 3).forEach((e) => lines.push(`  • ${escapeHtml(e)}`));
+    }
+
+    lines.push("");
+    lines.push("⚖️ <i>Análisis basado únicamente en información pública.</i>");
+    return truncateForTelegram(lines.join("\n"));
+  }
+
+  // Construir líneas de documentos
+  const downloadedUrls = new Set(
+    data.documentsDownloaded
+      .filter((r) => r.downloadStatus === "ok" || r.downloadStatus === "skipped_duplicate")
+      .map((r) => r.fileUrl),
+  );
+
+  const docLines = data.documentsFound.map((doc) => {
+    const icon = downloadedUrls.has(doc.fileUrl) ? "✅" : "⚠️";
+    return `  ${icon} ${escapeHtml(doc.documentTitle)}`;
+  });
+
+  const downloadedCount = data.documentsDownloaded.filter(
+    (r) => r.downloadStatus === "ok" || r.downloadStatus === "skipped_duplicate",
+  ).length;
+
+  const analysisStatus =
+    downloadedCount > 0
+      ? "Expediente revisado parcialmente."
+      : "Ningún documento pudo ser descargado.";
+
+  const lines: string[] = [
+    "📁 <b>EXPEDIENTE ENRIQUECIDO</b>",
+    "",
+    `🔢 <b>Licitación:</b> ${procedureNumber}`,
+    `📋 <b>Expediente:</b> ${expedienteId}`,
+    `📌 <b>Objeto:</b> ${title}`,
+    `🏛 <b>Dependencia:</b> ${dependency}`,
+    `🌎 <b>Alcance:</b> ${scope}`,
+    "",
+    `📄 <b>Documentos encontrados (${data.documentsFound.length}):</b>`,
+    ...docLines,
+    "",
+    `📊 <b>Estado del análisis:</b> ${escapeHtml(analysisStatus)}`,
+  ];
+
+  if (data.errors.length > 0) {
+    lines.push("");
+    lines.push("⚠️ <b>Errores controlados:</b>");
+    data.errors.slice(0, 3).forEach((e) => lines.push(`  • ${escapeHtml(e)}`));
+  }
+
+  lines.push("");
+  lines.push("⚖️ <i>Análisis basado únicamente en información pública.</i>");
+
+  return truncateForTelegram(lines.join("\n"));
 }
