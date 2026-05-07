@@ -10,11 +10,7 @@ import { createModuleLogger } from "../core/logger";
 import { nowISO, formatDuration } from "../core/time";
 import { collectComprasMxDetail } from "../collectors/comprasmx-detail/index";
 import { downloadDocuments } from "../services/document-downloader";
-import { sendTelegramMessage } from "../alerts/telegram.alerts";
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const formatEnrichedAlert: (...args: any[]) => string =
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  require("../alerts/telegram.alerts").formatEnrichedAlert ?? (() => "");
+import { sendTelegramMessage, formatEnrichedAlert } from "../alerts/telegram.alerts";
 
 const log = createModuleLogger("enrich-procurement-job");
 
@@ -55,6 +51,9 @@ export async function enrichProcurement(
       jobId,
       procurementId: input.procurementId,
       procedureNumber: input.procedureNumber,
+      expedienteId: input.expedienteId,
+      title: input.title,
+      dependency: input.dependency,
       scope: input.scope,
       radarKey: input.radarKey,
       sourceUrl: input.sourceUrl,
@@ -118,7 +117,7 @@ export async function enrichProcurement(
 
     // 5. Status final
     let status: EnrichmentResult["status"];
-    if (succeeded.length === downloadable.length && errors.length === 0) {
+    if (succeeded.length === downloadable.length) {
       status = "success";
     } else if (succeeded.length > 0) {
       status = "partial_success";
