@@ -57,6 +57,8 @@ import { sendCapufePeajeDeepReportToTelegram } from "../scripts/capufe-peaje-dee
 import { classifyAlert } from '../modules/alert-filter';
 import type { CycleMetrics } from '../modules/alert-filter';
 import { getConfig } from '../config/env';
+import { enrichProcurement } from "./enrich-procurement.job";
+import { filterProcurementScope } from "../services/procurement-scope-filter";
 
 const log = createModuleLogger("collect-job");
 
@@ -569,6 +571,29 @@ export async function runCollectJob(): Promise<void> {
                 await markAlertSent(alertId, msgId);
               } else {
                 await markAlertFailed(alertId);
+              }
+
+              // Lanzar enrichment de forma no bloqueante (Fase D)
+              const scopeResult = filterProcurementScope({
+                state: item.state,
+                municipality: item.municipality,
+                dependency: item.dependencyName,
+                status: item.status,
+                canonical_text: item.canonicalText,
+              });
+              if (scopeResult.allowed) {
+                enrichProcurement({
+                  procurementId: upsertResult.procurementId,
+                  procedureNumber: item.procedureNumber ?? item.licitationNumber,
+                  expedienteId: item.expedienteId,
+                  sourceUrl: item.sourceUrl,
+                  title: item.title,
+                  dependency: item.dependencyName,
+                  scope: scopeResult.scope as "MORELOS_ONLY" | "NATIONAL_CAPUFE_DESIERTA",
+                  radarKey: match.radarKey,
+                }).catch((err: unknown) =>
+                  log.warn({ err }, "Enrichment falló silenciosamente"),
+                );
               }
             } catch (matchErr) {
               log.error(
