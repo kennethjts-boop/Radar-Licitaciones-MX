@@ -151,4 +151,65 @@ describe("formatEnrichedAlert", () => {
     const msg = formatEnrichedAlert({ ...baseData });
     expect(msg).not.toContain("Antecedentes encontrados");
   });
+
+  it("muestra sección estimación con techo directo", () => {
+    const msg = formatEnrichedAlert({
+      ...baseData,
+      ceilingEstimate: {
+        directCeiling: 3000000,
+        estimatedMin: null, estimatedMax: null, average: null, median: null,
+        confidence: "alta",
+        evidence: [],
+        explanation: "Techo localizado directamente en documento oficial.",
+        legalWarning: "Estimación basada únicamente en información pública. No representa monto oficial salvo que el documento lo indique expresamente.",
+      },
+    });
+    expect(msg).toContain("📈");
+    expect(msg).toContain("Techo directo");
+    expect(msg).toContain("3,000,000");
+  });
+
+  it("muestra rango estimado cuando no hay techo directo", () => {
+    const msg = formatEnrichedAlert({
+      ...baseData,
+      ceilingEstimate: {
+        directCeiling: null,
+        estimatedMin: 1000000, estimatedMax: 2000000,
+        average: 1500000, median: 1500000,
+        confidence: "media",
+        evidence: [],
+        explanation: "Estimación basada en 2 contratos similares.",
+        legalWarning: "Estimación basada únicamente en información pública. No representa monto oficial salvo que el documento lo indique expresamente.",
+      },
+    });
+    expect(msg).toContain("Rango estimado");
+    expect(msg).toContain("Confianza");
+    expect(msg).toContain("Media");
+  });
+
+  it("muestra contratos similares cuando similarContracts tiene entradas", () => {
+    const msg = formatEnrichedAlert({
+      ...baseData,
+      similarContracts: [{
+        procedureId: "LP-001",
+        source: "compranet-historico",
+        title: "Mantenimiento vial 2023",
+        similarityScore: 0.9,
+        reason: "similitud textual",
+        awardedAmount: 1500000,
+        supplier: "Empresa SA",
+        year: 2023,
+        evidenceUrl: null,
+      }],
+    });
+    expect(msg).toContain("🔗");
+    expect(msg).toContain("Contratos similares");
+    expect(msg).toContain("Mantenimiento vial 2023");
+  });
+
+  it("no muestra sección estimación si ceilingEstimate es undefined", () => {
+    const msg = formatEnrichedAlert({ ...baseData });
+    expect(msg).not.toContain("Estimación presupuestal");
+    expect(msg).not.toContain("Contratos similares");
+  });
 });

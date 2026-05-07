@@ -13,6 +13,8 @@ jest.mock("../../services/budget-signal-extractor");
 jest.mock("../../collectors/compranet-historico/index");
 jest.mock("../../collectors/pnt-sipot/index");
 jest.mock("../../collectors/contrataciones-abiertas/index");
+jest.mock("../../services/procurement-similarity-engine");
+jest.mock("../../services/budget-ceiling-engine");
 
 import { collectComprasMxDetail } from "../../collectors/comprasmx-detail/index";
 import { downloadDocuments } from "../../services/document-downloader";
@@ -33,6 +35,12 @@ import { fetchContratacionesAbiertas } from "../../collectors/contrataciones-abi
 const mockedCompranet = fetchCompranetHistorico as jest.MockedFunction<typeof fetchCompranetHistorico>;
 const mockedSipot = fetchPntSipot as jest.MockedFunction<typeof fetchPntSipot>;
 const mockedOcds = fetchContratacionesAbiertas as jest.MockedFunction<typeof fetchContratacionesAbiertas>;
+
+import { findSimilarProcurements } from "../../services/procurement-similarity-engine";
+import { estimateBudgetCeiling } from "../../services/budget-ceiling-engine";
+
+const mockedSimilarity = findSimilarProcurements as jest.MockedFunction<typeof findSimilarProcurements>;
+const mockedCeiling = estimateBudgetCeiling as jest.MockedFunction<typeof estimateBudgetCeiling>;
 
 const baseInput: EnrichmentInput = {
   procurementId: "proc-001",
@@ -91,6 +99,12 @@ describe("enrichProcurement", () => {
     mockedCompranet.mockResolvedValue({ source: "compranet-historico", query: {} as any, contracts: [], totalFound: 0, status: "ok", errors: [] });
     mockedSipot.mockResolvedValue({ source: "pnt-sipot", query: {} as any, contracts: [], status: "ok", errors: [] });
     mockedOcds.mockResolvedValue({ source: "contrataciones-abiertas", contracts: [], status: "ok", errors: [] });
+    mockedSimilarity.mockReturnValue({ similarProcedures: [], totalFound: 0, scopeApplied: "MORELOS_ONLY" });
+    mockedCeiling.mockReturnValue({
+      directCeiling: null, estimatedMin: null, estimatedMax: null,
+      average: null, median: null, confidence: "baja" as const,
+      evidence: [], explanation: "Sin evidencia.", legalWarning: "Info pública.",
+    });
   });
 
   it("sourceUrl null → skipped_no_documents, sin llamar a collector", async () => {
@@ -224,6 +238,31 @@ describe("enrichProcurement", () => {
     mockedCompranet.mockRejectedValue(new Error("CompraNet caído"));
     mockedSipot.mockRejectedValue(new Error("SIPOT caído"));
     mockedOcds.mockRejectedValue(new Error("OCDS caído"));
+
+    await expect(enrichProcurement(baseInput)).resolves.toBeDefined();
+  });
+
+  it("llama a similarity engine y ceiling engine cuando hay documentos", async () => {
+    const url = "https://example.com/bases.pdf";
+    mockedCollect.mockResolvedValue(makeCollectorResult([{ title: "Bases", fileUrl: url }]));
+    mockedDownload.mockResolvedValue(makeDownloadResults([url], ["ok"]));
+    mockedParsePdf.mockResolvedValue({ text: "Mantenimiento vial Morelos.", parseStatus: "ok", errors: [] });
+    mockedExtractBudget.mockReturnValue({ signals: [], hasSignals: false, highestAmount: null });
+
+    const result = await enrichProcurement(baseInput);
+
+    expect(result.status).toBe("success");
+    expect(mockedSimilarity).toHaveBeenCalled();
+    expect(mockedCeiling).toHaveBeenCalled();
+  });
+
+  it("no falla si similarity engine lanza error", async () => {
+    const url = "https://example.com/bases.pdf";
+    mockedCollect.mockResolvedValue(makeCollectorResult([{ title: "Bases", fileUrl: url }]));
+    mockedDownload.mockResolvedValue(makeDownloadResults([url], ["ok"]));
+    mockedParsePdf.mockResolvedValue({ text: "", parseStatus: "empty", errors: [] });
+    mockedExtractBudget.mockReturnValue({ signals: [], hasSignals: false, highestAmount: null });
+    mockedSimilarity.mockImplementation(() => { throw new Error("similarity crashed"); });
 
     await expect(enrichProcurement(baseInput)).resolves.toBeDefined();
   });

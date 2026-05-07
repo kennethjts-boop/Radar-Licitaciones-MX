@@ -18,6 +18,8 @@ import type {
 import type { SummaryData } from '../modules/alert-filter';
 import type { DocumentLink } from "../collectors/comprasmx-detail/index";
 import type { DownloadResult } from "../services/document-downloader";
+import type { CeilingResult } from "../services/budget-ceiling-engine";
+import type { SimilarProcedure } from "../services/procurement-similarity-engine";
 
 const log = createModuleLogger("telegram-alerts");
 
@@ -500,6 +502,8 @@ export interface EnrichedAlertData {
     sipotCount: number;
     ocdsCount: number;
   };
+  ceilingEstimate?: CeilingResult;
+  similarContracts?: SimilarProcedure[];
 }
 
 /**
@@ -552,6 +556,53 @@ export function formatEnrichedAlert(data: EnrichedAlertData): string {
         lines.push(`  • SIPOT/PNT: ${a.sipotCount} registros`);
         lines.push(`  • OCDS: ${a.ocdsCount} registros`);
       }
+    }
+
+    if (data.ceilingEstimate !== undefined) {
+      const ce = data.ceilingEstimate;
+      lines.push("");
+      lines.push("📈 <b>Estimación presupuestal:</b>");
+      if (ce.directCeiling !== null && ce.directCeiling > 0) {
+        lines.push(`  💰 Techo directo: ${formatCurrency(ce.directCeiling, "MXN")} (Alta confianza)`);
+      } else if (ce.estimatedMin !== null && ce.estimatedMax !== null) {
+        lines.push(`  📊 Rango estimado: ${formatCurrency(ce.estimatedMin, "MXN")} — ${formatCurrency(ce.estimatedMax, "MXN")}`);
+        if (ce.average !== null) {
+          lines.push(`  📊 Promedio histórico: ${formatCurrency(ce.average, "MXN")}`);
+        }
+        const confLabel = ce.confidence === "alta" ? "Alta" : ce.confidence === "media" ? "Media" : "Baja";
+        lines.push(`  🎯 Confianza: ${confLabel}`);
+      } else {
+        lines.push("  Sin estimación disponible.");
+      }
+    }
+
+    if (data.similarContracts !== undefined) {
+      const sim = data.similarContracts;
+      lines.push("");
+      lines.push(`🔗 <b>Contratos similares (${sim.length}):</b>`);
+      if (sim.length === 0) {
+        lines.push("  Sin contratos similares encontrados.");
+      } else {
+        for (const s of sim.slice(0, 3)) {
+          const t = (s.title ?? "Sin título").slice(0, 60);
+          const amt =
+            s.awardedAmount !== null && s.awardedAmount > 0
+              ? formatCurrency(s.awardedAmount, "MXN")
+              : "N/D";
+          const yr = s.year !== null ? String(s.year) : "N/D";
+          lines.push(`  • ${escapeHtml(t)} — ${amt} (${yr}) [${s.source}]`);
+        }
+      }
+    }
+
+    if (data.ceilingEstimate !== undefined || data.similarContracts !== undefined) {
+      lines.push("");
+      lines.push(
+        `⚖️ <i>${escapeHtml(
+          data.ceilingEstimate?.legalWarning ??
+            "Estimación basada únicamente en información pública.",
+        )}</i>`,
+      );
     }
 
     if (data.errors.length > 0) {
@@ -626,6 +677,53 @@ export function formatEnrichedAlert(data: EnrichedAlertData): string {
       lines.push(`  • SIPOT/PNT: ${a.sipotCount} registros`);
       lines.push(`  • OCDS: ${a.ocdsCount} registros`);
     }
+  }
+
+  if (data.ceilingEstimate !== undefined) {
+    const ce = data.ceilingEstimate;
+    lines.push("");
+    lines.push("📈 <b>Estimación presupuestal:</b>");
+    if (ce.directCeiling !== null && ce.directCeiling > 0) {
+      lines.push(`  💰 Techo directo: ${formatCurrency(ce.directCeiling, "MXN")} (Alta confianza)`);
+    } else if (ce.estimatedMin !== null && ce.estimatedMax !== null) {
+      lines.push(`  📊 Rango estimado: ${formatCurrency(ce.estimatedMin, "MXN")} — ${formatCurrency(ce.estimatedMax, "MXN")}`);
+      if (ce.average !== null) {
+        lines.push(`  📊 Promedio histórico: ${formatCurrency(ce.average, "MXN")}`);
+      }
+      const confLabel = ce.confidence === "alta" ? "Alta" : ce.confidence === "media" ? "Media" : "Baja";
+      lines.push(`  🎯 Confianza: ${confLabel}`);
+    } else {
+      lines.push("  Sin estimación disponible.");
+    }
+  }
+
+  if (data.similarContracts !== undefined) {
+    const sim = data.similarContracts;
+    lines.push("");
+    lines.push(`🔗 <b>Contratos similares (${sim.length}):</b>`);
+    if (sim.length === 0) {
+      lines.push("  Sin contratos similares encontrados.");
+    } else {
+      for (const s of sim.slice(0, 3)) {
+        const t = (s.title ?? "Sin título").slice(0, 60);
+        const amt =
+          s.awardedAmount !== null && s.awardedAmount > 0
+            ? formatCurrency(s.awardedAmount, "MXN")
+            : "N/D";
+        const yr = s.year !== null ? String(s.year) : "N/D";
+        lines.push(`  • ${escapeHtml(t)} — ${amt} (${yr}) [${s.source}]`);
+      }
+    }
+  }
+
+  if (data.ceilingEstimate !== undefined || data.similarContracts !== undefined) {
+    lines.push("");
+    lines.push(
+      `⚖️ <i>${escapeHtml(
+        data.ceilingEstimate?.legalWarning ??
+          "Estimación basada únicamente en información pública.",
+      )}</i>`,
+    );
   }
 
   if (data.errors.length > 0) {

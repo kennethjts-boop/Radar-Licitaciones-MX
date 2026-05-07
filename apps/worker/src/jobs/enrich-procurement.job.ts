@@ -20,6 +20,8 @@ import type { BudgetSignalResult } from "../services/budget-signal-extractor";
 import { fetchCompranetHistorico } from "../collectors/compranet-historico/index";
 import { fetchPntSipot } from "../collectors/pnt-sipot/index";
 import { fetchContratacionesAbiertas } from "../collectors/contrataciones-abiertas/index";
+import { findSimilarProcurements, type SimilarityResult } from "../services/procurement-similarity-engine";
+import { estimateBudgetCeiling, type CeilingResult } from "../services/budget-ceiling-engine";
 
 const log = createModuleLogger("enrich-procurement-job");
 
@@ -217,6 +219,58 @@ export async function enrichProcurement(
       "📊 Antecedentes encontrados",
     );
 
+    // 5d. Similitud contractual (G1) — falla silenciosamente
+    let similarityResult: SimilarityResult = {
+      similarProcedures: [],
+      totalFound: 0,
+      scopeApplied: input.scope,
+    };
+    try {
+      similarityResult = findSimilarProcurements({
+        title: input.title,
+        dependency: input.dependency,
+        state: null,
+        contractType: null,
+        keywords: titleKeywords,
+        scope: input.scope,
+        historico: historicoContracts,
+        sipot: sipotContracts,
+        ocds: ocdsContracts,
+      });
+      log.info(
+        { jobId, totalSimilares: similarityResult.totalFound },
+        "🔗 Contratos similares encontrados",
+      );
+    } catch (simErr) {
+      log.warn({ err: simErr, jobId }, "⚠️ Similarity engine no disponible");
+    }
+
+    // 5e. Estimación de techo presupuestal (G2) — falla silenciosamente
+    let ceilingResult: CeilingResult = {
+      directCeiling: null,
+      estimatedMin: null,
+      estimatedMax: null,
+      average: null,
+      median: null,
+      confidence: "baja",
+      evidence: [],
+      explanation: "Sin estimación disponible.",
+      legalWarning:
+        "Estimación basada únicamente en información pública. No representa monto oficial salvo que el documento lo indique expresamente.",
+    };
+    try {
+      ceilingResult = estimateBudgetCeiling({
+        directCeilingFound: budgetSignal.hasSignals,
+        directCeilingAmount: budgetSignal.highestAmount,
+        budgetSignals: budgetSignal.signals,
+        similarProcedures: similarityResult.similarProcedures,
+        title: input.title,
+        dependency: input.dependency,
+      });
+    } catch (ceilErr) {
+      log.warn({ err: ceilErr, jobId }, "⚠️ Ceiling engine no disponible");
+    }
+
     log.info(
       {
         jobId,
@@ -240,6 +294,8 @@ export async function enrichProcurement(
       errors,
       budgetSignal: { hasSignals: budgetSignal.hasSignals, highestAmount: budgetSignal.highestAmount },
       antecedentes,
+      ceilingEstimate: ceilingResult,
+      similarContracts: similarityResult.similarProcedures.slice(0, 3),
     });
 
     sendTelegramMessage(enrichedMessage, "HTML").catch((err: unknown) => {
