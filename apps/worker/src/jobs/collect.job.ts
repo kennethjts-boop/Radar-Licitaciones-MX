@@ -668,7 +668,7 @@ export async function runCollectJob(): Promise<void> {
       })();
 
       const durationMs = Date.now() - cycleStart;
-      healthTracker.recordCycle(durationMs, totalMatches);
+      healthTracker.recordCycle(durationMs, totalMatches, !errorMessage);
 
       log.info(cycleMetrics, '[alert-filter] métricas del ciclo');
       log.info(

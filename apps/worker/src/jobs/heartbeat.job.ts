@@ -93,7 +93,7 @@ export async function runHeartbeatJob(): Promise<void> {
       const durationMs = Date.now() - cycleStart;
 
       // Actualizar healthcheck en memoria
-      healthTracker.recordCycle(durationMs, 0);
+      healthTracker.recordCycle(durationMs, 0, !errorMessage);
 
       // Registrar en system_state y collect_runs real
       if (dbReachable) {

@@ -23,6 +23,7 @@ import { runCollectJob, runRecheckJob } from "./collect.job";
 import { runDailySummaryJob } from "./daily-summary.job";
 import { comprasMxCB } from "../core/circuit-breaker";
 import { sendTelegramMessage } from "../alerts/telegram.alerts";
+import { healthTracker } from "../core/healthcheck";
 
 const log = createModuleLogger("scheduler");
 
@@ -62,6 +63,8 @@ async function scheduledCollect(baseIntervalMs: number): Promise<void> {
 }
 
 export function startScheduler(): void {
+  healthTracker.setSchedulerStatus("active");
+
   const config = getConfig();
   const intervalMinutes = config.COLLECT_INTERVAL_MINUTES;
   const baseIntervalMs = intervalMinutes * 60 * 1000;

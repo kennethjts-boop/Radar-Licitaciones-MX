@@ -36,8 +36,10 @@ export interface HealthStatus {
   dbSchemaValid: boolean;
   schemaDetail: SchemaHealth;
   lastCycleAt: string | null;
+  lastCycleStatus: "success" | "error" | "none";
   lastCycleDurationMs: number | null;
   lastCycleMatches: number | null;
+  schedulerStatus: "active" | "starting" | "stopped";
   uptimeMs: number;
   runtimeDbMode: "supabase-rest";
   stalled: boolean;
@@ -51,8 +53,12 @@ class HealthTracker {
 
   // Ciclo
   private lastCycleAt: string | null = null;
+  private lastCycleStatus: "success" | "error" | "none" = "none";
   private lastCycleDurationMs: number | null = null;
   private lastCycleMatches: number | null = null;
+
+  // Scheduler
+  private schedulerStatus: "active" | "starting" | "stopped" = "starting";
 
   // Estado de servicios
   private dbHealth: ServiceHealth = "unknown";
@@ -109,11 +115,16 @@ class HealthTracker {
 
   // ── Registro de ciclos ──────────────────────────────────────────────────────
 
-  recordCycle(durationMs: number, matches: number): void {
+  setSchedulerStatus(status: "active" | "starting" | "stopped"): void {
+    this.schedulerStatus = status;
+  }
+
+  recordCycle(durationMs: number, matches: number, success = true): void {
     this.lastCycleAt = nowISO();
+    this.lastCycleStatus = success ? "success" : "error";
     this.lastCycleDurationMs = durationMs;
     this.lastCycleMatches = matches;
-    log.info({ durationMs, matches }, "Ciclo completado");
+    log.info({ durationMs, matches, success }, "Ciclo completado");
   }
 
   // ── Estado completo ─────────────────────────────────────────────────────────
@@ -144,6 +155,8 @@ class HealthTracker {
 
     const anyDegraded =
       stalled ||
+      this.schedulerStatus === "stopped" ||
+      this.lastCycleStatus === "error" ||
       Object.values(services).some((s) => s === "degraded") ||
       Object.values(services).some((s) => s === "unknown");
 
@@ -161,8 +174,10 @@ class HealthTracker {
       dbSchemaValid: this.dbSchemaValid,
       schemaDetail: this.schemaDetail,
       lastCycleAt: this.lastCycleAt,
+      lastCycleStatus: this.lastCycleStatus,
       lastCycleDurationMs: this.lastCycleDurationMs,
       lastCycleMatches: this.lastCycleMatches,
+      schedulerStatus: this.schedulerStatus,
       uptimeMs,
       runtimeDbMode: "supabase-rest",
       stalled,

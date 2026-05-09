@@ -111,9 +111,18 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
 
       const nextRun = nextRunEstimate(config.COLLECT_INTERVAL_MINUTES);
       const bootTime = bootState?.bootedAt ? formatMexicoDate(String(bootState.bootedAt)) : "N/D";
+      const lastRunFormatted = lastRunState?.startedAt
+        ? formatMexicoDate(String(lastRunState.startedAt))
+        : "Sin ejecución registrada todavía";
+      const lastRunDisplay = lastRunFormatted === "Fecha inválida"
+        ? "Sin ejecución registrada todavía"
+        : lastRunFormatted;
 
       const stalledLine = status.stalled
         ? [`⚠️ <b>SIN CICLOS: +${Math.floor((status.stalledForMs ?? 0) / 60_000)} min — revisar scheduler</b>`]
+        : [];
+      const lastCycleErrorLine = status.lastCycleStatus === "error"
+        ? ["⚠️ <b>Último ciclo terminó con error — revisar /debug_resumen</b>"]
         : [];
 
       const lines = [
@@ -124,10 +133,11 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `🧱 Schema: <b>${status.dbSchemaValid ? "Válido" : "Inválido"}</b>`,
         `${tgIcon} Telegram: <b>${serviceLabel(status.services.telegram)}</b>`,
         ...stalledLine,
+        ...lastCycleErrorLine,
         "",
-        `⏰ Última: <b>${lastRunState?.startedAt ? formatMexicoDate(String(lastRunState.startedAt)) : "Sin ciclos"}</b>`,
+        `⏰ Última: <b>${lastRunDisplay}</b>`,
         `🔜 Próxima: ~<b>${nextRun} MX</b>`,
-        `📡 Scheduler: <b>${schedulerState?.status === "active" ? "✅ Activo" : "⏳ Iniciando"}</b>`,
+        `📡 Scheduler: <b>${status.schedulerStatus === "active" || schedulerState?.status === "active" ? "✅ Activo" : "⏳ Iniciando"}</b>`,
         `🛰 Radares: <b>${radars.length} activos</b>`,
         "",
         `⏱ Uptime: <b>${formatDuration(status.uptimeMs)}</b>`,
