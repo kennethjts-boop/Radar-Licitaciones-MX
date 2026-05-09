@@ -263,6 +263,8 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
   const p = alert.procurement;
   const emoji = matchLevelEmoji(alert.matchLevel);
   const score = (alert.matchScore * 100).toFixed(0);
+  const opportunityScore = (alert.opportunityScore * 100).toFixed(0);
+  const documentScore = (alert.documentScore * 100).toFixed(0);
 
   // Fechas reales del API (vienen en ISO "2026-04-17T10:30:00")
   const raw = p.rawJson as Record<string, unknown>;
@@ -281,8 +283,8 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
   const lines: string[] = [
     `${emoji} <b>NUEVO MATCH — ${alert.radarName}</b>`,
     `🎯 <b>Match territorial:</b> ${score}%`,
-    `💼 <b>Potencial comercial:</b> pendiente`,
-    `📄 <b>Calidad documental:</b> pendiente`,
+    `💼 <b>Potencial comercial:</b> ${opportunityScore}%`,
+    `📄 <b>Calidad documental:</b> ${documentScore}%`,
     "",
     `📌 <b>${escapeHtml(p.title ?? "")}</b>`,
     "",
@@ -501,6 +503,7 @@ export interface EnrichedAlertData {
     compranetHighestAmount: number | null;
     sipotCount: number;
     ocdsCount: number;
+    dofCount?: number;
   };
   ceilingEstimate?: CeilingResult;
   similarContracts?: SimilarProcedure[];
@@ -542,7 +545,7 @@ export function formatEnrichedAlert(data: EnrichedAlertData): string {
 
     if (data.antecedentes !== undefined) {
       const a = data.antecedentes;
-      const total = a.compranetCount + a.sipotCount + a.ocdsCount;
+      const total = a.compranetCount + a.sipotCount + a.ocdsCount + (a.dofCount ?? 0);
       lines.push("");
       if (total === 0) {
         lines.push("🔎 <b>Antecedentes:</b> Sin antecedentes directos en fuentes públicas consultadas.");
@@ -555,6 +558,7 @@ export function formatEnrichedAlert(data: EnrichedAlertData): string {
         lines.push(`  • CompraNet: ${a.compranetCount} contratos${compranetSuffix}`);
         lines.push(`  • SIPOT/PNT: ${a.sipotCount} registros`);
         lines.push(`  • OCDS: ${a.ocdsCount} registros`);
+        lines.push(`  • DOF/SIDOF: ${a.dofCount ?? 0} publicaciones`);
       }
     }
 
@@ -663,7 +667,7 @@ export function formatEnrichedAlert(data: EnrichedAlertData): string {
 
   if (data.antecedentes !== undefined) {
     const a = data.antecedentes;
-    const total = a.compranetCount + a.sipotCount + a.ocdsCount;
+    const total = a.compranetCount + a.sipotCount + a.ocdsCount + (a.dofCount ?? 0);
     lines.push("");
     if (total === 0) {
       lines.push("🔎 <b>Antecedentes:</b> Sin antecedentes directos en fuentes públicas consultadas.");
@@ -676,6 +680,7 @@ export function formatEnrichedAlert(data: EnrichedAlertData): string {
       lines.push(`  • CompraNet: ${a.compranetCount} contratos${compranetSuffix}`);
       lines.push(`  • SIPOT/PNT: ${a.sipotCount} registros`);
       lines.push(`  • OCDS: ${a.ocdsCount} registros`);
+      lines.push(`  • DOF/SIDOF: ${a.dofCount ?? 0} publicaciones`);
     }
   }
 

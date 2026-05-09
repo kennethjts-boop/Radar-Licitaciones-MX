@@ -27,6 +27,25 @@ const TIPOS_VALIDOS = new Set<TipoContratacion>([
 // ── Tipos de enriquecimiento ──────────────────────────────────────────────────
 
 type EnrichmentStore = {
+  documents?: Array<{
+    title: string | null;
+    fileUrl: string;
+    fileType: string;
+    downloadStatus: string;
+    classification?: { documentType: string; confidence: string } | null;
+    parseStatus?: string | null;
+  }> | null;
+  requirements?: Array<{
+    category: string;
+    text: string;
+    confidence: string;
+    matchedKeywords?: string[];
+  }> | null;
+  budgetSignals?: Array<{
+    rawText: string;
+    amount: number;
+    confidence: string;
+  }> | null;
   ceiling?: {
     directCeiling: number | null;
     estimatedMin: number | null;
@@ -44,11 +63,20 @@ type EnrichmentStore = {
     awardedAmount: number | null;
     year: number | null;
   }> | null;
+  dofPublications?: Array<{
+    title: string | null;
+    dependency: string | null;
+    publicationDate: string | null;
+    dofUrl: string | null;
+    procedureNumber: string | null;
+  }> | null;
 };
 
 export function mapEnrichmentToSections(enrichmentData: unknown): {
   techo: unknown;
   antecedentes: unknown;
+  documentos: unknown;
+  requisitos: unknown;
 } {
   if (
     enrichmentData === null ||
@@ -58,6 +86,8 @@ export function mapEnrichmentToSections(enrichmentData: unknown): {
     return {
       techo: { disponible: false, nota: "Enriquecimiento pendiente" },
       antecedentes: { disponible: false, nota: "Enriquecimiento pendiente" },
+      documentos: { disponible: false, nota: "Enriquecimiento pendiente" },
+      requisitos: { disponible: false, nota: "Enriquecimiento pendiente" },
     };
   }
 
@@ -77,16 +107,43 @@ export function mapEnrichmentToSections(enrichmentData: unknown): {
         }
       : { disponible: false, nota: "Enriquecimiento pendiente" };
 
+  const similar = Array.isArray(ed.similar) ? ed.similar : null;
+  const dofPublications = Array.isArray(ed.dofPublications) ? ed.dofPublications : null;
   const antecedentes =
-    Array.isArray(ed.similar)
+    similar !== null || dofPublications !== null
       ? {
           disponible: true,
-          totalSimilares: ed.similar.length,
-          contratos: ed.similar.slice(0, 5),
+          totalSimilares: similar?.length ?? 0,
+          totalDofPublicaciones: dofPublications?.length ?? 0,
+          contratos: similar?.slice(0, 5) ?? [],
+          dof_publicaciones: dofPublications?.slice(0, 5) ?? [],
         }
       : { disponible: false, nota: "Enriquecimiento pendiente" };
 
-  return { techo, antecedentes };
+  const documentos =
+    Array.isArray(ed.documents)
+      ? {
+          disponible: true,
+          total: ed.documents.length,
+          items: ed.documents.slice(0, 10),
+        }
+      : { disponible: false, nota: "Enriquecimiento pendiente" };
+
+  const requisitos =
+    Array.isArray(ed.requirements)
+      ? {
+          disponible: true,
+          total: ed.requirements.length,
+          por_categoria: {
+            tecnico: ed.requirements.filter((r) => r.category === "tecnico").length,
+            economico: ed.requirements.filter((r) => r.category === "economico").length,
+            legal: ed.requirements.filter((r) => r.category === "legal").length,
+          },
+          items: ed.requirements.slice(0, 10),
+        }
+      : { disponible: false, nota: "Enriquecimiento pendiente" };
+
+  return { techo, antecedentes, documentos, requisitos };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -256,9 +313,15 @@ async function handleGetFicha(
     "id", "title", "dependency_name", "buying_unit", "licitation_number",
     "expediente_id", "procedure_number", "status", "amount", "currency",
     "publication_date", "opening_date", "award_date", "state", "source_url",
+    "scope", "enrichment_data", "last_enriched_at",
+  ].join(", ");
+  const FALLBACK_FICHA_SELECT = [
+    "id", "title", "dependency_name", "buying_unit", "licitation_number",
+    "expediente_id", "procedure_number", "status", "amount", "currency",
+    "publication_date", "opening_date", "award_date", "state", "source_url",
   ].join(", ");
 
-  const { data: raw, error } = await db
+  let queryResult = await db
     .from("procurements")
     .select(FICHA_SELECT)
     .or(
@@ -270,7 +333,26 @@ async function handleGetFicha(
     .limit(1)
     .maybeSingle();
 
-  if (error) throw error;
+  if (queryResult.error) {
+    log.warn(
+      { err: queryResult.error },
+      "Ficha sin columnas de enrichment; reintentando select básico",
+    );
+    queryResult = await db
+      .from("procurements")
+      .select(FALLBACK_FICHA_SELECT)
+      .or(
+        `external_id.ilike.%${id}%,` +
+        `licitation_number.ilike.%${id}%,` +
+        `procedure_number.ilike.%${id}%`,
+      )
+      .order("last_seen_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+  }
+
+  if (queryResult.error) throw queryResult.error;
+  const raw = queryResult.data;
 
   if (!raw) {
     sendJson(res, 404, { error: "No encontrada" });
@@ -280,12 +362,8 @@ async function handleGetFicha(
   // Supabase no infiere tipos en selects dinámicos; cast explícito.
   const data = raw as unknown as Record<string, unknown>;
 
-  // enrichment_data is intentionally NOT in FICHA_SELECT — the column does not
-  // exist in the DB schema yet. Reading it here returns undefined, and
-  // mapEnrichmentToSections() returns the "Enriquecimiento pendiente" fallback.
-  // Add "enrichment_data" to FICHA_SELECT once the column is migrated.
   const enrichmentRaw = data["enrichment_data"] ?? null;
-  const { techo, antecedentes } = mapEnrichmentToSections(enrichmentRaw);
+  const { techo, antecedentes, documentos, requisitos } = mapEnrichmentToSections(enrichmentRaw);
 
   sendJson(res, 200, {
     ficha: {
@@ -304,9 +382,13 @@ async function handleGetFicha(
       fecha_limite: data["award_date"],
       entidad_federativa: data["state"],
       url_convocatoria: data["source_url"],
+      scope: data["scope"] ?? null,
+      ultimo_enriquecimiento: data["last_enriched_at"] ?? null,
     },
     techo,
     antecedentes,
+    documentos,
+    requisitos,
     riesgo: { disponible: false, nota: "Módulo en desarrollo" },
     generado_en: new Date().toISOString(),
   });
@@ -325,17 +407,34 @@ async function handleGetRecientes(
 
   // Fetch recent matches with embedded radar key and procurement data.
   // Fetch extra rows to absorb deduplication by procurement_id.
-  const { data: rows, error } = await db
+  let recentResult = await db
     .from("matches")
     .select(
-      "match_score, " +
+      "match_score, opportunity_score, document_score, " +
       "radars(key), " +
       "procurements!inner(id, title, dependency_name, status, amount, publication_date)",
     )
     .order("created_at", { ascending: false })
     .limit(Math.min(200, clampedLimit * 6));
 
-  if (error) throw error;
+  if (recentResult.error) {
+    log.warn(
+      { err: recentResult.error },
+      "Recientes sin columnas de score separado; reintentando select básico",
+    );
+    recentResult = await db
+      .from("matches")
+      .select(
+        "match_score, " +
+        "radars(key), " +
+        "procurements!inner(id, title, dependency_name, status, amount, publication_date)",
+      )
+      .order("created_at", { ascending: false })
+      .limit(Math.min(200, clampedLimit * 6));
+  }
+
+  if (recentResult.error) throw recentResult.error;
+  const rows = recentResult.data;
 
   const seen = new Set<string>();
   const licitaciones: unknown[] = [];
@@ -366,6 +465,9 @@ async function handleGetRecientes(
       fecha_publicacion: proc["publication_date"] ?? null,
       radar_key: radarKey,
       score: (row["match_score"] as number | null) ?? null,
+      match_score: (row["match_score"] as number | null) ?? null,
+      opportunity_score: (row["opportunity_score"] as number | null) ?? null,
+      document_score: (row["document_score"] as number | null) ?? null,
     });
 
     if (licitaciones.length >= clampedLimit) break;

@@ -57,6 +57,8 @@ export async function enrichMatch(
     radarName: radar?.name ?? match.radarKey,
     matchLevel: match.matchLevel,
     matchScore: match.matchScore,
+    opportunityScore: match.opportunityScore,
+    documentScore: match.documentScore,
     procurement,
     matchedTerms: match.matchedTerms,
     explanation: match.explanation,

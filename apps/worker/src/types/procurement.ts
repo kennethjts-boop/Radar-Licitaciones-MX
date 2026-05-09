@@ -106,6 +106,8 @@ export interface MatchResult {
   radarKey: string;
   procurementId: string; // external_id o id interno
   matchScore: number; // 0.0 – 1.0
+  opportunityScore: number; // 0.0 – 1.0, potencial comercial operativo
+  documentScore: number; // 0.0 – 1.0, calidad/disponibilidad documental
   matchLevel: MatchLevel;
   matchedTerms: string[];
   excludedTerms: string[];
@@ -138,6 +140,8 @@ export interface EnrichedAlert {
   radarName: string;
   matchLevel: MatchLevel;
   matchScore: number;
+  opportunityScore: number;
+  documentScore: number;
   procurement: NormalizedProcurement;
   matchedTerms: string[];
   explanation: string;

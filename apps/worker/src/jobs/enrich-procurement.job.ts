@@ -15,13 +15,18 @@ import { parsePdf } from "../parsers/pdf-parser";
 import { parseDocx } from "../parsers/docx-parser";
 import { parseXlsx } from "../parsers/xlsx-parser";
 import { parseZip } from "../parsers/zip-parser";
+import type { ParseResult } from "../parsers/types";
+import { classifyDocument } from "../services/document-classifier";
+import { extractRequirements } from "../services/requirement-extractor";
 import { extractBudgetSignals } from "../services/budget-signal-extractor";
 import type { BudgetSignalResult } from "../services/budget-signal-extractor";
 import { fetchCompranetHistorico } from "../collectors/compranet-historico/index";
 import { fetchPntSipot } from "../collectors/pnt-sipot/index";
 import { fetchContratacionesAbiertas } from "../collectors/contrataciones-abiertas/index";
+import { fetchDofSidof } from "../collectors/dof-sidof/index";
 import { findSimilarProcurements, type SimilarityResult } from "../services/procurement-similarity-engine";
 import { estimateBudgetCeiling, type CeilingResult } from "../services/budget-ceiling-engine";
+import { persistEnrichmentResult, type ParsedEnrichmentDocument, type RequirementRecord, type BudgetSignalRecord } from "../storage/enrichment.repo";
 
 const log = createModuleLogger("enrich-procurement-job");
 
@@ -64,18 +69,22 @@ function extractKeywords(title: string): string[] {
     .slice(0, 5);
 }
 
-async function parseDocumentFile(localPath: string, fileType: string): Promise<string> {
-  if (fileType === "pdf") return (await parsePdf(localPath)).text;
-  if (fileType === "docx") return (await parseDocx(localPath)).text;
-  if (fileType === "xlsx") return (await parseXlsx(localPath)).text;
+async function parseDocumentFile(localPath: string, fileType: string): Promise<ParseResult> {
+  if (fileType === "pdf") return parsePdf(localPath);
+  if (fileType === "docx") return parseDocx(localPath);
+  if (fileType === "xlsx") return parseXlsx(localPath);
   if (fileType === "zip") {
     const r = await parseZip(localPath);
-    return r.files
-      .filter((f) => f.parseResult !== null)
-      .map((f) => f.parseResult!.text)
-      .join("\n");
+    return {
+      text: r.files
+        .filter((f) => f.parseResult !== null)
+        .map((f) => f.parseResult!.text)
+        .join("\n"),
+      parseStatus: r.parseStatus === "partial" ? "ok" : r.parseStatus,
+      errors: r.errors,
+    };
   }
-  return "";
+  return { text: "", parseStatus: "empty", errors: [] };
 }
 
 // ── Función principal ──────────────────────────────────────────────────────────
@@ -85,6 +94,7 @@ export async function enrichProcurement(
 ): Promise<EnrichmentResult> {
   const jobId = uuidv4();
   const startedAt = Date.now();
+  const startedAtIso = nowISO();
   const errors: string[] = [];
 
   log.info(
@@ -115,6 +125,36 @@ export async function enrichProcurement(
   // 1. sourceUrl requerido
   if (!input.sourceUrl) {
     log.info({ jobId }, "⏩ skipped — sourceUrl nulo");
+    await persistEnrichmentResult({
+      jobId,
+      procurementId: input.procurementId,
+      radarKey: input.radarKey,
+      scope: input.scope,
+      status: "skipped_no_documents",
+      startedAt: startedAtIso,
+      finishedAt: nowISO(),
+      durationMs: Date.now() - startedAt,
+      documentsFound: 0,
+      documentsDownloaded: 0,
+      errors,
+      documents: [],
+      requirements: [],
+      budgetSignals: [],
+      similarProcedures: [],
+      dofPublications: [],
+      ceiling: {
+        directCeiling: null,
+        estimatedMin: null,
+        estimatedMax: null,
+        average: null,
+        median: null,
+        confidence: "baja",
+        evidence: [],
+        explanation: "Sin estimación disponible.",
+        legalWarning:
+          "Estimación basada únicamente en información pública. No representa monto oficial salvo que el documento lo indique expresamente.",
+      },
+    });
     return base;
   }
 
@@ -141,6 +181,36 @@ export async function enrichProcurement(
         { jobId, durationMs: formatDuration(Date.now() - startedAt) },
         "⏩ skipped — sin documentos",
       );
+      await persistEnrichmentResult({
+        jobId,
+        procurementId: input.procurementId,
+        radarKey: input.radarKey,
+        scope: input.scope,
+        status: "skipped_no_documents",
+        startedAt: startedAtIso,
+        finishedAt: nowISO(),
+        durationMs: Date.now() - startedAt,
+        documentsFound: 0,
+        documentsDownloaded: 0,
+        errors,
+        documents: [],
+        requirements: [],
+        budgetSignals: [],
+        similarProcedures: [],
+        dofPublications: [],
+        ceiling: {
+          directCeiling: null,
+          estimatedMin: null,
+          estimatedMax: null,
+          average: null,
+          median: null,
+          confidence: "baja",
+          evidence: [],
+          explanation: "Sin estimación disponible.",
+          legalWarning:
+            "Estimación basada únicamente en información pública. No representa monto oficial salvo que el documento lo indique expresamente.",
+        },
+      });
       return { ...base, status: "skipped_no_documents", errors };
     }
 
@@ -166,30 +236,78 @@ export async function enrichProcurement(
       status = "failed";
     }
 
-    // 5b. Parsear documentos y extraer señal de presupuesto
+    // 5b. Parsear documentos, clasificar y extraer requisitos/señales de presupuesto
     const allTexts: string[] = [];
+    const parsedDocuments: ParsedEnrichmentDocument[] = documents.map((link) => ({
+      link,
+      download: downloadResults.find((d) => d.fileUrl === link.fileUrl) ?? null,
+      classification: null,
+      parseStatus: null,
+      text: "",
+    }));
+    const requirementRecords: RequirementRecord[] = [];
+    const budgetSignalRecords: BudgetSignalRecord[] = [];
+
     for (let i = 0; i < downloadable.length; i++) {
+      const link = downloadable[i];
       const dlResult = downloadResults[i];
       if (
         (dlResult.downloadStatus === "ok" || dlResult.downloadStatus === "skipped_duplicate") &&
         dlResult.localPath
       ) {
         try {
-          const text = await parseDocumentFile(dlResult.localPath, dlResult.fileType);
-          if (text) allTexts.push(text);
+          const parseResult = await parseDocumentFile(dlResult.localPath, dlResult.fileType);
+          const text = parseResult.text;
+          const parsedDoc = parsedDocuments.find((d) => d.link.fileUrl === link.fileUrl);
+          if (parsedDoc) {
+            parsedDoc.text = text;
+            parsedDoc.parseStatus = parseResult.parseStatus;
+            parsedDoc.classification = classifyDocument({
+              text,
+              fileName: link.fileName ?? undefined,
+              documentHint: link.documentHint,
+            });
+          }
+
+          if (text) {
+            allTexts.push(text);
+            const requirements = extractRequirements(text).requirements;
+            requirementRecords.push(
+              ...requirements.map((requirement) => ({
+                documentUrl: link.fileUrl,
+                requirement,
+              })),
+            );
+
+            const docBudgetSignals = extractBudgetSignals(text).signals;
+            budgetSignalRecords.push(
+              ...docBudgetSignals.map((signal) => ({
+                documentUrl: link.fileUrl,
+                signal,
+              })),
+            );
+          }
         } catch (parseErr) {
           log.warn({ err: parseErr, localPath: dlResult.localPath }, "⚠️ Error parseando documento");
         }
       }
     }
-    const budgetSignal: BudgetSignalResult = extractBudgetSignals(allTexts.join("\n\n"));
+    const allBudgetSignals = budgetSignalRecords.map((r) => r.signal);
+    const budgetSignal: BudgetSignalResult = allBudgetSignals.length > 0
+      ? {
+          signals: allBudgetSignals,
+          hasSignals: true,
+          highestAmount: Math.max(...allBudgetSignals.map((s) => s.amount)),
+        }
+      : extractBudgetSignals(allTexts.join("\n\n"));
 
     // 5c. Antecedentes en paralelo (Promise.allSettled — falla silenciosamente)
     const titleKeywords = extractKeywords(input.title ?? "");
-    const [historicoSettled, sipotSettled, ocdsSettled] = await Promise.allSettled([
+    const [historicoSettled, sipotSettled, ocdsSettled, dofSettled] = await Promise.allSettled([
       fetchCompranetHistorico({ keywords: titleKeywords, scope: input.scope, yearFrom: 2020 }),
       fetchPntSipot({ keywords: titleKeywords, scope: input.scope }),
       fetchContratacionesAbiertas({ keywords: titleKeywords, scope: input.scope }),
+      fetchDofSidof({ keywords: titleKeywords, scope: input.scope }),
     ]);
 
     const historicoContracts =
@@ -198,6 +316,8 @@ export async function enrichProcurement(
       sipotSettled.status === "fulfilled" ? sipotSettled.value.contracts : [];
     const ocdsContracts =
       ocdsSettled.status === "fulfilled" ? ocdsSettled.value.contracts : [];
+    const dofPublications =
+      dofSettled.status === "fulfilled" ? dofSettled.value.publications : [];
 
     const compranetAmounts = historicoContracts
       .map((c) => c.awardedAmount ?? 0)
@@ -211,11 +331,12 @@ export async function enrichProcurement(
       compranetHighestAmount,
       sipotCount: sipotContracts.length,
       ocdsCount: ocdsContracts.length,
+      dofCount: dofPublications.length,
     };
 
     log.info(
       { jobId, compranetCount: antecedentes.compranetCount, sipotCount: antecedentes.sipotCount,
-        ocdsCount: antecedentes.ocdsCount },
+        ocdsCount: antecedentes.ocdsCount, dofCount: antecedentes.dofCount },
       "📊 Antecedentes encontrados",
     );
 
@@ -282,6 +403,26 @@ export async function enrichProcurement(
       "✅ enrichProcurement completado",
     );
 
+    await persistEnrichmentResult({
+      jobId,
+      procurementId: input.procurementId,
+      radarKey: input.radarKey,
+      scope: input.scope,
+      status,
+      startedAt: startedAtIso,
+      finishedAt: nowISO(),
+      durationMs: Date.now() - startedAt,
+      documentsFound: documents.length,
+      documentsDownloaded: succeeded.length,
+      errors,
+      documents: parsedDocuments,
+      requirements: requirementRecords,
+      budgetSignals: budgetSignalRecords,
+      similarProcedures: similarityResult.similarProcedures,
+      dofPublications,
+      ceiling: ceilingResult,
+    });
+
     // 6. Segundo mensaje Telegram (D4) — fire and forget
     const enrichedMessage = formatEnrichedAlert({
       procedureNumber: input.procedureNumber ?? "N/D",
@@ -314,6 +455,36 @@ export async function enrichProcurement(
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ err, jobId }, "💥 enrichProcurement error crítico");
     errors.push(msg);
+    await persistEnrichmentResult({
+      jobId,
+      procurementId: input.procurementId,
+      radarKey: input.radarKey,
+      scope: input.scope,
+      status: "failed",
+      startedAt: startedAtIso,
+      finishedAt: nowISO(),
+      durationMs: Date.now() - startedAt,
+      documentsFound: 0,
+      documentsDownloaded: 0,
+      errors,
+      documents: [],
+      requirements: [],
+      budgetSignals: [],
+      similarProcedures: [],
+      dofPublications: [],
+      ceiling: {
+        directCeiling: null,
+        estimatedMin: null,
+        estimatedMax: null,
+        average: null,
+        median: null,
+        confidence: "baja",
+        evidence: [],
+        explanation: "Sin estimación disponible.",
+        legalWarning:
+          "Estimación basada únicamente en información pública. No representa monto oficial salvo que el documento lo indique expresamente.",
+      },
+    });
     return { ...base, status: "failed", errors, enrichedAt: nowISO() };
   }
 }

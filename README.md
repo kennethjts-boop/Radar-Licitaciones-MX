@@ -117,4 +117,37 @@ npx ts-node apps/worker/src/scripts/buscar-operatividad-capufe-2026.ts
 * **Circuit Breakers y Retries**: Si Telegram restringe el bot por muchos mensajes (HTTP 429), o si ComprasMX se cae, el sistema pausa y reintenta de forma inteligente.
 * **Manejo de PDFs Gigantes**: Los anexos se truncan y tienen *timeouts* duros para asegurar que un documento defectuoso de 1GB no congele el sistema.
 
+---
+
+## 🧩 Arquitectura Técnica C-I
+
+El worker mantiene separado el scraper del enriquecimiento. `collect.job.ts` solo detecta matches, aplica `procurement-scope-filter.ts` y dispara `enrich-procurement.job.ts` de forma no bloqueante.
+
+### Scoring de alertas
+Las alertas Telegram separan tres señales:
+- `match_score`: coincidencia del radar contra texto canónico.
+- `opportunity_score`: oportunidad operativa según estatus, monto, dependencia, URL y fechas.
+- `document_score`: calidad documental según adjuntos, expediente, URL y descripción.
+
+### Enrichment OSINT
+El job de enrichment ejecuta:
+1. `collectComprasMxDetail` para abrir el expediente público y descubrir documentos.
+2. `document-downloader` para descargar con SHA-256, límite de tamaño y deduplicación.
+3. Parsers PDF/DOCX/XLSX/ZIP para extraer texto.
+4. `document-classifier`, `requirement-extractor` y `budget-signal-extractor`.
+5. Collectors multi-fuente: CompraNet histórico, PNT/SIPOT, Contrataciones Abiertas y DOF/SIDOF.
+6. `procurement-similarity-engine` y `budget-ceiling-engine`.
+
+### Persistencia
+La migración `supabase/migrations/20260509_enrichment_persistence.sql` agrega `enrichment_jobs`, `procurement_documents`, `document_chunks`, `procurement_requirements`, `budget_signals`, `similar_procedures`, `scope`, `enrichment_data`, `opportunity_score` y `document_score`. La persistencia es *best effort*: si la DB aún no tiene la migración, el worker registra warning y no bloquea alertas.
+
+### Validación
+Antes de subir cambios al worker:
+```bash
+cd apps/worker
+npm run typecheck
+npm run lint
+npm test -- --runInBand
+```
+
 > *Desarrollado para la caza estratégica de oportunidades gubernamentales.*

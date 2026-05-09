@@ -111,8 +111,10 @@ export function filterProcurementScope(
     textContains(input.title, CAPUFE_TERMS) ||
     textContains(input.canonical_text, CAPUFE_TERMS);
 
-  // 2. Detectar DESIERTA: status (cubre "desierta" y "desierto")
-  const is_desierta = textContains(input.status, ["desierta", "desierto"]);
+  // 2. Detectar DESIERTA: status o texto canónico (cubre "desierta" y "desierto")
+  const is_desierta =
+    textContains(input.status, ["desierta", "desierto"]) ||
+    textContains(input.canonical_text, ["desierta", "desierto"]);
 
   // 3. Detectar relación con Morelos: state, municipality, canonical_text
   const is_morelos_related =

@@ -149,6 +149,8 @@ export interface DbMatch {
   radar_id: string;
   procurement_id: string;
   match_score: number;
+  opportunity_score: number;
+  document_score: number;
   match_level: string;
   matched_terms_json: string[];
   excluded_terms_json: string[];

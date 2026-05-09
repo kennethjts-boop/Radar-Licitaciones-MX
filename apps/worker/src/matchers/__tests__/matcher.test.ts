@@ -203,6 +203,25 @@ describe("evaluateProcurementAgainstRadar", () => {
     expect(result!.matchScore).toBeLessThanOrEqual(1);
   });
 
+  it("calcula opportunityScore y documentScore entre 0 y 1", () => {
+    const proc = makeProcurement({
+      attachments: [{
+        fileName: "bases.pdf",
+        fileType: "pdf",
+        fileUrl: "https://example.com/bases.pdf",
+        fileHash: null,
+        detectedText: null,
+      }],
+    });
+    const radar = makeRadar();
+    const result = evaluateProcurementAgainstRadar(proc, radar, true);
+    expect(result!.opportunityScore).toBeGreaterThanOrEqual(0);
+    expect(result!.opportunityScore).toBeLessThanOrEqual(1);
+    expect(result!.documentScore).toBeGreaterThanOrEqual(0);
+    expect(result!.documentScore).toBeLessThanOrEqual(1);
+    expect(result!.documentScore).toBeGreaterThan(0.2);
+  });
+
   it("matchLevel es high/medium/low según el score", () => {
     const proc = makeProcurement();
     const radar = makeRadar();

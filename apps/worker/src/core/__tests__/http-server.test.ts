@@ -6,6 +6,8 @@ describe("mapEnrichmentToSections", () => {
     const result = mapEnrichmentToSections(null);
     expect(result.techo).toMatchObject({ disponible: false });
     expect(result.antecedentes).toMatchObject({ disponible: false });
+    expect(result.documentos).toMatchObject({ disponible: false });
+    expect(result.requisitos).toMatchObject({ disponible: false });
     expect((result.techo as { nota: string }).nota).toContain("Enriquecimiento pendiente");
   });
 
@@ -37,5 +39,35 @@ describe("mapEnrichmentToSections", () => {
     const result = mapEnrichmentToSections(enrichmentData);
     expect(result.antecedentes).toMatchObject({ disponible: true, totalSimilares: 2 });
     expect((result.antecedentes as { contratos: unknown[] }).contratos).toHaveLength(2);
+  });
+
+  it("retorna publicaciones DOF dentro de antecedentes cuando existen", () => {
+    const enrichmentData = {
+      dofPublications: [
+        { title: "Convocatoria CAPUFE", dependency: "CAPUFE", publicationDate: "08/05/2026", dofUrl: "https://dof.gob.mx/nota", procedureNumber: null },
+      ],
+    };
+    const result = mapEnrichmentToSections(enrichmentData);
+    expect(result.antecedentes).toMatchObject({ disponible: true, totalDofPublicaciones: 1 });
+    expect((result.antecedentes as { dof_publicaciones: unknown[] }).dof_publicaciones).toHaveLength(1);
+  });
+
+  it("retorna documentos y requisitos cuando existen en enrichment data", () => {
+    const enrichmentData = {
+      documents: [
+        { title: "Bases", fileUrl: "https://example.com/bases.pdf", fileType: "pdf", downloadStatus: "ok" },
+      ],
+      requirements: [
+        { category: "tecnico", text: "Presentar anexo técnico", confidence: "alta" },
+        { category: "legal", text: "Presentar acta constitutiva", confidence: "alta" },
+      ],
+    };
+    const result = mapEnrichmentToSections(enrichmentData);
+    expect(result.documentos).toMatchObject({ disponible: true, total: 1 });
+    expect(result.requisitos).toMatchObject({
+      disponible: true,
+      total: 2,
+      por_categoria: { tecnico: 1, economico: 0, legal: 1 },
+    });
   });
 });

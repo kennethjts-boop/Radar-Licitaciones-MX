@@ -13,8 +13,10 @@ jest.mock("../../services/budget-signal-extractor");
 jest.mock("../../collectors/compranet-historico/index");
 jest.mock("../../collectors/pnt-sipot/index");
 jest.mock("../../collectors/contrataciones-abiertas/index");
+jest.mock("../../collectors/dof-sidof/index");
 jest.mock("../../services/procurement-similarity-engine");
 jest.mock("../../services/budget-ceiling-engine");
+jest.mock("../../storage/enrichment.repo");
 
 import { collectComprasMxDetail } from "../../collectors/comprasmx-detail/index";
 import { downloadDocuments } from "../../services/document-downloader";
@@ -31,16 +33,20 @@ const mockedExtractBudget = extractBudgetSignals as jest.MockedFunction<typeof e
 import { fetchCompranetHistorico } from "../../collectors/compranet-historico/index";
 import { fetchPntSipot } from "../../collectors/pnt-sipot/index";
 import { fetchContratacionesAbiertas } from "../../collectors/contrataciones-abiertas/index";
+import { fetchDofSidof } from "../../collectors/dof-sidof/index";
 
 const mockedCompranet = fetchCompranetHistorico as jest.MockedFunction<typeof fetchCompranetHistorico>;
 const mockedSipot = fetchPntSipot as jest.MockedFunction<typeof fetchPntSipot>;
 const mockedOcds = fetchContratacionesAbiertas as jest.MockedFunction<typeof fetchContratacionesAbiertas>;
+const mockedDof = fetchDofSidof as jest.MockedFunction<typeof fetchDofSidof>;
 
 import { findSimilarProcurements } from "../../services/procurement-similarity-engine";
 import { estimateBudgetCeiling } from "../../services/budget-ceiling-engine";
+import { persistEnrichmentResult } from "../../storage/enrichment.repo";
 
 const mockedSimilarity = findSimilarProcurements as jest.MockedFunction<typeof findSimilarProcurements>;
 const mockedCeiling = estimateBudgetCeiling as jest.MockedFunction<typeof estimateBudgetCeiling>;
+const mockedPersist = persistEnrichmentResult as jest.MockedFunction<typeof persistEnrichmentResult>;
 
 const baseInput: EnrichmentInput = {
   procurementId: "proc-001",
@@ -99,12 +105,14 @@ describe("enrichProcurement", () => {
     mockedCompranet.mockResolvedValue({ source: "compranet-historico", query: {} as any, contracts: [], totalFound: 0, status: "ok", errors: [] });
     mockedSipot.mockResolvedValue({ source: "pnt-sipot", query: {} as any, contracts: [], status: "ok", errors: [] });
     mockedOcds.mockResolvedValue({ source: "contrataciones-abiertas", contracts: [], status: "ok", errors: [] });
+    mockedDof.mockResolvedValue({ source: "dof-sidof", publications: [], status: "ok", errors: [] });
     mockedSimilarity.mockReturnValue({ similarProcedures: [], totalFound: 0, scopeApplied: "MORELOS_ONLY" });
     mockedCeiling.mockReturnValue({
       directCeiling: null, estimatedMin: null, estimatedMax: null,
       average: null, median: null, confidence: "baja" as const,
       evidence: [], explanation: "Sin evidencia.", legalWarning: "Info pública.",
     });
+    mockedPersist.mockResolvedValue(undefined);
   });
 
   it("sourceUrl null → skipped_no_documents, sin llamar a collector", async () => {
@@ -193,6 +201,11 @@ describe("enrichProcurement", () => {
 
     expect(result.status).toBe("success");
     expect(mockedExtractBudget).toHaveBeenCalled();
+    expect(mockedPersist).toHaveBeenCalledWith(expect.objectContaining({
+      budgetSignals: expect.arrayContaining([
+        expect.objectContaining({ signal: expect.objectContaining({ amount: 1500000 }) }),
+      ]),
+    }));
   });
 
   it("no falla si parser lanza error", async () => {
@@ -204,7 +217,32 @@ describe("enrichProcurement", () => {
     await expect(enrichProcurement(baseInput)).resolves.toBeDefined();
   });
 
-  it("llama a los 3 collectors de antecedentes cuando hay documentos", async () => {
+  it("extrae y persiste requisitos técnicos/económicos/legales", async () => {
+    const url = "https://example.com/bases.pdf";
+    mockedCollect.mockResolvedValue(makeCollectorResult([{ title: "Bases", fileUrl: url }]));
+    mockedDownload.mockResolvedValue(makeDownloadResults([url], ["ok"]));
+    mockedParsePdf.mockResolvedValue({
+      text: [
+        "El licitante deberá presentar anexo técnico con especificaciones técnicas.",
+        "Se requiere propuesta económica con catálogo de conceptos.",
+        "Deberá presentar acta constitutiva y opinión de cumplimiento SAT.",
+      ].join("\n"),
+      parseStatus: "ok",
+      errors: [],
+    });
+
+    await enrichProcurement(baseInput);
+
+    expect(mockedPersist).toHaveBeenCalledWith(expect.objectContaining({
+      requirements: expect.arrayContaining([
+        expect.objectContaining({ requirement: expect.objectContaining({ category: "tecnico" }) }),
+        expect.objectContaining({ requirement: expect.objectContaining({ category: "economico" }) }),
+        expect.objectContaining({ requirement: expect.objectContaining({ category: "legal" }) }),
+      ]),
+    }));
+  });
+
+  it("llama a los 4 collectors de antecedentes cuando hay documentos", async () => {
     const url = "https://example.com/bases.pdf";
     mockedCollect.mockResolvedValue(makeCollectorResult([{ title: "Bases", fileUrl: url }]));
     mockedDownload.mockResolvedValue(makeDownloadResults([url], ["ok"]));
@@ -227,6 +265,7 @@ describe("enrichProcurement", () => {
     expect(mockedCompranet).toHaveBeenCalled();
     expect(mockedSipot).toHaveBeenCalled();
     expect(mockedOcds).toHaveBeenCalled();
+    expect(mockedDof).toHaveBeenCalled();
   });
 
   it("continúa sin antecedentes si todos los collectors fallan", async () => {
@@ -238,6 +277,7 @@ describe("enrichProcurement", () => {
     mockedCompranet.mockRejectedValue(new Error("CompraNet caído"));
     mockedSipot.mockRejectedValue(new Error("SIPOT caído"));
     mockedOcds.mockRejectedValue(new Error("OCDS caído"));
+    mockedDof.mockRejectedValue(new Error("DOF caído"));
 
     await expect(enrichProcurement(baseInput)).resolves.toBeDefined();
   });
@@ -254,6 +294,10 @@ describe("enrichProcurement", () => {
     expect(result.status).toBe("success");
     expect(mockedSimilarity).toHaveBeenCalled();
     expect(mockedCeiling).toHaveBeenCalled();
+    expect(mockedPersist).toHaveBeenCalledWith(expect.objectContaining({
+      similarProcedures: expect.any(Array),
+      ceiling: expect.any(Object),
+    }));
   });
 
   it("no falla si similarity engine lanza error", async () => {

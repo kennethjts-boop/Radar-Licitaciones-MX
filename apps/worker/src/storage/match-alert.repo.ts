@@ -31,6 +31,8 @@ export async function upsertMatch(
       .from("matches")
       .update({
         match_score: match.matchScore,
+        opportunity_score: match.opportunityScore,
+        document_score: match.documentScore,
         match_level: match.matchLevel,
         matched_terms_json: match.matchedTerms,
         excluded_terms_json: match.excludedTerms,
@@ -48,6 +50,8 @@ export async function upsertMatch(
     radar_id: radarDbId,
     procurement_id: match.procurementId,
     match_score: match.matchScore,
+    opportunity_score: match.opportunityScore,
+    document_score: match.documentScore,
     match_level: match.matchLevel,
     matched_terms_json: match.matchedTerms,
     excluded_terms_json: match.excludedTerms,

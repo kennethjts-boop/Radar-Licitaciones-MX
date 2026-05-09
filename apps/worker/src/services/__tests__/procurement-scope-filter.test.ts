@@ -140,4 +140,75 @@ describe("filterProcurementScope", () => {
     expect(result.allowed).toBe(true);
     expect(result.scope).toBe("MORELOS_ONLY");
   });
+
+  it("title con Caminos y Puentes + desierto → NATIONAL_CAPUFE_DESIERTA", () => {
+    const result = filterProcurementScope({
+      title: "Caminos y Puentes Federales procedimiento desierto",
+      status: "desierto",
+      state: "Sonora",
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.scope).toBe("NATIONAL_CAPUFE_DESIERTA");
+  });
+
+  it("canonical_text con CAPUFE + declarada desierta → NATIONAL_CAPUFE_DESIERTA", () => {
+    const result = filterProcurementScope({
+      canonical_text: "CAPUFE casetas de peaje licitación declarada desierta",
+      status: "sin fallo publicado",
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.scope).toBe("NATIONAL_CAPUFE_DESIERTA");
+  });
+
+  it("municipio Jiutepec sin state → MORELOS_ONLY", () => {
+    const result = filterProcurementScope({ municipality: "Jiutepec", status: "activa" });
+    expect(result.allowed).toBe(true);
+    expect(result.scope).toBe("MORELOS_ONLY");
+  });
+
+  it("canonical_text con Puente de Ixtla → MORELOS_ONLY", () => {
+    const result = filterProcurementScope({
+      canonical_text: "Rehabilitación de camino rural en Puente de Ixtla",
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.scope).toBe("MORELOS_ONLY");
+  });
+
+  it("canonical_text con Tetela del Volcán normalizado → MORELOS_ONLY", () => {
+    const result = filterProcurementScope({
+      canonical_text: "Suministro para Tetela del Volcán",
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.scope).toBe("MORELOS_ONLY");
+  });
+
+  it("CAPUFE cancelada fuera de Morelos → REJECTED", () => {
+    const result = filterProcurementScope({
+      dependency: "CAPUFE",
+      status: "cancelada",
+      state: "Sinaloa",
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.scope).toBe("REJECTED_OUT_OF_SCOPE");
+  });
+
+  it("Morelos con status cancelada sigue dentro de scope territorial", () => {
+    const result = filterProcurementScope({
+      state: "Morelos",
+      status: "cancelada",
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.scope).toBe("MORELOS_ONLY");
+  });
+
+  it("texto nacional no CAPUFE ni Morelos → REJECTED", () => {
+    const result = filterProcurementScope({
+      title: "Servicio nacional de limpieza",
+      dependency: "Secretaría de Administración",
+      status: "desierta",
+      canonical_text: "Ciudad de México Jalisco Nuevo León",
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.scope).toBe("REJECTED_OUT_OF_SCOPE");
+  });
 });

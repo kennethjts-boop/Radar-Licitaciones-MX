@@ -22,6 +22,55 @@ function scoreToLevel(score: number): MatchLevel {
   return "low";
 }
 
+function clampScore(score: number): number {
+  return Math.max(0, Math.min(1, Math.round(score * 1000) / 1000));
+}
+
+function calculateOpportunityScore(procurement: NormalizedProcurement): number {
+  let score = 0.25;
+
+  if (["activa", "publicada", "en_proceso"].includes(procurement.status)) {
+    score += 0.25;
+  } else if (procurement.status === "desierta") {
+    score += 0.2;
+  } else if (["cancelada", "cerrada"].includes(procurement.status)) {
+    score -= 0.15;
+  }
+
+  if (procurement.amount !== null && procurement.amount > 0) score += 0.15;
+  if (procurement.dependencyName) score += 0.1;
+  if (procurement.sourceUrl) score += 0.1;
+
+  if (procurement.openingDate) {
+    const openingTime = Date.parse(procurement.openingDate);
+    if (!Number.isNaN(openingTime)) {
+      score += openingTime >= Date.now() ? 0.15 : -0.1;
+    }
+  } else {
+    score += 0.05;
+  }
+
+  return clampScore(score);
+}
+
+function calculateDocumentScore(procurement: NormalizedProcurement): number {
+  let score = 0.2;
+  const attachmentCount = procurement.attachments.length;
+
+  if (attachmentCount >= 3) score += 0.45;
+  else if (attachmentCount >= 1) score += 0.25;
+
+  if (procurement.expedienteId || procurement.procedureNumber || procurement.licitationNumber) {
+    score += 0.15;
+  }
+  if (procurement.sourceUrl) score += 0.1;
+  if ((procurement.description?.length ?? 0) > 40 || procurement.canonicalText.length > 160) {
+    score += 0.1;
+  }
+
+  return clampScore(score);
+}
+
 /**
  * Evalúa un expediente contra un radar.
  * Retorna null si no supera el umbral mínimo de score.
@@ -131,6 +180,8 @@ export function evaluateProcurementAgainstRadar(
     radarKey: radar.key,
     procurementId: procurement.externalId,
     matchScore: adjustedScore,
+    opportunityScore: calculateOpportunityScore(procurement),
+    documentScore: calculateDocumentScore(procurement),
     matchLevel,
     matchedTerms,
     excludedTerms: excludedFound,

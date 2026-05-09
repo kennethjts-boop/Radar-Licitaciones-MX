@@ -224,6 +224,8 @@ async function main(): Promise<void> {
         radarKey: m.radarKey,
         procurementId: m.procurementId,
         matchScore: m.score,
+        opportunityScore: 0.5,
+        documentScore: m.normalized.attachments.length > 0 ? 0.7 : 0.35,
         matchLevel: (m.score >= 0.7 ? "high" : m.score >= 0.4 ? "medium" : "low") as "high" | "medium" | "low",
         matchedTerms: m.matchedTerms,
         excludedTerms: [],
