@@ -70,6 +70,22 @@ type EnrichmentStore = {
     dofUrl: string | null;
     procedureNumber: string | null;
   }> | null;
+  sipot?: {
+    total: number;
+    amountMin: number | null;
+    amountMax: number | null;
+    suppliers: string[];
+    contracts: Array<{
+      procedureNumber: string | null;
+      contractNumber: string | null;
+      title: string | null;
+      dependency: string | null;
+      supplier: string | null;
+      awardedAmount: number | null;
+      year: number | null;
+      sourceUrl: string | null;
+    }>;
+  } | null;
 };
 
 export function mapEnrichmentToSections(enrichmentData: unknown): {
@@ -77,6 +93,7 @@ export function mapEnrichmentToSections(enrichmentData: unknown): {
   antecedentes: unknown;
   documentos: unknown;
   requisitos: unknown;
+  fuentes: unknown;
 } {
   if (
     enrichmentData === null ||
@@ -88,6 +105,7 @@ export function mapEnrichmentToSections(enrichmentData: unknown): {
       antecedentes: { disponible: false, nota: "Enriquecimiento pendiente" },
       documentos: { disponible: false, nota: "Enriquecimiento pendiente" },
       requisitos: { disponible: false, nota: "Enriquecimiento pendiente" },
+      fuentes: { disponible: false, nota: "Enriquecimiento pendiente" },
     };
   }
 
@@ -143,7 +161,22 @@ export function mapEnrichmentToSections(enrichmentData: unknown): {
         }
       : { disponible: false, nota: "Enriquecimiento pendiente" };
 
-  return { techo, antecedentes, documentos, requisitos };
+  const fuentes =
+    ed.sipot != null || dofPublications !== null
+      ? {
+          disponible: true,
+          pnt_sipot: ed.sipot ?? {
+            total: 0,
+            amountMin: null,
+            amountMax: null,
+            suppliers: [],
+            contracts: [],
+          },
+          dof_publicaciones: dofPublications?.slice(0, 10) ?? [],
+        }
+      : { disponible: false, nota: "Enriquecimiento pendiente" };
+
+  return { techo, antecedentes, documentos, requisitos, fuentes };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -363,7 +396,7 @@ async function handleGetFicha(
   const data = raw as unknown as Record<string, unknown>;
 
   const enrichmentRaw = data["enrichment_data"] ?? null;
-  const { techo, antecedentes, documentos, requisitos } = mapEnrichmentToSections(enrichmentRaw);
+  const { techo, antecedentes, documentos, requisitos, fuentes } = mapEnrichmentToSections(enrichmentRaw);
 
   sendJson(res, 200, {
     ficha: {
@@ -389,6 +422,7 @@ async function handleGetFicha(
     antecedentes,
     documentos,
     requisitos,
+    fuentes,
     riesgo: { disponible: false, nota: "Módulo en desarrollo" },
     generado_en: new Date().toISOString(),
   });

@@ -22,12 +22,25 @@ export interface SipotQuery {
   keywords: string[];
   dependency?: string | null;
   scope: "MORELOS_ONLY" | "NATIONAL_CAPUFE_DESIERTA";
+  yearFrom?: number;
+  yearTo?: number;
   maxResults?: number;
 }
 
 export interface SipotContract extends HistoricoContract {
   expedienteId: string | null;
   procedureType: string | null;
+  contractNumber: string | null;
+  procurementProcedureNumber: string | null;
+  supplierRfc: string | null;
+  amountMin: number | null;
+  amountMax: number | null;
+  signingDate: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  fiscalYear: number | null;
+  institutionType: string | null;
+  evidenceText: string;
 }
 
 export interface SipotResult {
@@ -48,36 +61,100 @@ function parseYear(dateStr: string | undefined | null): number | null {
 
 function parseAmount(raw: unknown): number | null {
   if (!raw) return null;
-  const cleaned = String(raw).replace(/[^0-9.]/g, "");
+  const cleaned = String(raw)
+    .replace(/\s/g, "")
+    .replace(/,/g, "")
+    .replace(/[^0-9.]/g, "");
   const num = parseFloat(cleaned);
   return isNaN(num) ? null : num;
 }
 
 function getField(record: Record<string, unknown>, ...keys: string[]): string | null {
+  const normalizedEntries = new Map(
+    Object.entries(record).map(([key, value]) => [key.toLowerCase(), value]),
+  );
   for (const k of keys) {
-    const v = record[k];
+    const v = record[k] ?? normalizedEntries.get(k.toLowerCase());
     if (v !== undefined && v !== null && String(v).trim()) return String(v).trim();
   }
   return null;
 }
 
+function buildSearchQuery(query: SipotQuery): string {
+  return [...query.keywords, query.dependency ?? ""]
+    .map((term) => term.trim())
+    .filter(Boolean)
+    .filter((term, index, arr) => arr.findIndex((t) => t.toLowerCase() === term.toLowerCase()) === index)
+    .join(" ");
+}
+
+function isWithinYearRange(contract: SipotContract, query: SipotQuery): boolean {
+  const year = contract.fiscalYear ?? contract.year;
+  if (query.yearFrom !== undefined && year !== null && year < query.yearFrom) return false;
+  if (query.yearTo !== undefined && year !== null && year > query.yearTo) return false;
+  return true;
+}
+
 function mapSipotRecord(record: Record<string, unknown>): SipotContract {
+  const contractNumber = getField(record, "numeroContrato", "numero_contrato", "contrato");
+  const expedienteId = getField(record, "expediente", "idExpediente", "numeroExpediente");
+  const procurementProcedureNumber = getField(
+    record,
+    "numeroProcedimiento",
+    "numeroProcedimientoContratacion",
+    "numeroExpediente",
+    "procedimiento",
+  );
+  const title = getField(record, "objetoContrato", "descripcion", "concepto", "titulo", "objeto");
+  const dependency = getField(record, "nombreSujetoObligado", "institucion", "dependencia", "sujetoObligado");
+  const supplier = getField(record, "nombreContratista", "proveedor", "nombreComercial", "razonSocial");
+  const signingDate = getField(record, "fechaContrato", "fechaCelebracion", "fechaFirma");
+  const startDate = getField(record, "fechaInicio", "fechaInicioContrato", "fechaInicial");
+  const endDate = getField(record, "fechaTermino", "fechaFin", "fechaConclusion", "fechaFinal");
+  const amountMin = parseAmount(getField(record, "montoMinimo", "monto_minimo"));
+  const amountMax = parseAmount(getField(record, "montoMaximo", "monto_maximo"));
+  const awardedAmount =
+    parseAmount(getField(record, "montoContrato", "montoTotal", "montoAdjudicado", "importeContrato")) ??
+    amountMax ??
+    amountMin;
+  const fiscalYear = parseYear(getField(record, "ejercicio", "anio", "año", "periodo"));
+  const year = fiscalYear ?? parseYear(signingDate ?? startDate);
+
   return {
-    procedureNumber: getField(record, "numeroContrato", "numeroExpediente"),
-    title: getField(record, "objetoContrato", "descripcion", "concepto", "titulo"),
-    dependency: getField(record, "nombreSujetoObligado", "institucion", "dependencia"),
-    supplier: getField(record, "nombreContratista", "proveedor", "nombreComercial"),
-    awardedAmount: parseAmount(
-      getField(record, "montoContrato", "montoTotal", "montoMaximo"),
-    ),
+    procedureNumber: procurementProcedureNumber ?? contractNumber ?? expedienteId,
+    title,
+    dependency,
+    supplier,
+    awardedAmount,
     currency: getField(record, "moneda") ?? "MXN",
-    year: parseYear(getField(record, "fechaContrato", "fechaCelebracion", "fechaInicio")),
+    year,
     state: getField(record, "entidadFederativa", "estado"),
     contractType: getField(record, "tipoProcedimiento", "tipoContratacion"),
     sourceUrl: ENDPOINT_URL,
     retrievedAt: nowISO(),
-    expedienteId: getField(record, "expediente", "idExpediente"),
+    expedienteId,
     procedureType: getField(record, "tipoProcedimiento", "modalidad"),
+    contractNumber,
+    procurementProcedureNumber,
+    supplierRfc: getField(record, "rfcContratista", "rfcProveedor", "rfc"),
+    amountMin,
+    amountMax,
+    signingDate,
+    startDate,
+    endDate,
+    fiscalYear,
+    institutionType: getField(record, "tipoSujetoObligado", "ordenGobierno", "ambito"),
+    evidenceText: [
+      title,
+      dependency,
+      supplier,
+      contractNumber,
+      procurementProcedureNumber,
+      awardedAmount !== null ? `monto ${awardedAmount}` : null,
+      year !== null ? `año ${year}` : null,
+    ]
+      .filter(Boolean)
+      .join(" | "),
   };
 }
 
@@ -85,7 +162,7 @@ function mapSipotRecord(record: Record<string, unknown>): SipotContract {
 
 export async function fetchPntSipot(query: SipotQuery): Promise<SipotResult> {
   const maxResults = query.maxResults ?? 20;
-  const searchQuery = query.keywords.join(" ");
+  const searchQuery = buildSearchQuery(query);
 
   const base: SipotResult = {
     source: "pnt-sipot",
@@ -127,7 +204,7 @@ export async function fetchPntSipot(query: SipotQuery): Promise<SipotResult> {
       await new Promise((r) => setTimeout(r, RATE_LIMIT_MS));
     }
 
-    const mapped = records.map(mapSipotRecord);
+    const mapped = records.map(mapSipotRecord).filter((c) => isWithinYearRange(c, query));
     const filtered = mapped.filter((c) => {
       const scopeResult = filterProcurementScope({
         state: c.state,

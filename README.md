@@ -135,11 +135,11 @@ El job de enrichment ejecuta:
 2. `document-downloader` para descargar con SHA-256, límite de tamaño y deduplicación.
 3. Parsers PDF/DOCX/XLSX/ZIP para extraer texto.
 4. `document-classifier`, `requirement-extractor` y `budget-signal-extractor`.
-5. Collectors multi-fuente: CompraNet histórico, PNT/SIPOT, Contrataciones Abiertas y DOF/SIDOF.
+5. Collectors multi-fuente: CompraNet histórico, PNT/SIPOT, Contrataciones Abiertas y DOF/SIDOF. PNT/SIPOT conserva contratos históricos con proveedor, RFC, montos mínimo/máximo/adjudicado, vigencia, año fiscal y evidencia resumida.
 6. `procurement-similarity-engine` y `budget-ceiling-engine`.
 
 ### Persistencia
-La migración `supabase/migrations/20260509_enrichment_persistence.sql` agrega `enrichment_jobs`, `procurement_documents`, `document_chunks`, `procurement_requirements`, `budget_signals`, `similar_procedures`, `scope`, `enrichment_data`, `opportunity_score` y `document_score`. La persistencia es *best effort*: si la DB aún no tiene la migración, el worker registra warning y no bloquea alertas.
+La migración `supabase/migrations/20260509_enrichment_persistence.sql` agrega `enrichment_jobs`, `procurement_documents`, `document_chunks`, `procurement_requirements`, `budget_signals`, `similar_procedures`, `scope`, `enrichment_data`, `opportunity_score` y `document_score`. `enrichment_data` guarda snapshots de PNT/SIPOT y DOF para alimentar `/api/licitaciones/:id/ficha`. La persistencia es *best effort*: si la DB aún no tiene la migración, el worker registra warning y no bloquea alertas.
 
 ### Validación
 Antes de subir cambios al worker:

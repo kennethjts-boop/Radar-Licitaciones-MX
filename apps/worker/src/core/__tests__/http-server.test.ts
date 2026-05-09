@@ -8,6 +8,7 @@ describe("mapEnrichmentToSections", () => {
     expect(result.antecedentes).toMatchObject({ disponible: false });
     expect(result.documentos).toMatchObject({ disponible: false });
     expect(result.requisitos).toMatchObject({ disponible: false });
+    expect(result.fuentes).toMatchObject({ disponible: false });
     expect((result.techo as { nota: string }).nota).toContain("Enriquecimiento pendiente");
   });
 
@@ -50,6 +51,25 @@ describe("mapEnrichmentToSections", () => {
     const result = mapEnrichmentToSections(enrichmentData);
     expect(result.antecedentes).toMatchObject({ disponible: true, totalDofPublicaciones: 1 });
     expect((result.antecedentes as { dof_publicaciones: unknown[] }).dof_publicaciones).toHaveLength(1);
+  });
+
+  it("retorna snapshot PNT/SIPOT en fuentes cuando existe", () => {
+    const enrichmentData = {
+      sipot: {
+        total: 1,
+        amountMin: 500000,
+        amountMax: 750000,
+        suppliers: ["Empresa ABC"],
+        contracts: [
+          { procedureNumber: "LA-001", contractNumber: "C-001", title: "Mantenimiento", dependency: "CAPUFE", supplier: "Empresa ABC", awardedAmount: 750000, year: 2024, sourceUrl: "https://pnt.example" },
+        ],
+      },
+    };
+    const result = mapEnrichmentToSections(enrichmentData);
+    expect(result.fuentes).toMatchObject({
+      disponible: true,
+      pnt_sipot: { total: 1, amountMax: 750000 },
+    });
   });
 
   it("retorna documentos y requisitos cuando existen en enrichment data", () => {

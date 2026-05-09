@@ -264,8 +264,64 @@ describe("enrichProcurement", () => {
     expect(result.status).toBe("success");
     expect(mockedCompranet).toHaveBeenCalled();
     expect(mockedSipot).toHaveBeenCalled();
+    expect(mockedSipot).toHaveBeenCalledWith(expect.objectContaining({
+      dependency: "CAPUFE",
+      yearFrom: 2018,
+      maxResults: 50,
+    }));
     expect(mockedOcds).toHaveBeenCalled();
     expect(mockedDof).toHaveBeenCalled();
+  });
+
+  it("persiste contratos históricos PNT/SIPOT para ficha y estimaciones", async () => {
+    const url = "https://example.com/bases.pdf";
+    mockedCollect.mockResolvedValue(makeCollectorResult([{ title: "Bases", fileUrl: url }]));
+    mockedDownload.mockResolvedValue(makeDownloadResults([url], ["ok"]));
+    mockedParsePdf.mockResolvedValue({ text: "Mantenimiento vial Morelos.", parseStatus: "ok", errors: [] });
+    mockedSipot.mockResolvedValue({
+      source: "pnt-sipot",
+      query: {} as any,
+      contracts: [{
+        procedureNumber: "LA-001",
+        title: "Mantenimiento vial Morelos",
+        dependency: "CAPUFE",
+        supplier: "Empresa ABC",
+        awardedAmount: 2500000,
+        currency: "MXN",
+        year: 2024,
+        state: "Morelos",
+        contractType: "Licitación pública",
+        sourceUrl: "https://backbuscadortematico.plataformadetransparencia.org.mx/api/tematico/buscador/consulta",
+        retrievedAt: "2026-05-07T00:00:00Z",
+        expedienteId: "EXP-001",
+        procedureType: "Licitación pública",
+        contractNumber: "C-001",
+        procurementProcedureNumber: "LA-001",
+        supplierRfc: "ABC010101XX1",
+        amountMin: null,
+        amountMax: 2500000,
+        signingDate: "2024-03-01",
+        startDate: "2024-04-01",
+        endDate: "2024-12-31",
+        fiscalYear: 2024,
+        institutionType: "Federal",
+        evidenceText: "Mantenimiento vial Morelos | CAPUFE | Empresa ABC | monto 2500000",
+      }],
+      status: "ok",
+      errors: [],
+    });
+
+    await enrichProcurement(baseInput);
+
+    expect(mockedPersist).toHaveBeenCalledWith(expect.objectContaining({
+      sipotContracts: expect.arrayContaining([
+        expect.objectContaining({
+          supplier: "Empresa ABC",
+          awardedAmount: 2500000,
+          contractNumber: "C-001",
+        }),
+      ]),
+    }));
   });
 
   it("continúa sin antecedentes si todos los collectors fallan", async () => {

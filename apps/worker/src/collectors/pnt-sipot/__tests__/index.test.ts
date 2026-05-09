@@ -26,10 +26,17 @@ describe("fetchPntSipot", () => {
     mockAxios.post.mockResolvedValue(makeSipotResponse([{
       objetoContrato: "Mantenimiento de carretera en Cuernavaca Morelos",
       nombreContratista: "Empresa ABC",
-      montoContrato: "2500000",
+      rfcContratista: "ABC010101XX1",
+      montoContrato: "$2,500,000.00",
+      montoMinimo: "1000000",
+      montoMaximo: "3000000",
       fechaContrato: "2023-03-10",
+      fechaInicio: "2023-04-01",
+      fechaTermino: "2023-12-31",
       nombreSujetoObligado: "SCT",
       numeroContrato: "SIPOT-001",
+      numeroProcedimiento: "LA-001-2023",
+      ejercicio: "2023",
     }]));
 
     const result = await fetchPntSipot(baseQuery);
@@ -37,6 +44,17 @@ describe("fetchPntSipot", () => {
     expect(result.status).toBe("ok");
     expect(result.contracts).toHaveLength(1);
     expect(result.contracts[0].title).toContain("Morelos");
+    expect(result.contracts[0]).toMatchObject({
+      supplier: "Empresa ABC",
+      supplierRfc: "ABC010101XX1",
+      awardedAmount: 2500000,
+      amountMin: 1000000,
+      amountMax: 3000000,
+      contractNumber: "SIPOT-001",
+      procurementProcedureNumber: "LA-001-2023",
+      fiscalYear: 2023,
+    });
+    expect(result.contracts[0].evidenceText).toContain("monto 2500000");
   });
 
   it("filtra contratos fuera de scope", async () => {
@@ -61,6 +79,36 @@ describe("fetchPntSipot", () => {
 
     const result = await fetchPntSipot(baseQuery);
     expect(result.status).toBe("ok");
+  });
+
+  it("incluye dependency en el payload y filtra por rango de año", async () => {
+    mockAxios.post.mockResolvedValue(makeSipotResponse([
+      {
+        objetoContrato: "Mantenimiento en Cuernavaca Morelos",
+        montoContrato: "500000",
+        ejercicio: "2019",
+      },
+      {
+        objetoContrato: "Mantenimiento en Cuernavaca Morelos",
+        montoContrato: "750000",
+        ejercicio: "2024",
+      },
+    ]));
+
+    const result = await fetchPntSipot({
+      ...baseQuery,
+      dependency: "CAPUFE",
+      yearFrom: 2020,
+      yearTo: 2026,
+    });
+
+    expect(mockAxios.post).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ contenido: "mantenimiento vial CAPUFE" }),
+      expect.any(Object),
+    );
+    expect(result.contracts).toHaveLength(1);
+    expect(result.contracts[0].awardedAmount).toBe(750000);
   });
 
   it("retorna unavailable cuando axios lanza", async () => {

@@ -141,6 +141,7 @@ export async function enrichProcurement(
       requirements: [],
       budgetSignals: [],
       similarProcedures: [],
+      sipotContracts: [],
       dofPublications: [],
       ceiling: {
         directCeiling: null,
@@ -197,6 +198,7 @@ export async function enrichProcurement(
         requirements: [],
         budgetSignals: [],
         similarProcedures: [],
+        sipotContracts: [],
         dofPublications: [],
         ceiling: {
           directCeiling: null,
@@ -304,8 +306,20 @@ export async function enrichProcurement(
     // 5c. Antecedentes en paralelo (Promise.allSettled — falla silenciosamente)
     const titleKeywords = extractKeywords(input.title ?? "");
     const [historicoSettled, sipotSettled, ocdsSettled, dofSettled] = await Promise.allSettled([
-      fetchCompranetHistorico({ keywords: titleKeywords, scope: input.scope, yearFrom: 2020 }),
-      fetchPntSipot({ keywords: titleKeywords, scope: input.scope }),
+      fetchCompranetHistorico({
+        keywords: titleKeywords,
+        dependency: input.dependency,
+        scope: input.scope,
+        yearFrom: 2020,
+        maxResults: 50,
+      }),
+      fetchPntSipot({
+        keywords: titleKeywords,
+        dependency: input.dependency,
+        scope: input.scope,
+        yearFrom: 2018,
+        maxResults: 50,
+      }),
       fetchContratacionesAbiertas({ keywords: titleKeywords, scope: input.scope }),
       fetchDofSidof({ keywords: titleKeywords, scope: input.scope }),
     ]);
@@ -419,6 +433,7 @@ export async function enrichProcurement(
       requirements: requirementRecords,
       budgetSignals: budgetSignalRecords,
       similarProcedures: similarityResult.similarProcedures,
+      sipotContracts,
       dofPublications,
       ceiling: ceilingResult,
     });
@@ -471,6 +486,7 @@ export async function enrichProcurement(
       requirements: [],
       budgetSignals: [],
       similarProcedures: [],
+      sipotContracts: [],
       dofPublications: [],
       ceiling: {
         directCeiling: null,

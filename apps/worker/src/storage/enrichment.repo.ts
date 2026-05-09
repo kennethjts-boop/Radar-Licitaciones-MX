@@ -7,6 +7,7 @@
 import { createModuleLogger } from "../core/logger";
 import { getSupabaseClient } from "./client";
 import type { DocumentLink } from "../collectors/comprasmx-detail/index";
+import type { SipotContract } from "../collectors/pnt-sipot/index";
 import type { DownloadResult } from "../services/document-downloader";
 import type { ClassifyResult } from "../services/document-classifier";
 import type { ExtractedRequirement } from "../services/requirement-extractor";
@@ -51,6 +52,7 @@ export interface PersistEnrichmentInput {
   requirements: RequirementRecord[];
   budgetSignals: BudgetSignalRecord[];
   similarProcedures: SimilarProcedure[];
+  sipotContracts: SipotContract[];
   dofPublications: DofPublication[];
   ceiling: CeilingResult;
 }
@@ -66,6 +68,10 @@ function chunkText(text: string, maxLen = 1800): string[] {
 }
 
 function buildEnrichmentData(input: PersistEnrichmentInput): Record<string, unknown> {
+  const sipotAmounts = input.sipotContracts
+    .map((c) => c.awardedAmount)
+    .filter((amount): amount is number => amount !== null && amount > 0);
+
   return {
     jobId: input.jobId,
     status: input.status,
@@ -85,6 +91,37 @@ function buildEnrichmentData(input: PersistEnrichmentInput): Record<string, unkn
     budgetSignals: input.budgetSignals.map((b) => b.signal),
     ceiling: input.ceiling,
     similar: input.similarProcedures,
+    sipot: {
+      total: input.sipotContracts.length,
+      amountMin: sipotAmounts.length > 0 ? Math.min(...sipotAmounts) : null,
+      amountMax: sipotAmounts.length > 0 ? Math.max(...sipotAmounts) : null,
+      suppliers: Array.from(
+        new Set(
+          input.sipotContracts
+            .map((c) => c.supplier)
+            .filter((supplier): supplier is string => supplier !== null && supplier.length > 0),
+        ),
+      ).slice(0, 10),
+      contracts: input.sipotContracts.slice(0, 20).map((c) => ({
+        procedureNumber: c.procedureNumber,
+        contractNumber: c.contractNumber,
+        procurementProcedureNumber: c.procurementProcedureNumber,
+        title: c.title,
+        dependency: c.dependency,
+        supplier: c.supplier,
+        supplierRfc: c.supplierRfc,
+        awardedAmount: c.awardedAmount,
+        amountMin: c.amountMin,
+        amountMax: c.amountMax,
+        year: c.year,
+        signingDate: c.signingDate,
+        startDate: c.startDate,
+        endDate: c.endDate,
+        procedureType: c.procedureType,
+        evidenceText: c.evidenceText,
+        sourceUrl: c.sourceUrl,
+      })),
+    },
     dofPublications: input.dofPublications,
   };
 }
