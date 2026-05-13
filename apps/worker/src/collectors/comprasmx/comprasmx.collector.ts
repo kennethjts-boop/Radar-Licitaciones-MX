@@ -61,6 +61,14 @@ function isActiveStatus(estatus: string | undefined | null): boolean {
   return ACTIVE_STATUSES.has(estatus.trim().toUpperCase());
 }
 
+function shouldRetryCollectionError(error: unknown): boolean {
+  if (error instanceof Error && error.message.includes("Browser operation timed out")) {
+    return false;
+  }
+
+  return isRetryableNetworkError(error);
+}
+
 export interface ComprasMxCollectorOptions {
   maxPages?: number;
   headless?: boolean;
@@ -268,12 +276,6 @@ export async function collectComprasMx(
             "✅ Registro construido desde API — sin detail fetch"
           );
 
-          // DIAG TEMPORAL — imprimir el primer NormalizedProcurement completo
-          if (items.length === 0) {
-            // eslint-disable-next-line no-console
-            console.log("🔬 [DIAG TEMPORAL] NormalizedProcurement[0]:\n" + JSON.stringify(normalized, null, 2));
-          }
-
           items.push(normalized);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -295,7 +297,7 @@ export async function collectComprasMx(
         initialDelayMs: 1_000,
         backoffMultiplier: 2,
         maxDelayMs: 4_000,
-        shouldRetry: isRetryableNetworkError,
+        shouldRetry: shouldRetryCollectionError,
         onRetry: (_err, attempt, delay) =>
           log.warn({ attempt, delayMs: delay }, "⏳ Reintentando BrowserManager (ComprasMX)..."),
       },

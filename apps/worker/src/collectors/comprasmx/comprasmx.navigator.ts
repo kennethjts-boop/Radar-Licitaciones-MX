@@ -190,9 +190,6 @@ export class ComprasMxNavigator {
             { campos: Object.keys(first), muestra: first },
             "🔬 DIAG campos del primer ApiRegistro"
           );
-          // DIAG TEMPORAL — ver estructura exacta del primer registro en Railway
-          // eslint-disable-next-line no-console
-          console.log("🔬 [DIAG TEMPORAL] registros[0] crudo:\n" + JSON.stringify(first, null, 2));
         }
 
         let count = 0;
@@ -222,15 +219,6 @@ export class ComprasMxNavigator {
 
       log.info("🔍 Activando búsqueda en el portal ComprasMX...");
       try {
-        // ── Screenshot antes del click (diagnóstico) ─────────────────────────
-        const screenshotBuf = await page.screenshot({ fullPage: false }).catch(() => null);
-        if (screenshotBuf) {
-          const b64 = screenshotBuf.toString("base64");
-          log.info({ screenshotBytes: screenshotBuf.length }, "📸 Screenshot capturado antes del click en Buscar");
-          // eslint-disable-next-line no-console
-          console.log("📸 [SCREENSHOT-PRE-CLICK] data:image/png;base64," + b64);
-        }
-
         // ── Configurar waitForResponse ANTES del click ────────────────────────
         const apiResponsePromise = page.waitForResponse(
           (resp) => resp.url().includes("/whitney/") && resp.status() === 200,
