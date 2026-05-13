@@ -459,8 +459,10 @@ async function run(): Promise<void> {
   }
 }
 
-run().catch((err) => {
-  const message = err instanceof Error ? err.message : String(err);
-  console.error(`❌ ${message}`);
-  process.exit(1);
-});
+if (require.main === module) {
+  run().catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`❌ ${message}`);
+    process.exit(1);
+  });
+}

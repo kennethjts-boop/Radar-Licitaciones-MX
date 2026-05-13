@@ -8,6 +8,7 @@ import { createModuleLogger } from "../../core/logger";
 import { getConfig } from "../../config/env";
 
 const log = createModuleLogger("browser-manager");
+const DEFAULT_BROWSER_OPERATION_TIMEOUT_MS = 5 * 60 * 1000;
 
 // Chrome 124 real — sincronizado con releases.chromium.org/2024
 const USER_AGENT =
@@ -166,8 +167,9 @@ export class BrowserManager {
       const context = await manager.createContext();
       const page = await context.newPage();
       const operationPromise = operation(page, context);
+      const timeoutMs = options.timeoutMs ?? DEFAULT_BROWSER_OPERATION_TIMEOUT_MS;
 
-      if (!options.timeoutMs || options.timeoutMs <= 0) {
+      if (timeoutMs <= 0) {
         return await operationPromise;
       }
 
@@ -175,7 +177,7 @@ export class BrowserManager {
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(() => {
           log.error(
-            { timeoutMs: options.timeoutMs },
+            { timeoutMs },
             "⏱ Browser operation timeout — cerrando browser para abortar operaciones pendientes",
           );
           forcedClosePromise = manager.close().catch((err) => {
@@ -183,10 +185,10 @@ export class BrowserManager {
           });
           reject(
             new Error(
-              `Browser operation timed out after ${options.timeoutMs}ms`,
+              `Browser operation timed out after ${timeoutMs}ms`,
             ),
           );
-        }, options.timeoutMs);
+        }, timeoutMs);
       });
 
       try {
