@@ -114,13 +114,36 @@ export class BrowserManager {
    */
   async close(): Promise<void> {
     log.info("🛑 Closing browser subsystem...");
+    const closeWithTimeout = async (
+      label: string,
+      closePromise: Promise<unknown>,
+      timeoutMs = 10_000,
+    ): Promise<void> => {
+      let timeoutHandle: NodeJS.Timeout | null = null;
+      try {
+        await Promise.race([
+          closePromise,
+          new Promise<never>((_, reject) => {
+            timeoutHandle = setTimeout(
+              () => reject(new Error(`${label} close timed out after ${timeoutMs}ms`)),
+              timeoutMs,
+            );
+          }),
+        ]);
+      } catch (err) {
+        log.warn({ err }, `⚠️ ${label} did not close cleanly`);
+      } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+      }
+    };
+
     try {
       if (this.context) {
-        await this.context.close();
+        await closeWithTimeout("Browser context", this.context.close());
         this.context = null;
       }
       if (this.browser) {
-        await this.browser.close();
+        await closeWithTimeout("Browser", this.browser.close());
         this.browser = null;
       }
       log.info("✅ Browser closed gracefully");
@@ -138,6 +161,7 @@ export class BrowserManager {
   ): Promise<T> {
     const manager = new BrowserManager();
     await manager.launch();
+    let forcedClosePromise: Promise<void> | null = null;
     try {
       const context = await manager.createContext();
       const page = await context.newPage();
@@ -152,8 +176,11 @@ export class BrowserManager {
         timeoutHandle = setTimeout(() => {
           log.error(
             { timeoutMs: options.timeoutMs },
-            "⏱ Browser operation timeout — forzando cierre del browser en finally",
+            "⏱ Browser operation timeout — cerrando browser para abortar operaciones pendientes",
           );
+          forcedClosePromise = manager.close().catch((err) => {
+            log.error({ err }, "❌ Error cerrando browser tras timeout");
+          });
           reject(
             new Error(
               `Browser operation timed out after ${options.timeoutMs}ms`,
@@ -170,7 +197,11 @@ export class BrowserManager {
         }
       }
     } finally {
-      await manager.close();
+      if (forcedClosePromise) {
+        await forcedClosePromise;
+      } else {
+        await manager.close();
+      }
     }
   }
 }
