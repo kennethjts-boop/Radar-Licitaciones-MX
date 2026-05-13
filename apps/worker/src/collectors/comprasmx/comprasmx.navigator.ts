@@ -8,13 +8,38 @@
  *
  * NIVEL 2 (solo adjuntos): extractDetail() — usado únicamente para descargar documentos.
  */
-import { createHash } from "crypto";
+import { constants, createHash, publicEncrypt, randomInt } from "crypto";
 import { Page, BrowserContext } from "playwright";
 import { createModuleLogger } from "../../core/logger";
 import { RawProcurementInput } from "../../normalizers/procurement.normalizer";
 import { getConfig } from "../../config/env";
 
 const log = createModuleLogger("comprasmx-navigator");
+const COMPRASMX_SITE_ORIGIN = "https://comprasmx.buengobierno.gob.mx";
+const COMPRASMX_SITE_PATHNAME = "/sitiopublico/";
+const COMPRASMX_API_BASE_URL = "https://upcp-cnetservicios.buengobierno.gob.mx/whitney/sitiopublico";
+const COMPRASMX_CLOCK_URL = "https://upcp-cnetservicios.buengobierno.gob.mx/adele/interoperabilidad/tp/reloj";
+const COMPRASMX_API_ROWS_PER_PAGE = 100;
+const COMPRASMX_API_TIMEOUT_MS = 45_000;
+const COMPRASMX_CLOCK_TIMEOUT_MS = 10_000;
+const COMPRASMX_RECAPTCHA_SITE_KEY = "6Lfc8UAkAAAAAGT6lZSUNvcZDMd-lmpyj9URluBp";
+const COMPRASMX_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA7MsacN4dweh+KjrU6TWE
+3NsV53I+bNFKeGAsWxwOCJ6KIQ5eiwBJlrpIHJcQgXLxw6JmzSj+OfJg4b6pbg2r
+XcOniTzkvcUdschy5XArUTTa5+gUICrjHub+dZp2M8sH4XoUOdPcbomxaY7JzTrC
+dAGq9NkyVTxRquO/62xetiIVM4X4yb5JQubB7W+kwN++R6EhRWNgBeHau9mcmjIH
+IawburlDaKw74YwhpQc/pQRO1M5wm1fbb3awwNn/E747HiNUbxUv+qz9TWRIpzAn
+D/hIY7yn/lq13eFtED+ySz3m94SVyjZYCSz+ci/IB3PzisyjOTTZT9z8xLzVLBkl
+8g2+i/siSprpx06g06n/s+qVGuhi5m1H1nl6RdVSFZOwfYHQfgomh8tsRylptHz0
+5RtUAuM6luuO8LgpagrQQzGGZXHYPnW8aUExEs6x37TntMIAkbb9sE7YlOH8334G
+QtlBi2e7gKJhvZcjr/QN/GmB65rpFRUsSSPnhCXW0J1gyJO398lptcJMdyZzdx/R
+uYuek5ME0hg2EJ6/brNhV4whcYSo1RM0Lwr5787v0lOGH9URhTvCtTsoQNfLhXJX
+pyxwiNUsxv43JMvBCk7ppPduyx0H3N/XWdpFa0y+60SdfccNJLfYTjGFihwIYK67
+LMaGjK/5DReRcDKhqdjmsc8CAwEAAQ==
+-----END PUBLIC KEY-----`;
+
+const COMPRASMX_XGRC_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ|abcdefghijklmnopqrstuvwxyz|0123456789|-*/_.|";
+const GET_PROCEDIMIENTOS_ACTION = "GET_PROCEDIMIENTOS";
 
 export interface ListingRow {
   sourceUrl: string;
@@ -52,15 +77,55 @@ export interface ApiRegistro {
   [key: string]: unknown;
 }
 
+interface ComprasMxClockResponse {
+  fecha_actual?: string;
+  fecha_actual_TimeZone_CDMX?: string;
+}
+
+interface ComprasMxPagination {
+  total_registros?: number;
+  registro_inicial?: number;
+  registro_final?: number;
+  [key: string]: unknown;
+}
+
+interface ComprasMxProcedimientosPage {
+  registros?: unknown[];
+  paginacion?: ComprasMxPagination[];
+}
+
+interface ComprasMxProcedimientosResponse {
+  success?: boolean;
+  data?: ComprasMxProcedimientosPage[];
+  error?: string;
+  details?: string;
+  pid?: string | null;
+}
+
+interface ComprasMxSignedHeaders {
+  grc: string;
+  igrc: string;
+  xgrc: string;
+}
+
+interface ComprasMxApiPageResult {
+  registros: ApiRegistro[];
+  paginacion: ComprasMxPagination | null;
+}
+
+function buildComprasMxDetailUrl(item: ApiRegistro): string {
+  const uuid = item.uuid_procedimiento ?? "";
+  return uuid
+    ? `${COMPRASMX_SITE_ORIGIN}/sitiopublico/#/sitiopublico/detalle/${uuid}/procedimiento`
+    : "";
+}
+
 /**
  * Convierte un ApiRegistro (datos crudos de la API) a RawProcurementInput.
  * Construye la URL de detalle directamente desde uuid_procedimiento.
  */
 export function apiRegistroToRawInput(item: ApiRegistro): RawProcurementInput {
-  const uuid = item.uuid_procedimiento ?? '';
-  const sourceUrl = uuid
-    ? `https://comprasmx.buengobierno.gob.mx/sitiopublico/#/sitiopublico/detalle/${uuid}/procedimiento`
-    : '';
+  const sourceUrl = buildComprasMxDetailUrl(item);
 
   // El API del listado NO incluye fecha_publicacion.
   // fecha_aclaraciones es la junta de aclaraciones, NO la fecha de publicación.
@@ -148,7 +213,216 @@ const BUSCAR_SELECTORS_LIST = [
 ];
 const BUSCAR_SELECTOR_ANY = BUSCAR_SELECTORS_LIST.join(', ');
 
+function buildDefaultProcedimientosFilter(): Record<string, unknown> {
+  return {
+    id_ley: null,
+    id_tipo_procedimiento: null,
+    id_tipo_contratacion: null,
+    fecha_apertura_inicio: null,
+    fecha_apertura_fin: null,
+    fecha_publicacion_inicio: null,
+    fecha_publicacion_fin: null,
+    id_tipo_dependencia: [],
+    numero_procedimiento: null,
+    nombre_procedimiento: null,
+    credito_externo: null,
+    exclusivo_mipymes: null,
+    id_forma_participacion: null,
+    id_entidad_federativa: [],
+    id_p_especifica: [],
+    id_caracter_procedimiento: null,
+    id_estatus: 0,
+    id_proceso: 0,
+    codigo_expediente: null,
+    codigo_procedimiento: null,
+    estatus_alterno: [],
+    compra_consolidada: false,
+  };
+}
+
+function generateXgrc(length = 40): string {
+  return Array.from({ length }, () => COMPRASMX_XGRC_CHARS[randomInt(COMPRASMX_XGRC_CHARS.length)]).join("");
+}
+
+function formatComprasMxSecurityDate(value: string | undefined): string {
+  const date = value ? new Date(value) : new Date();
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Mexico_City",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  }).formatToParts(safeDate).reduce<Record<string, string>>((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+
+  return `${parts.year}${parts.month}${parts.day}${parts.hour}${parts.minute}${parts.second}`;
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function getComprasMxSecurityDate(): Promise<string> {
+  try {
+    const response = await fetchWithTimeout(COMPRASMX_CLOCK_URL, { method: "GET" }, COMPRASMX_CLOCK_TIMEOUT_MS);
+    if (!response.ok) {
+      throw new Error(`clock status ${response.status}`);
+    }
+    const clock = await response.json() as ComprasMxClockResponse;
+    return formatComprasMxSecurityDate(clock.fecha_actual_TimeZone_CDMX ?? clock.fecha_actual);
+  } catch (err) {
+    log.warn({ err }, "No se pudo leer reloj de ComprasMX; usando hora local CDMX");
+    return formatComprasMxSecurityDate(undefined);
+  }
+}
+
+async function createComprasMxSignedHeaders(action: string): Promise<ComprasMxSignedHeaders> {
+  const xgrc = generateXgrc();
+  const igrc = "127.0.0.1";
+  const securityDate = await getComprasMxSecurityDate();
+  const payload = [
+    COMPRASMX_RECAPTCHA_SITE_KEY,
+    igrc,
+    securityDate,
+    xgrc,
+    COMPRASMX_SITE_ORIGIN,
+    COMPRASMX_SITE_PATHNAME,
+    action,
+  ].join(",");
+  const encodedPayload = Buffer.from(payload, "utf8").toString("base64");
+  const grc = publicEncrypt(
+    { key: COMPRASMX_PUBLIC_KEY, padding: constants.RSA_PKCS1_PADDING },
+    Buffer.from(encodedPayload, "utf8"),
+  ).toString("base64");
+
+  return { grc, igrc, xgrc };
+}
+
+function apiRegistroToListingRow(item: ApiRegistro): ListingRow {
+  return {
+    externalId: item.numero_procedimiento,
+    title: item.nombre_procedimiento?.trim() ?? null,
+    dependency: item.siglas?.trim() ?? null,
+    status: item.estatus_alterno ?? null,
+    visibleDate: item.fecha_apertura ?? item.fecha_aclaraciones ?? item.fecha_publicacion ?? null,
+    sourceUrl: buildComprasMxDetailUrl(item),
+    rowText: [
+      item.numero_procedimiento,
+      item.nombre_procedimiento,
+      item.siglas,
+      item.estatus_alterno,
+      item.tipo_procedimiento,
+      item.fecha_apertura,
+    ].filter(Boolean).join(" "),
+  };
+}
+
+async function fetchComprasMxProcedimientosPage(pageNumber: number): Promise<ComprasMxApiPageResult> {
+  const signedHeaders = await createComprasMxSignedHeaders(GET_PROCEDIMIENTOS_ACTION);
+  const url = `${COMPRASMX_API_BASE_URL}/expedientes?rows=${COMPRASMX_API_ROWS_PER_PAGE}&page=${pageNumber}`;
+  const response = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+        origin: COMPRASMX_SITE_ORIGIN,
+        referer: `${COMPRASMX_SITE_ORIGIN}${COMPRASMX_SITE_PATHNAME}`,
+        grc: signedHeaders.grc,
+        igrc: signedHeaders.igrc,
+        xgrc: signedHeaders.xgrc,
+      },
+      body: JSON.stringify(buildDefaultProcedimientosFilter()),
+    },
+    COMPRASMX_API_TIMEOUT_MS,
+  );
+  const raw = await response.text();
+  let json: ComprasMxProcedimientosResponse;
+
+  try {
+    json = JSON.parse(raw) as ComprasMxProcedimientosResponse;
+  } catch (err) {
+    throw new Error(`ComprasMX API devolvió JSON inválido (${response.status}): ${raw.slice(0, 240)}`);
+  }
+
+  if (!response.ok || json.success === false) {
+    const detail = json.details ?? json.error ?? raw.slice(0, 240);
+    throw new Error(`ComprasMX API status ${response.status}: ${detail}`);
+  }
+
+  const payload = json.data?.[0];
+  const registros = Array.isArray(payload?.registros)
+    ? (payload.registros as ApiRegistro[]).filter((item) => Boolean(item.numero_procedimiento))
+    : [];
+  const paginacion = Array.isArray(payload?.paginacion) ? payload.paginacion[0] ?? null : null;
+
+  return { registros, paginacion };
+}
+
 export class ComprasMxNavigator {
+  private async scanListingViaSignedApi(
+    maxPages: number,
+  ): Promise<{ rows: ListingRow[]; apiRegistros: Map<string, ApiRegistro>; pagesScanned: number }> {
+    const pageLimit = Math.max(1, maxPages);
+    const rowsByExternalId = new Map<string, ListingRow>();
+    const apiRegistros = new Map<string, ApiRegistro>();
+    let pagesScanned = 0;
+
+    for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber++) {
+      const { registros, paginacion } = await fetchComprasMxProcedimientosPage(pageNumber);
+      pagesScanned = pageNumber;
+
+      if (registros.length === 0) {
+        log.warn({ page: pageNumber }, "ComprasMX signed API devolvió una página sin registros");
+        break;
+      }
+
+      for (const item of registros) {
+        apiRegistros.set(item.numero_procedimiento, item);
+        rowsByExternalId.set(item.numero_procedimiento, apiRegistroToListingRow(item));
+      }
+
+      log.info(
+        {
+          page: pageNumber,
+          registros: registros.length,
+          total: paginacion?.total_registros,
+          final: paginacion?.registro_final,
+        },
+        "📡 Página ComprasMX obtenida vía API firmada",
+      );
+
+      if (
+        typeof paginacion?.total_registros === "number" &&
+        typeof paginacion?.registro_final === "number" &&
+        paginacion.registro_final >= paginacion.total_registros
+      ) {
+        break;
+      }
+    }
+
+    const rows = Array.from(rowsByExternalId.values());
+    log.info(
+      { rows: rows.length, apiRegistros: apiRegistros.size, pagesScanned },
+      "✅ Scan ComprasMX completado vía API firmada",
+    );
+
+    return { rows, apiRegistros, pagesScanned };
+  }
+
   /**
    * Escanea el listado.
    * NOTA: Debido a que la URL de detalle no está en el DOM como href,
@@ -160,6 +434,20 @@ export class ComprasMxNavigator {
     maxPages: number,
   ): Promise<{ rows: ListingRow[]; apiRegistros: Map<string, ApiRegistro>; pagesScanned: number }> {
     log.info({ baseUrl, maxPages }, "📋 Iniciando scan de listado ComprasMX");
+
+    try {
+      const signedApiResult = await this.scanListingViaSignedApi(maxPages);
+      if (signedApiResult.rows.length > 0) {
+        return signedApiResult;
+      }
+      log.warn(
+        { pagesScanned: signedApiResult.pagesScanned },
+        "API firmada de ComprasMX no devolvió filas; intentando respaldo con navegador",
+      );
+    } catch (apiErr) {
+      log.warn({ apiErr }, "Falló API firmada de ComprasMX; intentando respaldo con navegador");
+    }
+
     const allRows: ListingRow[] = [];
     let pagesScanned = 0;
 
