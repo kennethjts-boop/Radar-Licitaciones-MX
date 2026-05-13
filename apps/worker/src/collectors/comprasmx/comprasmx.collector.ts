@@ -156,19 +156,13 @@ export async function collectComprasMx(
       pagesScanned = scanned;
       totalListingRowsSeen = listingRows.length;
 
-      // ── DIAG: imprimir primeros 5 estatus_alterno para verificar valores reales ──
-      const sampleStatuses = Array.from(apiRegistros.values())
-        .slice(0, 5)
-        .map(r => ({
-          id: r.numero_procedimiento,
-          estatus_alterno: r.estatus_alterno,
-          raw_json: JSON.stringify(r.estatus_alterno),
-          active: isActiveStatus(r.estatus_alterno),
-        }));
-      log.info({ sampleStatuses }, "🔬 DIAG estatus_alterno — primeros 5 registros API");
-
       if (listingRows.length === 0) {
-        stopReason = "listing_empty — no rows extracted from index";
+        stopReason = pagesScanned === 0
+          ? "listing_unavailable — no rows extracted from ComprasMX"
+          : "listing_empty — no rows returned by ComprasMX";
+        if (pagesScanned === 0) {
+          errors.push(stopReason);
+        }
         log.warn({ stopReason }, "No se extrajeron filas del listado.");
         return;
       }
