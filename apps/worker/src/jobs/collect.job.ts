@@ -78,6 +78,23 @@ export function setComprasMxSourceId(id: string | null): void {
 }
 
 const COLLECT_TIMEOUT_MS = 25 * 60 * 1000; // 25 minutos
+const ATTACHMENT_PIPELINE_TIMEOUT_MS = 3 * 60 * 1000;
+const CAPUFE_DEEP_REPORT_TIMEOUT_MS = 2 * 60 * 1000;
+const MAX_ATTACHMENT_PIPELINES_PER_CYCLE = 5;
+const MAX_CAPUFE_DEEP_REPORTS_PER_CYCLE = 2;
+
+export interface CollectJobResult {
+  status: "success" | "error" | "skipped";
+  reason?: string;
+  errorMessage: string | null;
+  durationMs: number;
+  itemsSeen: number;
+  itemsCreated: number;
+  itemsUpdated: number;
+  totalMatches: number;
+  pagesScanned: number;
+  stopReason: string | null;
+}
 
 async function processAttachmentsForProcurement(
   procurementId: string,
@@ -285,21 +302,34 @@ async function processAttachmentsForProcurement(
         }
       }
     }
-  });
+  }, { timeoutMs: ATTACHMENT_PIPELINE_TIMEOUT_MS });
 
   return capturedFechaPublicacion;
 }
 
-export async function runCollectJob(): Promise<void> {
+export async function runCollectJob(): Promise<CollectJobResult> {
   log.info(
     "Iniciando ciclo de colección — MODO 1: Periodic Incremental Listing Scan",
   );
   const cycleStart = Date.now();
 
-  await withLock("collect-job", "main-collect", async () => {
+  const lockResult = await withLock("collect-job", "main-collect", async (): Promise<CollectJobResult> => {
     if (!_comprasMxSourceId) {
-      log.error("No source_id for comprasmx available. Cannot collect.");
-      return;
+      const errorMessage = "No source_id for comprasmx available. Cannot collect.";
+      const durationMs = Date.now() - cycleStart;
+      log.error(errorMessage);
+      healthTracker.recordCycle(durationMs, 0, false);
+      return {
+        status: "error",
+        errorMessage,
+        durationMs,
+        itemsSeen: 0,
+        itemsCreated: 0,
+        itemsUpdated: 0,
+        totalMatches: 0,
+        pagesScanned: 0,
+        stopReason: null,
+      };
     }
     const sourceId = _comprasMxSourceId;
 
@@ -308,6 +338,8 @@ export async function runCollectJob(): Promise<void> {
     let itemsCreated = 0;
     let itemsUpdated = 0;
     let totalMatches = 0;
+    let attachmentPipelinesExecuted = 0;
+    let capufeDeepReportsAttempted = 0;
     const capufeDeepReportsSent = new Set<string>();
     let alertsSentThisCycle = 0;
     const cycleMetrics: CycleMetrics = {
@@ -320,6 +352,7 @@ export async function runCollectJob(): Promise<void> {
     };
     let errorMessage: string | null = null;
     let collectResult: ComprasMxCollectResult | null = null;
+    let durationMs = 0;
 
     try {
       // 1. Colectar
@@ -357,28 +390,10 @@ export async function runCollectJob(): Promise<void> {
           // Solo evaluar matches si es nuevo o cambió
           if (!upsertResult.isNew && !upsertResult.isUpdated) continue;
 
-          let fechaPublicacion: string | null = null;
-          try {
-            fechaPublicacion = await processAttachmentsForProcurement(
-              upsertResult.procurementId,
-              item.sourceUrl,
-            );
-          } catch (attErr) {
-            log.warn(
-              { err: attErr, externalId: item.externalId },
-              "Fallo en pipeline de adjuntos; se continúa con match/alertas",
-            );
-          }
-          // Inyectar fecha_publicacion en rawJson para que telegram.alerts la muestre.
-          if (fechaPublicacion) {
-            item.rawJson = { ...item.rawJson, fecha_publicacion: fechaPublicacion };
-          }
-
           // ── Filtro Global de Fechas: Solo procesar licitaciones "a partir de hoy" ──
-          const pubDateToEvaluate = fechaPublicacion || item.publicationDate;
-          if (isPublicationTooOld(pubDateToEvaluate)) {
+          if (isPublicationTooOld(item.publicationDate)) {
             log.info(
-              { externalId: item.externalId, pubDate: pubDateToEvaluate },
+              { externalId: item.externalId, pubDate: item.publicationDate },
               "Licitación omitida por tener una fecha de publicación muy antigua (fuera del margen actual)",
             );
             continue;
@@ -429,28 +444,87 @@ export async function runCollectJob(): Promise<void> {
             dependencyLower.includes("capufe") &&
             CAPUFE_DEEP_REPORT_TERMS.some((term) => canonicalLower.includes(term));
 
-          if (isCapufeTender && !capufeDeepReportsSent.has(upsertResult.procurementId)) {
-            try {
-              const reportSent = await sendCapufePeajeDeepReportToTelegram({
-                procurementId: upsertResult.procurementId,
-                forceProcess: true,
-              });
-              if (reportSent) {
-                capufeDeepReportsSent.add(upsertResult.procurementId);
-              } else {
-                log.info(
-                  { procurementId: upsertResult.procurementId, externalId: item.externalId },
-                  "Esperando documentos de CAPUFE...",
+          let fechaPublicacion: string | null = null;
+          const shouldRunAttachmentPipeline = matches.length > 0 || isCapufeTender;
+          if (shouldRunAttachmentPipeline) {
+            if (attachmentPipelinesExecuted < MAX_ATTACHMENT_PIPELINES_PER_CYCLE) {
+              attachmentPipelinesExecuted++;
+              try {
+                fechaPublicacion = await withTimeout(
+                  processAttachmentsForProcurement(
+                    upsertResult.procurementId,
+                    item.sourceUrl,
+                  ),
+                  ATTACHMENT_PIPELINE_TIMEOUT_MS + 15_000,
+                  `attachments:${item.externalId}`,
+                );
+              } catch (attErr) {
+                log.warn(
+                  { err: attErr, externalId: item.externalId },
+                  "Fallo en pipeline de adjuntos; se continúa con match/alertas",
                 );
               }
-            } catch (deepReportErr) {
+            } else {
               log.warn(
                 {
-                  err: deepReportErr,
-                  procurementId: upsertResult.procurementId,
                   externalId: item.externalId,
+                  maxPerCycle: MAX_ATTACHMENT_PIPELINES_PER_CYCLE,
                 },
-                "Falló envío de Reporte Deep CAPUFE a Telegram",
+                "Presupuesto de adjuntos agotado para este ciclo; se continúa sin adjuntos",
+              );
+            }
+          }
+
+          // Inyectar fecha_publicacion en rawJson para que telegram.alerts la muestre.
+          if (fechaPublicacion) {
+            item.rawJson = { ...item.rawJson, fecha_publicacion: fechaPublicacion };
+
+            if (isPublicationTooOld(fechaPublicacion)) {
+              log.info(
+                { externalId: item.externalId, pubDate: fechaPublicacion },
+                "Licitación omitida por fecha_publicacion antigua extraída del detalle",
+              );
+              continue;
+            }
+          }
+
+          if (isCapufeTender && !capufeDeepReportsSent.has(upsertResult.procurementId)) {
+            if (capufeDeepReportsAttempted < MAX_CAPUFE_DEEP_REPORTS_PER_CYCLE) {
+              capufeDeepReportsAttempted++;
+              try {
+                const reportSent = await withTimeout(
+                  sendCapufePeajeDeepReportToTelegram({
+                    procurementId: upsertResult.procurementId,
+                    forceProcess: true,
+                  }),
+                  CAPUFE_DEEP_REPORT_TIMEOUT_MS,
+                  `capufe-deep-report:${item.externalId}`,
+                );
+                if (reportSent) {
+                  capufeDeepReportsSent.add(upsertResult.procurementId);
+                } else {
+                  log.info(
+                    { procurementId: upsertResult.procurementId, externalId: item.externalId },
+                    "Esperando documentos de CAPUFE...",
+                  );
+                }
+              } catch (deepReportErr) {
+                log.warn(
+                  {
+                    err: deepReportErr,
+                    procurementId: upsertResult.procurementId,
+                    externalId: item.externalId,
+                  },
+                  "Falló envío de Reporte Deep CAPUFE a Telegram",
+                );
+              }
+            } else {
+              log.warn(
+                {
+                  externalId: item.externalId,
+                  maxPerCycle: MAX_CAPUFE_DEEP_REPORTS_PER_CYCLE,
+                },
+                "Presupuesto de reportes CAPUFE agotado para este ciclo; se continúa con alertas",
               );
             }
           }
@@ -667,7 +741,7 @@ export async function runCollectJob(): Promise<void> {
         });
       })();
 
-      const durationMs = Date.now() - cycleStart;
+      durationMs = Date.now() - cycleStart;
       healthTracker.recordCycle(durationMs, totalMatches, !errorMessage);
 
       log.info(cycleMetrics, '[alert-filter] métricas del ciclo');
@@ -689,7 +763,37 @@ export async function runCollectJob(): Promise<void> {
         "Ciclo Modo 1 (Listing Scan) completado",
       );
     }
+
+    return {
+      status: errorMessage ? "error" : "success",
+      errorMessage,
+      durationMs,
+      itemsSeen,
+      itemsCreated,
+      itemsUpdated,
+      totalMatches,
+      pagesScanned: collectResult?.pagesScanned ?? 0,
+      stopReason: collectResult?.stopReason ?? errorMessage ?? null,
+    };
   });
+
+  if (!lockResult) {
+    const durationMs = Date.now() - cycleStart;
+    return {
+      status: "skipped",
+      reason: "collect-job lock active",
+      errorMessage: null,
+      durationMs,
+      itemsSeen: 0,
+      itemsCreated: 0,
+      itemsUpdated: 0,
+      totalMatches: 0,
+      pagesScanned: 0,
+      stopReason: "collect-job lock active",
+    };
+  }
+
+  return lockResult;
 }
 
 // ── Helper: DbProcurement → NormalizedProcurement (Modo 2 DB-only recheck) ──

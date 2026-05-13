@@ -11,13 +11,16 @@ import { getConfig } from "../config/env";
 import { createModuleLogger } from "../core/logger";
 import { healthTracker } from "../core/healthcheck";
 import { formatDuration, formatMexicoDate, nowISO } from "../core/time";
+import { withTimeout } from "../core/errors";
 import { formatCurrency } from "../core/text";
 import { getState, STATE_KEYS } from "../core/system-state";
 import { getActiveRadars } from "../radars/index";
 
 const log = createModuleLogger("commands");
+const MANUAL_SCAN_TIMEOUT_MS = 30 * 60 * 1000;
 
 let _bot: TelegramBot | null = null;
+let manualScanInFlight: Promise<void> | null = null;
 
 export async function initCommandBot(): Promise<TelegramBot> {
   if (_bot) return _bot;
@@ -81,6 +84,13 @@ function nextRunEstimate(intervalMinutes: number): string {
   const next = new Date(now.getTime() + minutesUntilNext * 60 * 1000);
   next.setSeconds(0, 0);
   return formatMexicoDate(next.toISOString(), "HH:mm");
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 // ─── Registro de comandos ─────────────────────────────────────────────────────
@@ -312,14 +322,70 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     log.info({ from: msg.from?.username }, "📥 /scan");
 
     try {
+      if (manualScanInFlight) {
+        await bot.sendMessage(
+          chatId,
+          "⏳ Ya hay un escaneo manual en curso. Usa /debug_resumen para ver el último estado registrado.",
+        ).catch(() => {});
+        return;
+      }
+
       const { runCollectJob } = await import("../jobs/collect.job");
-      // Ejecutar en background para no bloquear el bot
-      runCollectJob().catch((err: unknown) => {
-        log.error({ err }, "Error en ejecución de /scan");
-      });
-      await bot.sendMessage(chatId, "🚀 Escaneo manual de ComprasMX iniciado...").catch(() => {});
+      await bot.sendMessage(
+        chatId,
+        "🚀 Escaneo manual de ComprasMX iniciado. Te aviso al terminar o si se bloquea.",
+      ).catch(() => {});
+
+      manualScanInFlight = (async () => {
+        try {
+          const result = await withTimeout(
+            runCollectJob(),
+            MANUAL_SCAN_TIMEOUT_MS,
+            "telegram-/scan",
+          );
+
+          if (result.status === "skipped") {
+            await bot.sendMessage(
+              chatId,
+              `⏳ <b>Escaneo no iniciado</b>\nMotivo: <code>${escapeHtml(result.reason ?? result.stopReason ?? "ciclo activo")}</code>`,
+              { parse_mode: "HTML" },
+            ).catch(() => {});
+            return;
+          }
+
+          const ok = result.status === "success";
+          const lines = [
+            `${ok ? "✅" : "⚠️"} <b>Escaneo manual ${ok ? "terminado" : "terminó con error"}</b>`,
+            "",
+            `⏱ Duración: <b>${formatDuration(result.durationMs)}</b>`,
+            `📄 Páginas: <b>${result.pagesScanned}</b>`,
+            `👀 Vistos: <b>${result.itemsSeen}</b>`,
+            `🆕 Nuevos: <b>${result.itemsCreated}</b>`,
+            `🔄 Actualizados: <b>${result.itemsUpdated}</b>`,
+            `🎯 Matches: <b>${result.totalMatches}</b>`,
+            result.stopReason ? `🛑 Stop: <code>${escapeHtml(result.stopReason).slice(0, 160)}</code>` : "",
+            result.errorMessage ? `⚠️ Error: <code>${escapeHtml(result.errorMessage).slice(0, 240)}</code>` : "",
+          ];
+
+          await bot.sendMessage(chatId, lines.filter(Boolean).join("\n"), {
+            parse_mode: "HTML",
+            disable_web_page_preview: true,
+          }).catch(() => {});
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          log.error({ err }, "Error en ejecución de /scan");
+          await bot.sendMessage(
+            chatId,
+            `❌ <b>Escaneo manual bloqueado o fallido</b>\n<code>${escapeHtml(message).slice(0, 240)}</code>`,
+            { parse_mode: "HTML" },
+          ).catch(() => {});
+        } finally {
+          manualScanInFlight = null;
+        }
+      })();
     } catch (err) {
       log.error({ err }, "❌ Error inicializando /scan");
+      manualScanInFlight = null;
       await bot.sendMessage(chatId, "❌ Error iniciando escaneo manual").catch(() => {});
     }
   });
