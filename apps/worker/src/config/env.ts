@@ -68,6 +68,30 @@ const envSchema = z.object({
   COLLECT_INTERVAL_MINUTES: z.string().default("30").transform(Number),
   DAILY_SUMMARY_HOUR: z.string().default("7").transform(Number),
 
+  // External Leads OSINT — apagado por defecto; no afecta ComprasMX si no se activa.
+  ENABLE_EXTERNAL_LEADS_OSINT: z
+    .string()
+    .default("false")
+    .transform((v) => v === "true"),
+  EXTERNAL_LEADS_DRY_RUN: z
+    .string()
+    .default("true")
+    .transform((v) => v !== "false"),
+  EXTERNAL_LEADS_MAX_RESULTS_PER_RUN: z
+    .string()
+    .default("5")
+    .transform(Number),
+  EXTERNAL_LEADS_MIN_SCORE: z.string().default("45").transform(Number),
+  EXTERNAL_LEADS_LOOKBACK_DAYS: z.string().default("180").transform(Number),
+  EXTERNAL_LEADS_MORELOS_ONLY: z
+    .string()
+    .default("true")
+    .transform((v) => v === "true"),
+  EXTERNAL_LEADS_TELEGRAM_ENABLED: z
+    .string()
+    .default("true")
+    .transform((v) => v === "true"),
+
   // OpenAI
   OPENAI_API_KEY: z.string().min(10, { message: "OPENAI_API_KEY requerido" }).optional(),
   OPENAI_MODEL: z.string().default("gpt-4.1-mini"),
@@ -121,6 +145,7 @@ export function getConfig(): AppConfig {
   pino({ base: null, timestamp: pino.stdTimeFunctions.isoTime }).info(
     {
       COMPRASMX_SEED_URL: result.data.COMPRASMX_SEED_URL,
+      ENABLE_EXTERNAL_LEADS_OSINT: result.data.ENABLE_EXTERNAL_LEADS_OSINT,
       NODE_ENV: result.data.NODE_ENV,
       RAILWAY_ENVIRONMENT: result.data.RAILWAY_ENVIRONMENT ?? "local",
     },

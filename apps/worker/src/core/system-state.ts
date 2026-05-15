@@ -24,6 +24,7 @@ export const STATE_KEYS = {
   LAST_HEALTHCHECK_AT: "last_healthcheck_at",
   SCHEDULER_STATUS: "scheduler_status",
   LAST_COLLECT_RUN: "last_collect_run",
+  LAST_EXTERNAL_LEADS_RUN: "last_external_leads_run",
   WORKER_VERSION: "worker_version",
 } as const;
 

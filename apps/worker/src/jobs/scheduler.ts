@@ -24,6 +24,7 @@ import { runDailySummaryJob } from "./daily-summary.job";
 import { comprasMxCB } from "../core/circuit-breaker";
 import { sendTelegramMessage } from "../alerts/telegram.alerts";
 import { healthTracker } from "../core/healthcheck";
+import { runExternalLeadsOsintJob } from "../modules/external-opportunity-discovery";
 
 const log = createModuleLogger("scheduler");
 
@@ -31,6 +32,36 @@ const JITTER_MS = 3 * 60 * 1000; // ±3 min
 
 function jitter(): number {
   return (Math.random() * 2 - 1) * JITTER_MS;
+}
+
+export async function runExternalLeadsIfEnabled(
+  runner: typeof runExternalLeadsOsintJob = runExternalLeadsOsintJob,
+): Promise<void> {
+  try {
+    const config = getConfig();
+    if (!config.ENABLE_EXTERNAL_LEADS_OSINT) return;
+
+    const result = await runner();
+    log.info(
+      {
+        status: result.status,
+        dryRun: result.dryRun,
+        sourcesReviewed: result.sourcesReviewed,
+        detected: result.detected,
+        saved: result.saved,
+        alerted: result.alerted,
+        skippedLowScore: result.skippedLowScore,
+        skippedMissingSourceUrl: result.skippedMissingSourceUrl,
+        skippedMissingEvidence: result.skippedMissingEvidence,
+        skippedDuplicateAlert: result.skippedDuplicateAlert,
+        telegramCandidates: result.telegramCandidates,
+        errors: result.errors.length,
+      },
+      "🧭 Ciclo OSINT externo completado",
+    );
+  } catch (err) {
+    log.error({ err }, "❌ Error no manejado en OSINT externo");
+  }
 }
 
 async function scheduledCollect(baseIntervalMs: number): Promise<void> {
@@ -53,6 +84,8 @@ async function scheduledCollect(baseIntervalMs: number): Promise<void> {
       );
     }
   }
+
+  await runExternalLeadsIfEnabled();
 
   const nextDelay = baseIntervalMs + jitter();
   log.info(
@@ -127,6 +160,7 @@ export function startScheduler(): void {
         sendTelegramMessage(alertMsg, "HTML").catch(() => {});
       }
     }
+    await runExternalLeadsIfEnabled();
     // Arrancar el loop recursivo con jitter después del primer ciclo inmediato
     const firstDelay = baseIntervalMs + jitter();
     log.info(

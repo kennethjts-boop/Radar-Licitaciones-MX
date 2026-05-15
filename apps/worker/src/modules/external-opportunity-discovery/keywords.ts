@@ -1,0 +1,161 @@
+import {
+  COFORMEX_IMPRESOS_ADICIONALES,
+  CONSTRUCCION_MANTENIMIENTO_KEYWORDS,
+  IMPRESOS_KEYWORDS,
+  LUBRICANTES_KEYWORDS,
+  SEGURIDAD_RIESGO_KEYWORDS,
+} from "../../radars/business-lines.radar";
+import type { BusinessLineKeywordConfig } from "./types";
+
+export const MORELOS_TERMS = [
+  "morelos",
+  "estado de morelos",
+  "cuernavaca",
+  "cuautla",
+  "jiutepec",
+  "temixco",
+  "jojutla",
+  "zacatepec",
+  "yautepec",
+  "puente de ixtla",
+  "emiliano zapata",
+  "xochitepec",
+  "ayala",
+  "yecapixtla",
+  "tlaltizapan",
+  "tlaltizapán",
+  "tlaquiltenango",
+];
+
+export const CAPUFE_NATIONAL_OPPORTUNITY_TERMS = [
+  "desierta",
+  "licitacion desierta",
+  "licitación desierta",
+  "cancelada",
+  "reposicion",
+  "reposición",
+  "segunda vuelta",
+  "segunda convocatoria",
+  "nueva convocatoria",
+  "baja competencia",
+  "sin proposiciones",
+  "sin propuestas",
+  "sin participantes",
+  "propuesta unica",
+  "propuesta única",
+  "solo un licitante",
+  "sin interes",
+  "sin interés",
+  "oportunidad",
+  "lejana",
+  "condiciones especiales",
+];
+
+export const BUSINESS_LINE_KEYWORDS: BusinessLineKeywordConfig[] = [
+  {
+    key: "aceites_lubricantes",
+    displayName: "Aceites / Lubricantes",
+    referenceCompany: "HM HIGHMIL / HIGHMILL",
+    keywords: LUBRICANTES_KEYWORDS,
+    osintSignals: [
+      "flotilla vehicular",
+      "parque vehicular",
+      "mantenimiento vehicular",
+      "taller municipal",
+      "servicios publicos",
+      "servicios públicos",
+      "proteccion civil",
+      "protección civil",
+      "seguridad publica",
+      "seguridad pública",
+      "maquinaria pesada",
+      "autotransporte",
+      "organismo operador de agua",
+    ],
+  },
+  {
+    key: "impresos_primasa",
+    displayName: "Impresos",
+    referenceCompany: "PRIMASA",
+    keywords: IMPRESOS_KEYWORDS,
+    osintSignals: [
+      "comunicacion social",
+      "comunicación social",
+      "instituto electoral",
+      "campaña institucional",
+      "campanas institucionales",
+      "formatos oficiales",
+      "alto volumen documental",
+      "papeleria institucional",
+      "papelería institucional",
+    ],
+  },
+  {
+    key: "impresos_coformex",
+    displayName: "Impresos institucionales",
+    referenceCompany: "COFORMEX",
+    keywords: [...IMPRESOS_KEYWORDS, ...COFORMEX_IMPRESOS_ADICIONALES],
+    osintSignals: [
+      "formatos administrativos",
+      "formas continuas",
+      "documentacion impresa",
+      "documentación impresa",
+      "archivo impreso",
+      "impresion gubernamental",
+      "impresión gubernamental",
+      "material grafico",
+      "material gráfico",
+    ],
+  },
+  {
+    key: "seguridad_confianza_riesgo",
+    displayName: "Seguridad / Control de confianza",
+    referenceCompany: "UNIFORCE",
+    keywords: SEGURIDAD_RIESGO_KEYWORDS,
+    osintSignals: [
+      "seguridad privada institucional",
+      "hospital",
+      "escuela",
+      "oficina gubernamental",
+      "instalacion estrategica",
+      "instalación estratégica",
+      "parque industrial",
+      "logistica",
+      "logística",
+      "recursos humanos",
+      "validacion documental",
+      "validación documental",
+    ],
+  },
+  {
+    key: "construccion_mantenimiento",
+    displayName: "Construcción / Mantenimiento",
+    referenceCompany: "GRUPO CONSTRUCTOR NAG, S.A. de C.V.",
+    keywords: CONSTRUCCION_MANTENIMIENTO_KEYWORDS,
+    osintSignals: [
+      "ayuntamiento",
+      "escuela",
+      "centro de salud",
+      "oficina publica",
+      "oficina pública",
+      "obra civil menor",
+      "mantenimiento de inmuebles",
+      "rehabilitacion de espacios publicos",
+      "rehabilitación de espacios públicos",
+      "remodelacion de oficinas",
+      "remodelación de oficinas",
+      "conservacion de instalaciones",
+      "conservación de instalaciones",
+    ],
+  },
+];
+
+export function getBusinessLineConfig(
+  key: BusinessLineKeywordConfig["key"],
+): BusinessLineKeywordConfig {
+  const config = BUSINESS_LINE_KEYWORDS.find((item) => item.key === key);
+  if (!config) {
+    throw new Error(`Vertical OSINT no configurada: ${key}`);
+  }
+  return config;
+}

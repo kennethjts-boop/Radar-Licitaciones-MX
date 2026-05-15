@@ -14,6 +14,7 @@ import { imssMorelosRadar } from "./imss-morelos.radar";
 import { imssBienestarMorelosRadar } from "./imss-bienestar-morelos.radar";
 import { habitatMorelosRadar } from "./habitat-morelos.radar";
 import { morelosGeneralRadar } from "./morelos-general.radar";
+import { BUSINESS_LINE_RADARS } from "./business-lines.radar";
 
 /**
  * Lista canónica de todos los radares.
@@ -30,6 +31,7 @@ export const RADARS: RadarConfig[] = [
   imssBienestarMorelosRadar,
   habitatMorelosRadar,
   morelosGeneralRadar,
+  ...BUSINESS_LINE_RADARS,
 ];
 
 /**

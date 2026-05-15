@@ -300,7 +300,65 @@ INSERT INTO entity_memory (entity_type, entity_key, aliases_json, context_terms_
 ON CONFLICT (entity_key) DO NOTHING;
 
 -- =============================================================================
--- 14. SYSTEM_STATE — Estado del sistema (scheduler, locks, config)
+-- 14. EXTERNAL_LEADS — Leads OSINT externos a ComprasMX (modulo opcional)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS external_leads (
+  id                                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  source_name                         TEXT NOT NULL,
+  source_url                          TEXT NOT NULL,
+  detected_at                         TIMESTAMPTZ NOT NULL,
+  title                               TEXT NOT NULL,
+  organization_name                   TEXT,
+  organization_type                   TEXT,
+  state                               TEXT,
+  municipality                        TEXT,
+  sector                              TEXT,
+  vertical                            TEXT NOT NULL,
+  matched_keywords                    JSONB NOT NULL DEFAULT '[]',
+  evidence_text                       TEXT NOT NULL,
+  contact_area                        TEXT,
+  contact_name_public_optional        TEXT,
+  contact_email_public_optional       TEXT,
+  contact_phone_public_optional       TEXT,
+  estimated_interest_score            INTEGER NOT NULL DEFAULT 0,
+  opportunity_type                    TEXT NOT NULL,
+  confidence                          TEXT NOT NULL CHECK (confidence IN ('LOW', 'MEDIUM', 'HIGH')),
+  next_action                         TEXT NOT NULL,
+  status                              TEXT NOT NULL DEFAULT 'new',
+  amount_visible                      BOOLEAN NOT NULL DEFAULT FALSE,
+  buyer_area_identified               BOOLEAN NOT NULL DEFAULT FALSE,
+  is_official_source                  BOOLEAN NOT NULL DEFAULT FALSE,
+  source_published_at                 TIMESTAMPTZ,
+  raw_json                            JSONB NOT NULL DEFAULT '{}',
+  created_at                          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at                          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  fingerprint_hash                    TEXT NOT NULL UNIQUE
+);
+
+CREATE INDEX idx_external_leads_detected_at ON external_leads (detected_at DESC);
+CREATE UNIQUE INDEX idx_external_leads_fingerprint_hash ON external_leads (fingerprint_hash);
+CREATE INDEX idx_external_leads_vertical ON external_leads (vertical, estimated_interest_score DESC);
+CREATE INDEX idx_external_leads_state ON external_leads (state);
+CREATE INDEX idx_external_leads_score_confidence ON external_leads (estimated_interest_score DESC, confidence);
+CREATE INDEX idx_external_leads_status ON external_leads (status);
+
+CREATE TABLE IF NOT EXISTS external_lead_alerts (
+  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  external_lead_id      UUID REFERENCES external_leads(id) ON DELETE CASCADE,
+  fingerprint_hash      TEXT NOT NULL UNIQUE,
+  telegram_message      TEXT NOT NULL,
+  telegram_status       TEXT NOT NULL DEFAULT 'pending'
+                          CHECK (telegram_status IN ('pending', 'sent', 'failed')),
+  telegram_message_id   INTEGER,
+  sent_at               TIMESTAMPTZ,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_external_lead_alerts_status ON external_lead_alerts (telegram_status, created_at DESC);
+CREATE UNIQUE INDEX idx_external_lead_alerts_fingerprint_hash ON external_lead_alerts (fingerprint_hash);
+
+-- =============================================================================
+-- 15. SYSTEM_STATE — Estado del sistema (scheduler, locks, config)
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS system_state (
   id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -312,7 +370,8 @@ CREATE TABLE IF NOT EXISTS system_state (
 -- Seed de estado inicial
 INSERT INTO system_state (key, value_json) VALUES
   ('scheduler_status', '{"status": "inactive", "lastCycle": null}'),
-  ('last_collect_run', '{"collectorKey": null, "startedAt": null, "status": null}')
+  ('last_collect_run', '{"collectorKey": null, "startedAt": null, "status": null}'),
+  ('last_external_leads_run', '{"status": "none", "detected": 0, "saved": 0, "alerted": 0}')
 ON CONFLICT (key) DO NOTHING;
 
 -- =============================================================================
@@ -351,4 +410,8 @@ CREATE TRIGGER trg_matches_updated_at
 
 CREATE TRIGGER trg_entity_memory_updated_at
   BEFORE UPDATE ON entity_memory
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER trg_external_leads_updated_at
+  BEFORE UPDATE ON external_leads
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

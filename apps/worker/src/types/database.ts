@@ -198,6 +198,52 @@ export interface DbDailySummary {
   created_at: string;
 }
 
+// ─── external_leads ─────────────────────────────────────────────────────────
+
+export interface DbExternalLead {
+  id: string;
+  source_name: string;
+  source_url: string;
+  detected_at: string;
+  title: string;
+  organization_name: string | null;
+  organization_type: string | null;
+  state: string | null;
+  municipality: string | null;
+  sector: string | null;
+  vertical: string;
+  matched_keywords: string[];
+  evidence_text: string;
+  contact_area: string | null;
+  contact_name_public_optional: string | null;
+  contact_email_public_optional: string | null;
+  contact_phone_public_optional: string | null;
+  estimated_interest_score: number;
+  opportunity_type: string;
+  confidence: "LOW" | "MEDIUM" | "HIGH";
+  next_action: string;
+  status: string;
+  amount_visible: boolean;
+  buyer_area_identified: boolean;
+  is_official_source: boolean;
+  source_published_at: string | null;
+  raw_json: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  fingerprint_hash: string;
+}
+
+export interface DbExternalLeadAlert {
+  id: string;
+  external_lead_id: string | null;
+  fingerprint_hash: string;
+  telegram_message: string;
+  telegram_status: "pending" | "sent" | "failed";
+  telegram_message_id: number | null;
+  sent_at: string | null;
+  created_at: string;
+}
+
 // ─── entity_memory ───────────────────────────────────────────────────────────
 
 export interface DbEntityMemory {

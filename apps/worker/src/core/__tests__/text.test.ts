@@ -40,6 +40,12 @@ describe("textContainsTerm", () => {
     expect(textContainsTerm("licitacion publica", "licitación")).toBe(true);
   });
 
+  it("encuentra variantes singular/plural en keywords", () => {
+    expect(textContainsTerm("suministro de aceites industriales", "aceite industrial")).toBe(true);
+    expect(textContainsTerm("grasas lubricantes para maquinaria", "grasa lubricante")).toBe(true);
+    expect(textContainsTerm("evaluaciones psicometricas", "evaluación psicométrica")).toBe(true);
+  });
+
   it("retorna false cuando el término no está", () => {
     expect(textContainsTerm("compras imss morelos", "capufe")).toBe(false);
   });

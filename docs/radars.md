@@ -113,6 +113,24 @@ El registro central está en `radars/index.ts`.
 
 ---
 
+## 9. Nuevas verticales comerciales Morelos
+
+**Alcance:** Morelos únicamente. Los nombres de empresa son referencia interna
+para separar verticales; no se usan como keywords principales.
+
+**Radares agregados:**
+- `hm_highmil_lubricantes_morelos`: aceites, aditivos, grasas, anticongelantes, lubricantes industriales y fluidos automotrices.
+- `primasa_impresos_morelos`: impresos, impresión offset/digital, boletos, comprobantes, recibos, lonas, etiquetas, folletos y papelería impresa.
+- `coformex_impresos_morelos`: mismo grupo de impresos más formas continuas, formatos administrativos, documentación impresa y material gráfico.
+- `uniforce_seguridad_riesgo_morelos`: vigilancia, seguridad privada, control de confianza, psicometría, validación documental y análisis de riesgo. No se recolectan datos personales sensibles.
+- `grupo_constructor_nag_mantenimiento_morelos`: construcción, obra pública, remodelación, mantenimiento, conservación de inmuebles e instalaciones.
+
+**Regla de alcance:** requieren coincidencia de geografía Morelos en el texto
+canónico y conservan el filtro duro por `geoTerms`. CAPUFE no entra nacional por
+estos radares.
+
+---
+
 ## Cómo Agregar un Radar
 
 1. Crear `src/radars/mi-radar.radar.ts` siguiendo el patrón de los existentes

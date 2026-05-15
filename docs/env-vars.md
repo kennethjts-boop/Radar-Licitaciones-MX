@@ -64,6 +64,37 @@ FONDOS_ENABLED=true
 # No afecta comprasmx, dof, institutional_sites ni fallback_search.
 # Cambiar en Railway Variables UI → el scheduler detecta el valor al arrancar.
 
+# ── External Leads OSINT ─────────────────────────────────────────────────────
+ENABLE_EXTERNAL_LEADS_OSINT=false
+# Default seguro: false. Si no existe o está false, no consulta fuentes externas,
+# no crea leads y no envía alertas OSINT.
+
+EXTERNAL_LEADS_DRY_RUN=true
+# Default seguro: true. Detecta, calcula score y registra logs/estado, pero no
+# guarda en Supabase ni envía Telegram.
+
+EXTERNAL_LEADS_MAX_RESULTS_PER_RUN=5
+# Límite máximo de leads procesados/alertados por ciclo.
+
+EXTERNAL_LEADS_MIN_SCORE=45
+# Score mínimo 0-100 para guardar/alertar leads externos.
+
+EXTERNAL_LEADS_LOOKBACK_DAYS=180
+# Ventana temporal usada por el scoring conservador.
+
+EXTERNAL_LEADS_MORELOS_ONLY=true
+# Mantener true por defecto. Si se desactiva, CAPUFE nacional solo se acepta
+# cuando aparezca con señales de desierta, oportunidad, baja competencia,
+# sin participantes o condiciones similares.
+
+EXTERNAL_LEADS_TELEGRAM_ENABLED=true
+# Control independiente de alertas Telegram OSINT. Si es false, el módulo guarda
+# leads pero no manda mensajes.
+
+La migración `docs/migrations/12_external_leads_osint.sql` debe ejecutarse una
+vez antes de pasar `EXTERNAL_LEADS_DRY_RUN=false`. El runtime opera por Supabase
+REST; `SUPABASE_DB_URL` no es dependencia normal del módulo OSINT.
+
 # ── Railway (automático en deploy) ───────────────────────────────────────────
 RAILWAY_ENVIRONMENT=production
 # Railway inyecta esta variable automáticamente en producción
@@ -95,6 +126,13 @@ TELEGRAM_CHAT_ID=
 PLAYWRIGHT_HEADLESS=true
 COLLECT_INTERVAL_MINUTES=30
 DAILY_SUMMARY_HOUR=7
+ENABLE_EXTERNAL_LEADS_OSINT=false
+EXTERNAL_LEADS_DRY_RUN=true
+EXTERNAL_LEADS_MAX_RESULTS_PER_RUN=5
+EXTERNAL_LEADS_MIN_SCORE=45
+EXTERNAL_LEADS_LOOKBACK_DAYS=180
+EXTERNAL_LEADS_MORELOS_ONLY=true
+EXTERNAL_LEADS_TELEGRAM_ENABLED=true
 APP_TIMEZONE=America/Mexico_City
 RAILWAY_ENVIRONMENT=
 ```

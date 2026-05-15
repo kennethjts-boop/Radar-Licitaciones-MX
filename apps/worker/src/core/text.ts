@@ -43,6 +43,37 @@ export function tokenize(text: string): string[] {
   return [...new Set(tokens)];
 }
 
+function tokenVariants(token: string): Set<string> {
+  const variants = new Set([token]);
+
+  if (token.length > 3 && token.endsWith("s")) {
+    variants.add(token.slice(0, -1));
+  }
+
+  if (token.length > 4 && token.endsWith("es")) {
+    variants.add(token.slice(0, -2));
+  }
+
+  if (token.length > 4 && token.endsWith("ces")) {
+    variants.add(`${token.slice(0, -3)}z`);
+  }
+
+  return variants;
+}
+
+function tokensEquivalent(a: string, b: string): boolean {
+  if (a === b) return true;
+
+  const aVariants = tokenVariants(a);
+  const bVariants = tokenVariants(b);
+
+  for (const variant of aVariants) {
+    if (bVariants.has(variant)) return true;
+  }
+
+  return false;
+}
+
 /**
  * Construye el canonical_text de un expediente combinando múltiples campos.
  */
@@ -74,7 +105,22 @@ export function buildCanonicalText(params: {
 export function textContainsTerm(canonicalText: string, term: string): boolean {
   const normText = normalizeText(canonicalText);
   const normTerm = normalizeText(term);
-  return normText.includes(normTerm);
+  if (!normText || !normTerm) return false;
+
+  const textTokens = normText.split(" ").filter(Boolean);
+  const termTokens = normTerm.split(" ").filter(Boolean);
+  if (termTokens.length === 0 || termTokens.length > textTokens.length) {
+    return false;
+  }
+
+  for (let i = 0; i <= textTokens.length - termTokens.length; i++) {
+    const windowMatches = termTokens.every((termToken, offset) =>
+      tokensEquivalent(textTokens[i + offset], termToken),
+    );
+    if (windowMatches) return true;
+  }
+
+  return false;
 }
 
 /**

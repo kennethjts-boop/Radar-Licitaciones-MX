@@ -93,6 +93,10 @@ function escapeHtml(value: unknown): string {
     .replace(/>/g, "&gt;");
 }
 
+function formatBool(value: unknown): string {
+  return value === true ? "true" : "false";
+}
+
 // ─── Registro de comandos ─────────────────────────────────────────────────────
 
 function registerCommands(bot: TelegramBot, chatId: string): void {
@@ -112,6 +116,7 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       const radars = getActiveRadars();
 
       const lastRunState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_COLLECT_RUN);
+      const externalState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_EXTERNAL_LEADS_RUN);
       const bootState = await getState<Record<string, unknown>>(STATE_KEYS.WORKER_BOOT_TIME);
       const schedulerState = await getState<Record<string, unknown>>(STATE_KEYS.SCHEDULER_STATUS);
 
@@ -135,6 +140,9 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         ? ["⚠️ <b>Último ciclo terminó con error — revisar /debug_resumen</b>"]
         : [];
 
+      const external =
+        status.externalLeads.status !== "none" ? status.externalLeads : externalState;
+
       const lines = [
         `🔍 <b>ESTADO — Radar Licitaciones MX</b>`,
         "",
@@ -149,6 +157,10 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `🔜 Próxima: ~<b>${nextRun} MX</b>`,
         `📡 Scheduler: <b>${status.schedulerStatus === "active" || schedulerState?.status === "active" ? "✅ Activo" : "⏳ Iniciando"}</b>`,
         `🛰 Radares: <b>${radars.length} activos</b>`,
+        `🧭 External OSINT: <b>${config.ENABLE_EXTERNAL_LEADS_OSINT ? "activo" : "inactivo"}</b> | Dry run: <b>${formatBool(config.EXTERNAL_LEADS_DRY_RUN)}</b>`,
+        external
+          ? `   Último: <b>${external.status ?? "N/D"}</b> | Detectados: <b>${external.detected ?? 0}</b> | Guardados: <b>${external.saved ?? 0}</b> | Alertas: <b>${external.alerted ?? 0}</b>`
+          : `   Último: <b>N/D</b>`,
         "",
         `⏱ Uptime: <b>${formatDuration(status.uptimeMs)}</b>`,
         `🌍 Env: <b>${config.NODE_ENV}</b> | <b>${config.RAILWAY_ENVIRONMENT ?? "local"}</b>`,
@@ -284,7 +296,11 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     try {
       const status = healthTracker.getStatus();
       const lastRunState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_COLLECT_RUN);
+      const externalState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_EXTERNAL_LEADS_RUN);
+      const config = getConfig();
       const radars = getActiveRadars();
+      const external =
+        status.externalLeads.status !== "none" ? status.externalLeads : externalState;
 
       const lines = [
         `🔧 <b>TELEMETRÍA — Radar Licitaciones MX</b>`,
@@ -301,6 +317,15 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `  Mutated: <b>${lastRunState?.total_mutated_detected ?? 0}</b>`,
         `  Streak: <b>${lastRunState?.known_streak ?? 0}</b>`,
         `  Stop: <code>${String(lastRunState?.stop_reason ?? "N/D").slice(0, 50)}</code>`,
+        "",
+        `<b>🧭 External OSINT:</b> ${config.ENABLE_EXTERNAL_LEADS_OSINT ? "activo" : "inactivo"}`,
+        `  Dry run: <b>${formatBool(config.EXTERNAL_LEADS_DRY_RUN)}</b>`,
+        `  Último ciclo: <b>${external?.status ?? "N/D"}</b>`,
+        `  Fuentes: <b>${external?.sourcesReviewed ?? 0}</b>`,
+        `  Detectados: <b>${external?.detected ?? 0}</b>`,
+        `  Guardados: <b>${external?.saved ?? 0}</b>`,
+        `  Alertas: <b>${external?.alerted ?? 0}</b>`,
+        `  Errores: <b>${Array.isArray(external?.errors) ? external.errors.length : 0}</b>`,
         "",
         lastRunState?.errorMessage ? `⚠️ <b>Error:</b> <code>${String(lastRunState.errorMessage).slice(0, 100)}</code>` : "",
         "",

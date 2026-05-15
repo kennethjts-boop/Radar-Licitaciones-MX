@@ -40,6 +40,17 @@ export interface HealthStatus {
   lastCycleDurationMs: number | null;
   lastCycleMatches: number | null;
   schedulerStatus: "active" | "starting" | "stopped";
+  externalLeads: {
+    lastRunAt: string | null;
+    status: "success" | "error" | "skipped" | "none";
+    enabled: boolean;
+    dryRun: boolean;
+    sourcesReviewed: number;
+    detected: number;
+    saved: number;
+    alerted: number;
+    errors: string[];
+  };
   uptimeMs: number;
   runtimeDbMode: "supabase-rest";
   stalled: boolean;
@@ -59,6 +70,19 @@ class HealthTracker {
 
   // Scheduler
   private schedulerStatus: "active" | "starting" | "stopped" = "starting";
+
+  // External leads OSINT (en memoria para soportar dry-run sin escribir en DB)
+  private externalLeadsStatus = {
+    lastRunAt: null as string | null,
+    status: "none" as "success" | "error" | "skipped" | "none",
+    enabled: false,
+    dryRun: true,
+    sourcesReviewed: 0,
+    detected: 0,
+    saved: 0,
+    alerted: 0,
+    errors: [] as string[],
+  };
 
   // Estado de servicios
   private dbHealth: ServiceHealth = "unknown";
@@ -127,6 +151,42 @@ class HealthTracker {
     log.info({ durationMs, matches, success }, "Ciclo completado");
   }
 
+  recordExternalLeadsCycle(params: {
+    status: "success" | "error" | "skipped";
+    enabled: boolean;
+    dryRun: boolean;
+    sourcesReviewed: number;
+    detected: number;
+    saved: number;
+    alerted: number;
+    errors: string[];
+  }): void {
+    this.externalLeadsStatus = {
+      lastRunAt: nowISO(),
+      status: params.status,
+      enabled: params.enabled,
+      dryRun: params.dryRun,
+      sourcesReviewed: params.sourcesReviewed,
+      detected: params.detected,
+      saved: params.saved,
+      alerted: params.alerted,
+      errors: params.errors.slice(0, 10),
+    };
+    log.info(
+      {
+        status: params.status,
+        enabled: params.enabled,
+        dryRun: params.dryRun,
+        sourcesReviewed: params.sourcesReviewed,
+        detected: params.detected,
+        saved: params.saved,
+        alerted: params.alerted,
+        errors: params.errors.length,
+      },
+      "Ciclo external leads registrado en memoria",
+    );
+  }
+
   // ── Estado completo ─────────────────────────────────────────────────────────
 
   getStatus(): HealthStatus {
@@ -178,6 +238,7 @@ class HealthTracker {
       lastCycleDurationMs: this.lastCycleDurationMs,
       lastCycleMatches: this.lastCycleMatches,
       schedulerStatus: this.schedulerStatus,
+      externalLeads: this.externalLeadsStatus,
       uptimeMs,
       runtimeDbMode: "supabase-rest",
       stalled,

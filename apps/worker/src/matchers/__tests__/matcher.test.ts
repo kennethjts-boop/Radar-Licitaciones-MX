@@ -2,6 +2,7 @@ import {
   evaluateProcurementAgainstRadar,
   evaluateAllRadars,
 } from "../matcher";
+import { getActiveRadars, getRadarByKey } from "../../radars";
 import type { NormalizedProcurement, RadarConfig } from "../../types/procurement";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -270,5 +271,45 @@ describe("evaluateAllRadars", () => {
     const proc = makeProcurement();
     const results = evaluateAllRadars(proc, [], true);
     expect(results).toHaveLength(0);
+  });
+});
+
+describe("business line radars", () => {
+  it("mantiene activos radares existentes y agrega nuevas verticales", () => {
+    const keys = getActiveRadars().map((radar) => radar.key);
+    expect(keys).toContain("capufe_oportunidades");
+    expect(keys).toContain("imss_morelos");
+    expect(keys).toContain("hm_highmil_lubricantes_morelos");
+    expect(keys).toContain("primasa_impresos_morelos");
+    expect(keys).toContain("coformex_impresos_morelos");
+    expect(keys).toContain("uniforce_seguridad_riesgo_morelos");
+    expect(keys).toContain("grupo_constructor_nag_mantenimiento_morelos");
+  });
+
+  it("no activa nueva vertical por CAPUFE nacional sin Morelos", () => {
+    const proc = makeProcurement({
+      dependencyName: "CAPUFE",
+      state: "NACIONAL",
+      canonicalText:
+        "capufe suministro de lubricantes y aceites para parque vehicular nacional",
+    });
+    const radar = getRadarByKey("hm_highmil_lubricantes_morelos");
+    expect(radar).toBeDefined();
+    const result = evaluateProcurementAgainstRadar(proc, radar!, true);
+    expect(result).toBeNull();
+  });
+
+  it("conserva excepcion CAPUFE nacional por licitacion desierta", () => {
+    const proc = makeProcurement({
+      dependencyName: "CAPUFE",
+      status: "desierta",
+      state: "NACIONAL",
+      canonicalText:
+        "capufe caminos y puentes federales licitacion desierta sin participantes",
+    });
+    const radar = getRadarByKey("capufe_oportunidades");
+    expect(radar).toBeDefined();
+    const result = evaluateProcurementAgainstRadar(proc, radar!, true);
+    expect(result).not.toBeNull();
   });
 });
