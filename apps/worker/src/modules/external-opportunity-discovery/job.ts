@@ -51,6 +51,7 @@ export function getExternalLeadRunOptions(): ExternalLeadRunOptions {
     minScore: config.EXTERNAL_LEADS_MIN_SCORE,
     lookbackDays: config.EXTERNAL_LEADS_LOOKBACK_DAYS,
     morelosOnly: config.EXTERNAL_LEADS_MORELOS_ONLY,
+    targetLocations: config.EXTERNAL_LEADS_TARGET_LOCATIONS,
     telegramEnabled: config.EXTERNAL_LEADS_TELEGRAM_ENABLED,
   };
 }
@@ -81,6 +82,7 @@ async function recordExternalLeadRunState(
     enabled: options.enabled,
     dryRun: options.dryRun,
     telegramEnabled: options.telegramEnabled,
+    targetLocations: options.targetLocations ?? null,
     morelosOnly: options.morelosOnly,
     minScore: options.minScore,
     maxResultsPerRun: options.maxResultsPerRun,

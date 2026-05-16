@@ -87,6 +87,16 @@ const envSchema = z.object({
     .string()
     .default("true")
     .transform((v) => v === "true"),
+  EXTERNAL_LEADS_TARGET_LOCATIONS: z
+    .string()
+    .optional()
+    .transform((value) => {
+      const locations = (value ?? "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      return locations.length > 0 ? locations : undefined;
+    }),
   EXTERNAL_LEADS_TELEGRAM_ENABLED: z
     .string()
     .default("true")

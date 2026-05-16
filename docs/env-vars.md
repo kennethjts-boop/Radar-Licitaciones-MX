@@ -87,6 +87,11 @@ EXTERNAL_LEADS_MORELOS_ONLY=true
 # cuando aparezca con señales de desierta, oportunidad, baja competencia,
 # sin participantes o condiciones similares.
 
+EXTERNAL_LEADS_TARGET_LOCATIONS=
+# Lista opcional separada por comas. Si existe, reemplaza el filtro territorial
+# de EXTERNAL_LEADS_MORELOS_ONLY. Ejemplo:
+# morelos,jalisco,guadalajara,cdmx,estado-de-mexico
+
 EXTERNAL_LEADS_TELEGRAM_ENABLED=true
 # Control independiente de alertas Telegram OSINT. Si es false, el módulo guarda
 # leads pero no manda mensajes.
@@ -132,6 +137,7 @@ EXTERNAL_LEADS_MAX_RESULTS_PER_RUN=5
 EXTERNAL_LEADS_MIN_SCORE=45
 EXTERNAL_LEADS_LOOKBACK_DAYS=180
 EXTERNAL_LEADS_MORELOS_ONLY=true
+EXTERNAL_LEADS_TARGET_LOCATIONS=
 EXTERNAL_LEADS_TELEGRAM_ENABLED=true
 APP_TIMEZONE=America/Mexico_City
 RAILWAY_ENVIRONMENT=

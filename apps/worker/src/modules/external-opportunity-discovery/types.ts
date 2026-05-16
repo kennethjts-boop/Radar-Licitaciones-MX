@@ -89,6 +89,7 @@ export interface ExternalLeadRunOptions {
   minScore: number;
   lookbackDays: number;
   morelosOnly: boolean;
+  targetLocations?: string[];
   telegramEnabled: boolean;
 }
 

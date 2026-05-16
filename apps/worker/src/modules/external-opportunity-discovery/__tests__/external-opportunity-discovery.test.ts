@@ -71,6 +71,7 @@ describe("external-opportunity-discovery matching", () => {
 
   it("respeta alcance Morelos/CAPUFE", () => {
     const capufeNational = makeCandidate({
+      sourceUrl: "https://datos.gob.mx/busca/dataset/contratos-capufe",
       organizationName: "CAPUFE",
       state: "NACIONAL",
       municipality: null,
@@ -87,6 +88,97 @@ describe("external-opportunity-discovery matching", () => {
     expect(isExternalLeadInAllowedScope(capufeNational, true)).toBe(false);
     expect(isExternalLeadInAllowedScope(capufeNational, false)).toBe(false);
     expect(isExternalLeadInAllowedScope(capufeOpportunity, false)).toBe(true);
+  });
+
+  it("acepta ubicaciones objetivo con Morelos y Jalisco", () => {
+    const jaliscoLead = makeCandidate({
+      sourceUrl: "https://datos.gob.mx/busca/dataset/contratos-jalisco",
+      organizationName: "Gobierno de Jalisco",
+      state: "Jalisco",
+      municipality: "Zapopan",
+      title: "Contrato de lubricantes para parque vehicular",
+      evidenceText: "Gobierno de Jalisco publica contrato para aceites y lubricantes.",
+    });
+
+    const outsideLead = makeCandidate({
+      sourceUrl: "https://datos.gob.mx/busca/dataset/contratos-puebla",
+      organizationName: "Gobierno de Puebla",
+      state: "Puebla",
+      municipality: "Puebla",
+      title: "Contrato de lubricantes para parque vehicular",
+      evidenceText: "Gobierno de Puebla publica contrato para aceites y lubricantes.",
+    });
+
+    expect(isExternalLeadInAllowedScope(jaliscoLead, true, ["morelos", "jalisco"])).toBe(true);
+    expect(isExternalLeadInAllowedScope(outsideLead, true, ["morelos", "jalisco"])).toBe(false);
+  });
+
+  it("detecta Guadalajara aunque state venga vacío", () => {
+    const lead = makeCandidate({
+      sourceUrl: "https://datos.gob.mx/busca/dataset/guadalajara-adquisiciones",
+      organizationName: "Dirección de Adquisiciones de Guadalajara",
+      state: null,
+      municipality: null,
+      title: "Suministro de aceites para servicios municipales",
+      evidenceText: "Convocatoria pública del Ayuntamiento de Guadalajara para parque vehicular.",
+    });
+
+    expect(isExternalLeadInAllowedScope(lead, true, ["jalisco"])).toBe(true);
+  });
+
+  it("detecta CDMX por Ciudad de México", () => {
+    const lead = makeCandidate({
+      sourceUrl: "https://datos.gob.mx/busca/dataset/ciudad-de-mexico-compras",
+      organizationName: "Gobierno de la Ciudad de México",
+      state: null,
+      municipality: null,
+      title: "Contrato de impresos institucionales",
+      evidenceText: "Proceso de adquisiciones para alcaldía en Ciudad de México.",
+    });
+
+    expect(isExternalLeadInAllowedScope(lead, true, ["cdmx"])).toBe(true);
+  });
+
+  it("detecta Estado de México por Edomex", () => {
+    const lead = makeCandidate({
+      sourceUrl: "https://datos.gob.mx/busca/dataset/edomex-adquisiciones",
+      organizationName: "Secretaría de Administración Edomex",
+      state: null,
+      municipality: null,
+      title: "Contrato de mantenimiento institucional",
+      evidenceText: "Edomex publica contrato para mantenimiento de oficinas públicas.",
+    });
+
+    expect(isExternalLeadInAllowedScope(lead, true, ["estado-de-mexico"])).toBe(true);
+  });
+
+  it("si target locations existe, no depende de EXTERNAL_LEADS_MORELOS_ONLY", () => {
+    const lead = makeCandidate({
+      sourceUrl: "https://datos.gob.mx/busca/dataset/tlaquepaque-compras",
+      organizationName: "San Pedro Tlaquepaque",
+      state: null,
+      municipality: null,
+      title: "Contrato de impresos institucionales",
+      evidenceText: "San Pedro Tlaquepaque publica adquisiciones para impresos.",
+    });
+
+    expect(isExternalLeadInAllowedScope(lead, true, ["guadalajara"])).toBe(true);
+    expect(isExternalLeadInAllowedScope(lead, false, ["guadalajara"])).toBe(true);
+  });
+
+  it("si no existe target locations, mantiene Morelos only actual", () => {
+    const morelosLead = makeCandidate();
+    const jaliscoLead = makeCandidate({
+      sourceUrl: "https://datos.gob.mx/busca/dataset/jalisco-adquisiciones",
+      organizationName: "Gobierno de Jalisco",
+      state: "Jalisco",
+      municipality: "Zapopan",
+      title: "Contrato de lubricantes para parque vehicular",
+      evidenceText: "Gobierno de Jalisco publica contrato para aceites y lubricantes.",
+    });
+
+    expect(isExternalLeadInAllowedScope(morelosLead, true)).toBe(true);
+    expect(isExternalLeadInAllowedScope(jaliscoLead, true)).toBe(false);
   });
 });
 

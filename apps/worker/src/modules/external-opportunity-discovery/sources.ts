@@ -8,6 +8,7 @@ import {
   CAPUFE_NATIONAL_OPPORTUNITY_TERMS,
 } from "./keywords";
 import {
+  buildTargetLocationQueryPrefix,
   detectMorelosScope,
   findMatchedBusinessKeywords,
   inferOpportunityType,
@@ -39,10 +40,12 @@ interface DatosGobQueryResult {
 function buildHighSignalQueries(
   config: BusinessLineKeywordConfig,
   morelosOnly: boolean,
+  targetLocations?: string[],
 ): string[] {
   const keywordSeeds = config.keywords.slice(0, 8);
   const signalSeeds = config.osintSignals.slice(0, 4);
-  const geo = morelosOnly ? "Morelos " : "";
+  const targetLocationPrefix = buildTargetLocationQueryPrefix(targetLocations);
+  const geo = targetLocationPrefix ? `${targetLocationPrefix} ` : morelosOnly ? "Morelos " : "";
 
   const queries = [
     `${geo}${keywordSeeds.slice(0, 3).join(" OR ")} contrato`,
@@ -50,7 +53,7 @@ function buildHighSignalQueries(
     `${geo}${config.displayName} licitacion contrato`,
   ];
 
-  if (!morelosOnly) {
+  if (!targetLocationPrefix && !morelosOnly) {
     queries.push(
       `CAPUFE ${CAPUFE_NATIONAL_OPPORTUNITY_TERMS.slice(0, 3).join(" ")} ${keywordSeeds[0]}`,
     );
@@ -191,7 +194,7 @@ function candidateFromDatosGobItem(
     },
   };
 
-  if (!isExternalLeadInAllowedScope(candidate, options.morelosOnly)) {
+  if (!isExternalLeadInAllowedScope(candidate, options.morelosOnly, options.targetLocations)) {
     return null;
   }
 
@@ -271,7 +274,11 @@ export async function discoverExternalLeadCandidates(
   );
 
   for (const config of BUSINESS_LINE_KEYWORDS) {
-    const queries = buildHighSignalQueries(config, options.morelosOnly).slice(0, 3);
+    const queries = buildHighSignalQueries(
+      config,
+      options.morelosOnly,
+      options.targetLocations,
+    ).slice(0, 3);
 
     for (const query of queries) {
       if (candidates.length >= options.maxResultsPerRun) break;

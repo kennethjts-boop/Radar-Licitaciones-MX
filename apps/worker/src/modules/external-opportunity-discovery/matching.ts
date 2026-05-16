@@ -36,6 +36,89 @@ const PERSONAL_EMAIL_DOMAINS = [
   "protonmail.com",
 ];
 
+const TARGET_LOCATION_TERMS = {
+  morelos: MORELOS_TERMS,
+  jalisco: [
+    "jalisco",
+    "guadalajara",
+    "zapopan",
+    "tlaquepaque",
+    "san pedro tlaquepaque",
+    "tonala",
+    "tonalá",
+    "tlajomulco",
+    "tlajomulco de zuniga",
+    "tlajomulco de zúñiga",
+  ],
+  cdmx: [
+    "cdmx",
+    "ciudad de mexico",
+    "ciudad de méxico",
+    "mexico city",
+    "alcaldia",
+    "alcaldía",
+  ],
+  estadoDeMexico: [
+    "estado de mexico",
+    "estado de méxico",
+    "edomex",
+    "edo mex",
+    "toluca",
+    "ecatepec",
+    "naucalpan",
+    "tlalnepantla",
+    "nezahualcoyotl",
+    "nezahualcóyotl",
+  ],
+} as const;
+
+const TARGET_LOCATION_LABELS: Record<keyof typeof TARGET_LOCATION_TERMS, string> = {
+  morelos: "Morelos",
+  jalisco: "Jalisco OR Guadalajara",
+  cdmx: "CDMX OR Ciudad de México",
+  estadoDeMexico: "Estado de México OR Edomex",
+};
+
+type TargetLocationKey = keyof typeof TARGET_LOCATION_TERMS;
+
+function targetLocationKeyFor(value: string): TargetLocationKey | null {
+  const normalized = normalizeText(value);
+  if (!normalized) return null;
+
+  for (const [key, terms] of Object.entries(TARGET_LOCATION_TERMS)) {
+    if (terms.some((term) => normalizeText(term) === normalized)) {
+      return key as TargetLocationKey;
+    }
+  }
+
+  return null;
+}
+
+function targetLocationTerms(targetLocations?: string[]): string[] {
+  if (!targetLocations || targetLocations.length === 0) return [];
+
+  const terms = new Set<string>();
+  for (const location of targetLocations) {
+    const key = targetLocationKeyFor(location);
+    const sourceTerms = key ? TARGET_LOCATION_TERMS[key] : [location];
+    sourceTerms.forEach((term) => terms.add(term));
+  }
+
+  return [...terms];
+}
+
+export function buildTargetLocationQueryPrefix(targetLocations?: string[]): string {
+  if (!targetLocations || targetLocations.length === 0) return "";
+
+  const labels = new Set<string>();
+  for (const location of targetLocations) {
+    const key = targetLocationKeyFor(location);
+    labels.add(key ? TARGET_LOCATION_LABELS[key] : location.trim());
+  }
+
+  return [...labels].filter(Boolean).join(" OR ");
+}
+
 export function findMatchedBusinessKeywords(
   text: string,
   config: BusinessLineKeywordConfig,
@@ -120,9 +203,10 @@ export function detectMorelosScope(text: string): {
 export function isExternalLeadInAllowedScope(
   candidate: Pick<
     ExternalLeadCandidate,
-    "state" | "municipality" | "evidenceText" | "title" | "organizationName"
+    "state" | "municipality" | "evidenceText" | "title" | "organizationName" | "sourceUrl"
   >,
   morelosOnly: boolean,
+  targetLocations?: string[],
 ): boolean {
   const text = [
     candidate.title,
@@ -130,7 +214,13 @@ export function isExternalLeadInAllowedScope(
     candidate.organizationName ?? "",
     candidate.state ?? "",
     candidate.municipality ?? "",
+    candidate.sourceUrl ?? "",
   ].join(" ");
+
+  const targetTerms = targetLocationTerms(targetLocations);
+  if (targetTerms.length > 0) {
+    return findMatchingTerms(text, targetTerms).length > 0;
+  }
 
   const isMorelos =
     normalizeText(candidate.state ?? "") === "morelos" ||
