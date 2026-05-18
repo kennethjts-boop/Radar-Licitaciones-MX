@@ -50,7 +50,7 @@ export async function scrapearPNT(): Promise<Maestro[]> {
     
     // Extracción
     const rows = await page.evaluate(() => {
-      const data: any[] = [];
+      const data: string[][] = [];
       // Intentar encontrar las tablas de resultados (la PNT usa dataTables o similares de JSF)
       const tableRows = document.querySelectorAll('table tbody tr');
       
@@ -95,7 +95,7 @@ export async function scrapearPNT(): Promise<Maestro[]> {
         email_institucional: "N/D",
         zona_escolar: "N/D",
         supervisor_zona: "N/D",
-        funcion: cells.find(c => /DOCENTE|DIRECTOR|PROFESOR|MAESTRO/i.test(c)) || "Docente FONE",
+        funcion: cells.find((c: string) => /DOCENTE|DIRECTOR|PROFESOR|MAESTRO/i.test(c)) || "Docente FONE",
         horas_asignadas: 0,
         antiguedad: "N/D",
         fuentes_consultadas: ["Plataforma Nacional de Transparencia (PNT)"]

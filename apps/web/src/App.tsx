@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { supabase } from './lib/supabase';
 import { Search, Building, X, Zap, Coins, LogIn, CheckCircle2, MapPin, ChevronRight, Sparkles, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
@@ -44,7 +44,16 @@ export default function App() {
   const [filterState, setFilterState] = useState('');
   const [selected, setSelected] = useState<Procurement | null>(null);
 
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(() => {
+    const saved = localStorage.getItem('radar_user');
+    if (!saved) return null;
+    try {
+      return JSON.parse(saved) as User;
+    } catch {
+      localStorage.removeItem('radar_user');
+      return null;
+    }
+  });
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
@@ -52,13 +61,7 @@ export default function App() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analyses, setAnalyses] = useState<Record<string, AnalysisResult>>({});
 
-  useEffect(() => {
-    fetchProcurements();
-    const saved = localStorage.getItem('radar_user');
-    if (saved) setUser(JSON.parse(saved));
-  }, []);
-
-  const fetchProcurements = async () => {
+  const fetchProcurements = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from('procurements').select('*')
@@ -67,7 +70,14 @@ export default function App() {
       setProcurements(data || []);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void fetchProcurements();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [fetchProcurements]);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault(); setAuthLoading(true);
@@ -103,7 +113,10 @@ export default function App() {
         const u = { ...user, tokens: user.tokens - 10 };
         setUser(u); localStorage.setItem('radar_user', JSON.stringify(u));
       }
-    } catch (e: any) { alert(`Error: ${e.message}`); }
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Error desconocido';
+      alert(`Error: ${message}`);
+    }
     finally { setAnalyzing(false); }
   };
 

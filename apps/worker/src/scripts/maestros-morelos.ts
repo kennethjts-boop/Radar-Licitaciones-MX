@@ -3,11 +3,10 @@ import * as cheerio from "cheerio";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import ExcelJS from "exceljs";
 import TelegramBot from "node-telegram-bot-api";
 import { getSupabaseClient } from "../storage/client";
 import { getLogger } from "../core/logger";
-
-const XLSX: any = require("xlsx");
 
 type EscuelaBase = {
   cct: string;
@@ -260,9 +259,9 @@ async function loadProgress(): Promise<{ cct: string | null; datos: ProgressPayl
   }
 }
 
-function createExcel(maestros: MaestroRegistro[], escuelasSinDirector: EscuelaBase[]): void {
-  const wb = XLSX.utils.book_new();
-  const maestrosSheet = XLSX.utils.json_to_sheet(maestros);
+async function createExcel(maestros: MaestroRegistro[], escuelasSinDirector: EscuelaBase[]): Promise<void> {
+  const wb = new ExcelJS.Workbook();
+  const maestrosSheet = wb.addWorksheet("maestros");
 
   const munMap = new Map<string, { municipio: string; maestros: number; escuelas: Set<string> }>();
   for (const m of maestros) {
@@ -272,24 +271,32 @@ function createExcel(maestros: MaestroRegistro[], escuelasSinDirector: EscuelaBa
     munMap.set(m.municipio, v);
   }
 
-  const resumenSheet = XLSX.utils.json_to_sheet(
+  maestrosSheet.columns = Object.keys(maestros[0] ?? {}).map((key) => ({ header: key, key }));
+  maestrosSheet.addRows(maestros);
+
+  const resumenSheet = wb.addWorksheet("resumen_municipio");
+  resumenSheet.columns = [
+    { header: "municipio", key: "municipio" },
+    { header: "maestros", key: "maestros" },
+    { header: "escuelas", key: "escuelas" },
+  ];
+  resumenSheet.addRows(
     Array.from(munMap.values()).map((m) => ({ municipio: m.municipio, maestros: m.maestros, escuelas: m.escuelas.size })),
   );
 
-  const sinDirectorSheet = XLSX.utils.json_to_sheet(escuelasSinDirector.map((e) => ({
-    cct: e.cct,
-    escuela: e.escuela,
-    municipio: e.municipio,
-    localidad: e.localidad,
-    direccion: e.direccion,
-    telefono: e.telefono,
-    director: e.director,
-  })));
+  const sinDirectorSheet = wb.addWorksheet("escuelas_sin_director");
+  sinDirectorSheet.columns = [
+    { header: "cct", key: "cct" },
+    { header: "escuela", key: "escuela" },
+    { header: "municipio", key: "municipio" },
+    { header: "localidad", key: "localidad" },
+    { header: "direccion", key: "direccion" },
+    { header: "telefono", key: "telefono" },
+    { header: "director", key: "director" },
+  ];
+  sinDirectorSheet.addRows(escuelasSinDirector);
 
-  XLSX.utils.book_append_sheet(wb, maestrosSheet, "maestros");
-  XLSX.utils.book_append_sheet(wb, resumenSheet, "resumen_municipio");
-  XLSX.utils.book_append_sheet(wb, sinDirectorSheet, "escuelas_sin_director");
-  XLSX.writeFile(wb, OUT_XLSX);
+  await wb.xlsx.writeFile(OUT_XLSX);
 }
 
 async function createPdf(maestros: MaestroRegistro[]): Promise<void> {
@@ -453,7 +460,7 @@ export async function runMaestrosScraper(): Promise<void> {
 
   await saveProgress(escuelas[escuelas.length - 1].cct, { maestros, escuelasSinDirector });
 
-  createExcel(maestros, escuelasSinDirector);
+  await createExcel(maestros, escuelasSinDirector);
   await createPdf(maestros);
   await sendTelegramSummaryAndFiles(maestros, failedSources);
 

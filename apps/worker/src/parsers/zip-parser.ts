@@ -6,9 +6,9 @@
 import AdmZip from "adm-zip";
 import pdf from "pdf-parse";
 import mammoth from "mammoth";
-import * as XLSX from "xlsx";
 import { createModuleLogger } from "../core/logger";
 import type { ParseResult, ZipEntry, ZipParseResult } from "./types";
+import { parseXlsxBuffer } from "./xlsx-parser";
 
 const log = createModuleLogger("zip-parser");
 
@@ -32,15 +32,15 @@ async function parseEntryBuffer(ext: string, buffer: Buffer): Promise<ParseResul
     const text = result.value.trim();
     return { text, parseStatus: text ? "ok" : "empty", errors: [] };
   }
-  if (ext === "xlsx" || ext === "xls") {
-    const workbook = XLSX.read(buffer, { type: "buffer" });
-    const textParts: string[] = [];
-    for (const sheetName of workbook.SheetNames) {
-      const csv = XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName]);
-      if (csv.trim()) textParts.push(csv.trim());
-    }
-    const text = textParts.join("\n\n");
-    return { text, parseStatus: text ? "ok" : "empty", errors: [] };
+  if (ext === "xlsx") {
+    return parseXlsxBuffer(buffer);
+  }
+  if (ext === "xls") {
+    return {
+      text: "",
+      parseStatus: "error",
+      errors: ["formato .xls no soportado por el parser seguro"],
+    };
   }
   return { text: "", parseStatus: "error", errors: [`extensión no soportada: ${ext}`] };
 }

@@ -13,4 +13,5 @@ export interface Maestro {
   horas_asignadas: number;
   antiguedad: string;
   fuentes_consultadas: string[];
+  menciones_publicas?: string[];
 }
