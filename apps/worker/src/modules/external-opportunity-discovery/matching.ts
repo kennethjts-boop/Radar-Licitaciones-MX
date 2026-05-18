@@ -25,16 +25,9 @@ const PUBLIC_OFFICIAL_HOSTS = [
   "comprasmx.buengobierno.gob.mx",
 ];
 
-const PERSONAL_EMAIL_DOMAINS = [
-  "gmail.com",
-  "hotmail.com",
-  "outlook.com",
-  "live.com",
-  "icloud.com",
-  "yahoo.com",
-  "proton.me",
-  "protonmail.com",
-];
+const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
+const MX_PHONE_PATTERN =
+  /(?:\+?52[\s.-]?)?(?:\(?\d{2,3}\)?[\s.-]?)?\d{3,4}[\s.-]?\d{4}\b/g;
 
 const TARGET_LOCATION_TERMS = {
   morelos: MORELOS_TERMS,
@@ -269,11 +262,10 @@ export function dedupeExternalLeadCandidates(
   return deduped;
 }
 
-function isInstitutionalEmail(email: string): boolean {
-  const domain = email.split("@")[1]?.toLowerCase();
-  if (!domain) return false;
-  if (PERSONAL_EMAIL_DOMAINS.includes(domain)) return false;
-  return domain.endsWith(".gob.mx") || domain.endsWith(".edu.mx");
+export function redactSensitivePublicData(text: string): string {
+  return text
+    .replace(EMAIL_PATTERN, "[REDACTED_EMAIL]")
+    .replace(MX_PHONE_PATTERN, "[REDACTED_PHONE]");
 }
 
 export function sanitizePublicContact(
@@ -290,16 +282,10 @@ export function sanitizePublicContact(
     };
   }
 
-  const email = candidate.contactEmailPublicOptional?.trim() ?? null;
-  const safeEmail = email && isInstitutionalEmail(email) ? email : null;
-
   return {
     contactArea,
-    contactNamePublicOptional:
-      contactArea && candidate.contactNamePublicOptional
-        ? candidate.contactNamePublicOptional.trim()
-        : null,
-    contactEmailPublicOptional: safeEmail,
-    contactPhonePublicOptional: candidate.contactPhonePublicOptional?.trim() || null,
+    contactNamePublicOptional: null,
+    contactEmailPublicOptional: null,
+    contactPhonePublicOptional: null,
   };
 }

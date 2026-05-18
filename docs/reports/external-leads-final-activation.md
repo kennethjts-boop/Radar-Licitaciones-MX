@@ -1,6 +1,6 @@
 # External Leads OSINT - Activacion final controlada
 
-Fecha: 2026-05-15T03:45:35.355Z
+Fecha: 2026-05-18T16:22:56.097Z
 
 ## Resultado del dry-run
 

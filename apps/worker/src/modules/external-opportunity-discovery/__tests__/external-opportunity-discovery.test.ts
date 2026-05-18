@@ -1,8 +1,10 @@
 import {
   buildExternalLeadFingerprint,
+  buildExternalLead,
   dedupeExternalLeadCandidates,
   findMatchedBusinessKeywords,
   isExternalLeadInAllowedScope,
+  redactSensitivePublicData,
   runExternalLeadsOsintJob,
   sanitizePublicContact,
   scoreExternalLead,
@@ -216,22 +218,22 @@ describe("external-opportunity-discovery scoring and contacts", () => {
     });
   });
 
-  it("descarta correos personales aunque estén en fuente oficial", () => {
+  it("no persiste nombre, email ni teléfono aunque estén en fuente oficial", () => {
     const contact = sanitizePublicContact({
       sourceUrl: "https://www.morelos.gob.mx/directorio",
       contactArea: "adquisiciones",
       contactNamePublicOptional: "Contacto Institucional",
-      contactEmailPublicOptional: "contacto@gmail.com",
+      contactEmailPublicOptional: "contacto@morelos.gob.mx",
       contactPhonePublicOptional: "7770000000",
     });
 
     expect(contact.contactArea).toBe("adquisiciones");
-    expect(contact.contactNamePublicOptional).toBe("Contacto Institucional");
+    expect(contact.contactNamePublicOptional).toBeNull();
     expect(contact.contactEmailPublicOptional).toBeNull();
-    expect(contact.contactPhonePublicOptional).toBe("7770000000");
+    expect(contact.contactPhonePublicOptional).toBeNull();
   });
 
-  it("descarta contacto no institucional aunque venga de fuente oficial", () => {
+  it("descarta contacto personal aunque venga de fuente oficial", () => {
     const contact = sanitizePublicContact({
       sourceUrl: "https://www.morelos.gob.mx/directorio",
       contactArea: "adquisiciones",
@@ -241,8 +243,9 @@ describe("external-opportunity-discovery scoring and contacts", () => {
     });
 
     expect(contact.contactArea).toBe("adquisiciones");
-    expect(contact.contactNamePublicOptional).toBe("Contacto Publicado");
+    expect(contact.contactNamePublicOptional).toBeNull();
     expect(contact.contactEmailPublicOptional).toBeNull();
+    expect(contact.contactPhonePublicOptional).toBeNull();
   });
 
   it("deja contacto null si no hay área institucional clara", () => {
@@ -293,6 +296,29 @@ describe("external-opportunity-discovery scoring and contacts", () => {
     );
 
     expect(result.confidence).toBe("LOW");
+  });
+
+  it("redacta correos y teléfonos antes de persistir evidencia", () => {
+    expect(
+      redactSensitivePublicData(
+        "Contacto compras@morelos.gob.mx, telefono +52 777 123 4567 y 7770000000",
+      ),
+    ).toBe(
+      "Contacto [REDACTED_EMAIL], telefono [REDACTED_PHONE] y [REDACTED_PHONE]",
+    );
+
+    const lead = buildExternalLead(
+      makeCandidate({
+        title: "Convocatoria compras@morelos.gob.mx",
+        evidenceText: "Informes al correo compras@morelos.gob.mx o al 7770000000.",
+      }),
+      180,
+    );
+
+    expect(lead.title).toBe("Convocatoria [REDACTED_EMAIL]");
+    expect(lead.evidenceText).toBe(
+      "Informes al correo [REDACTED_EMAIL] o al [REDACTED_PHONE].",
+    );
   });
 });
 

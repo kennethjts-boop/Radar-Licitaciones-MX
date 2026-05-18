@@ -71,10 +71,6 @@ async function recordExternalLeadRunState(
     errors: result.errors,
   });
 
-  if (options.dryRun) {
-    return;
-  }
-
   await setState(STATE_KEYS.LAST_EXTERNAL_LEADS_RUN, {
     status: result.status,
     reason: result.reason ?? null,

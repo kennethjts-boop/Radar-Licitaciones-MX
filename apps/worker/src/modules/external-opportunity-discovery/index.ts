@@ -9,6 +9,7 @@ export {
   findMatchedBusinessKeywords,
   isAllowedOfficialSourceUrl,
   isExternalLeadInAllowedScope,
+  redactSensitivePublicData,
   sanitizePublicContact,
 } from "./matching";
 export { scoreExternalLead, shouldAlertExternalLead } from "./scoring";

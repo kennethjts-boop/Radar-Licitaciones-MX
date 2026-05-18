@@ -1,4 +1,8 @@
-import { buildExternalLeadFingerprint, sanitizePublicContact } from "./matching";
+import {
+  buildExternalLeadFingerprint,
+  redactSensitivePublicData,
+  sanitizePublicContact,
+} from "./matching";
 import { scoreExternalLead } from "./scoring";
 import type { ExternalLead, ExternalLeadCandidate } from "./types";
 
@@ -13,7 +17,7 @@ export function buildExternalLead(
     sourceName: candidate.sourceName,
     sourceUrl: candidate.sourceUrl,
     detectedAt: candidate.detectedAt,
-    title: candidate.title,
+    title: redactSensitivePublicData(candidate.title),
     organizationName: candidate.organizationName,
     organizationType: candidate.organizationType,
     state: candidate.state,
@@ -21,7 +25,7 @@ export function buildExternalLead(
     sector: candidate.sector,
     vertical: candidate.vertical,
     matchedKeywords: candidate.matchedKeywords,
-    evidenceText: candidate.evidenceText,
+    evidenceText: redactSensitivePublicData(candidate.evidenceText),
     contactArea: contact.contactArea,
     contactNamePublicOptional: contact.contactNamePublicOptional,
     contactEmailPublicOptional: contact.contactEmailPublicOptional,
