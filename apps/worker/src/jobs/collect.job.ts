@@ -16,6 +16,7 @@ import { withLock } from "../core/lock";
 import { withTimeout } from "../core/errors";
 import { nowISO, formatDuration, isDateExpired, isPublicationTooOld } from "../core/time";
 import { healthTracker } from "../core/healthcheck";
+import { recordHealthcheck } from "../core/system-state";
 import { existsSync, unlinkSync } from "fs";
 import { readFile } from "fs/promises";
 import {
@@ -75,6 +76,18 @@ let _comprasMxSourceId: string | null = null;
 
 export function setComprasMxSourceId(id: string | null): void {
   _comprasMxSourceId = id;
+}
+
+async function recordCurrentHealthcheck(): Promise<void> {
+  const status = healthTracker.getStatus();
+  await recordHealthcheck({
+    healthy: status.overall === "ok",
+    worker_status: status.overall,
+    db_connected: status.dbConnected,
+    db_schema_valid: status.dbSchemaValid,
+    telegram_connected: status.services.telegram === "ok",
+    runtime_db_mode: status.runtimeDbMode,
+  });
 }
 
 const COLLECT_TIMEOUT_MS = 25 * 60 * 1000; // 25 minutos
@@ -311,7 +324,8 @@ export async function runCollectJob(): Promise<CollectJobResult> {
   log.info(
     "Iniciando ciclo de colección — MODO 1: Periodic Incremental Listing Scan",
   );
-  const cycleStart = Date.now();
+  const startedAt = nowISO();
+  const cycleStart = Date.parse(startedAt);
 
   const lockResult = await withLock("collect-job", "main-collect", async (): Promise<CollectJobResult> => {
     if (!_comprasMxSourceId) {
@@ -319,6 +333,7 @@ export async function runCollectJob(): Promise<CollectJobResult> {
       const durationMs = Date.now() - cycleStart;
       log.error(errorMessage);
       healthTracker.recordCycle(durationMs, 0, false);
+      await recordCurrentHealthcheck();
       return {
         status: "error",
         errorMessage,
@@ -361,6 +376,7 @@ export async function runCollectJob(): Promise<CollectJobResult> {
         COLLECT_TIMEOUT_MS,
         "comprasmx-collection",
       );
+      healthTracker.setPlaywrightHealth("ok");
 
       itemsSeen = collectResult.items.length;
       log.info({ itemsSeen }, "Items colectados");
@@ -694,6 +710,9 @@ export async function runCollectJob(): Promise<CollectJobResult> {
       }
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : String(err);
+      if (!collectResult) {
+        healthTracker.setPlaywrightHealth("down");
+      }
       log.error({ err }, "Error en ciclo de colección");
       // Notificar a Telegram cuando hay falla crítica del collector
       await sendTelegramMessage(
@@ -720,7 +739,8 @@ export async function runCollectJob(): Promise<CollectJobResult> {
         await setState(STATE_KEYS.LAST_COLLECT_RUN, {
           collectorKey: "comprasmx_playwright",
           mode: "listing_scan",
-          startedAt: cycleStart,
+          startedAt,
+          startedAtMs: cycleStart,
           finishedAt,
           status: errorMessage ? "error" : "success",
           errorMessage: errorMessage ?? null,
@@ -738,11 +758,15 @@ export async function runCollectJob(): Promise<CollectJobResult> {
           itemsSeen,
           itemsCreated,
           itemsUpdated,
+          totalMatches,
+          alertsSent: alertsSentThisCycle,
+          alertMetrics: cycleMetrics,
         });
       })();
 
       durationMs = Date.now() - cycleStart;
       healthTracker.recordCycle(durationMs, totalMatches, !errorMessage);
+      await recordCurrentHealthcheck();
 
       log.info(cycleMetrics, '[alert-filter] métricas del ciclo');
       log.info(
@@ -835,7 +859,8 @@ function dbRowToNormalized(row: DbProcurement): NormalizedProcurement {
  */
 export async function runRecheckJob(): Promise<void> {
   log.info("🔄 MODO 2 — DB recheck diario iniciado: evaluando todos los procurements");
-  const cycleStart = Date.now();
+  const startedAt = nowISO();
+  const cycleStart = Date.parse(startedAt);
 
   await withLock("recheck-job", "daily-recheck", async () => {
     if (!_comprasMxSourceId) {
@@ -928,7 +953,8 @@ export async function runRecheckJob(): Promise<void> {
       await setState(SK.LAST_COLLECT_RUN, {
         collectorKey: "comprasmx_db_recheck",
         mode: "daily_recheck_db",
-        startedAt: cycleStart,
+        startedAt,
+        startedAtMs: cycleStart,
         finishedAt,
         status: errorMessage ? "error" : "success",
         errorMessage: errorMessage ?? null,

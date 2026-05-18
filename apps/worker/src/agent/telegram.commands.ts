@@ -15,6 +15,9 @@ import { withTimeout } from "../core/errors";
 import { formatCurrency } from "../core/text";
 import { getState, STATE_KEYS } from "../core/system-state";
 import { getActiveRadars } from "../radars/index";
+import { getLastCollectRun } from "../storage/collect-run.repo";
+import { getLastSentAlert } from "../storage/match-alert.repo";
+import type { DbCollectRun } from "../types/database";
 
 const log = createModuleLogger("commands");
 const MANUAL_SCAN_TIMEOUT_MS = 30 * 60 * 1000;
@@ -97,6 +100,84 @@ function formatBool(value: unknown): string {
   return value === true ? "true" : "false";
 }
 
+function pickFirst(state: Record<string, unknown> | null | undefined, keys: string[]): unknown {
+  if (!state) return null;
+  for (const key of keys) {
+    const value = state[key];
+    if (value !== null && value !== undefined && value !== "") return value;
+  }
+  return null;
+}
+
+function formatTelemetryDate(value: unknown): string {
+  return formatMexicoDate(value as Date | string | number | null | undefined);
+}
+
+function hasUsableDate(value: unknown): boolean {
+  return formatTelemetryDate(value) !== "No disponible";
+}
+
+function collectRunToState(row: DbCollectRun): Record<string, unknown> {
+  const metadata = (row.metadata_json ?? {}) as Record<string, unknown>;
+  return {
+    collectorKey: row.collector_key,
+    mode: metadata.mode ?? row.collector_key,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    status: row.status,
+    errorMessage: row.error_message,
+    itemsSeen: row.items_seen,
+    itemsCreated: row.items_created,
+    itemsUpdated: row.items_updated,
+    totalMatches: metadata.totalMatches ?? 0,
+    pages_scanned: metadata.pagesScanned ?? 0,
+  };
+}
+
+function getLastRunTimestamp(
+  lastRunState: Record<string, unknown> | null,
+  lastCycleAt: string | null,
+): unknown {
+  return pickFirst(lastRunState, ["finishedAt", "finished_at", "lastCycleAt", "startedAt", "started_at"])
+    ?? lastCycleAt;
+}
+
+async function resolveLastRunState(
+  lastRunState: Record<string, unknown> | null,
+  lastCycleAt: string | null,
+): Promise<Record<string, unknown> | null> {
+  if (hasUsableDate(getLastRunTimestamp(lastRunState, lastCycleAt))) {
+    return lastRunState;
+  }
+
+  try {
+    const row = await getLastCollectRun("comprasmx");
+    return row ? collectRunToState(row) : lastRunState;
+  } catch (err) {
+    log.warn({ err }, "No se pudo leer último collect_run; usando system_state");
+    return lastRunState;
+  }
+}
+
+function buildLastErrorLine(
+  lastRunState: Record<string, unknown> | null,
+  dailySummaryState: Record<string, unknown> | null,
+  external: Record<string, unknown> | null | undefined,
+): string {
+  const runError = pickFirst(lastRunState, ["errorMessage", "error_message"]);
+  if (runError) return String(runError).slice(0, 140);
+
+  if (dailySummaryState?.status === "error") {
+    return `daily_summary: ${String(dailySummaryState.failureReason ?? "error no especificado").slice(0, 120)}`;
+  }
+
+  if (external?.status === "error" && Array.isArray(external.errors) && external.errors.length > 0) {
+    return `external_osint: ${String(external.errors[0]).slice(0, 120)}`;
+  }
+
+  return "Sin errores registrados";
+}
+
 // ─── Registro de comandos ─────────────────────────────────────────────────────
 
 function registerCommands(bot: TelegramBot, chatId: string): void {
@@ -115,10 +196,17 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       const status = healthTracker.getStatus();
       const radars = getActiveRadars();
 
-      const lastRunState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_COLLECT_RUN);
+      const rawLastRunState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_COLLECT_RUN);
+      const lastRunState = await resolveLastRunState(rawLastRunState, status.lastCycleAt);
       const externalState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_EXTERNAL_LEADS_RUN);
       const bootState = await getState<Record<string, unknown>>(STATE_KEYS.WORKER_BOOT_TIME);
       const schedulerState = await getState<Record<string, unknown>>(STATE_KEYS.SCHEDULER_STATUS);
+      const healthcheckState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_HEALTHCHECK_AT);
+      const dailySummaryState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_DAILY_SUMMARY);
+      const lastAlert = await getLastSentAlert().catch((err) => {
+        log.warn({ err }, "No se pudo leer última alerta enviada");
+        return null;
+      });
 
       const dbIcon = statusIcon(status.services.database);
       const tgIcon = statusIcon(status.services.telegram);
@@ -126,12 +214,11 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
 
       const nextRun = nextRunEstimate(config.COLLECT_INTERVAL_MINUTES);
       const bootTime = bootState?.bootedAt ? formatMexicoDate(String(bootState.bootedAt)) : "N/D";
-      const lastRunFormatted = lastRunState?.startedAt
-        ? formatMexicoDate(String(lastRunState.startedAt))
-        : "Sin ejecución registrada todavía";
-      const lastRunDisplay = lastRunFormatted === "Fecha inválida"
-        ? "Sin ejecución registrada todavía"
-        : lastRunFormatted;
+      const lastRunDisplay = formatTelemetryDate(getLastRunTimestamp(lastRunState, status.lastCycleAt));
+      const lastHeartbeatDisplay = formatTelemetryDate(healthcheckState?.checkedAt);
+      const lastAlertDisplay = lastAlert?.sent_at
+        ? formatTelemetryDate(lastAlert.sent_at)
+        : "No disponible";
 
       const stalledLine = status.stalled
         ? [`⚠️ <b>SIN CICLOS: +${Math.floor((status.stalledForMs ?? 0) / 60_000)} min — revisar scheduler</b>`]
@@ -139,9 +226,16 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       const lastCycleErrorLine = status.lastCycleStatus === "error"
         ? ["⚠️ <b>Último ciclo terminó con error — revisar /debug_resumen</b>"]
         : [];
+      const degradationLine = status.degradationReasons.length > 0
+        ? [`⚠️ Causa: <code>${escapeHtml(status.degradationReasons.join("; ")).slice(0, 220)}</code>`]
+        : [];
 
       const external =
         status.externalLeads.status !== "none" ? status.externalLeads : externalState;
+      const lastErrorLine = buildLastErrorLine(lastRunState, dailySummaryState, external as Record<string, unknown> | null);
+      const dailySummaryDisplay = dailySummaryState
+        ? `${dailySummaryState.status ?? "N/D"} | Esperado: ${formatTelemetryDate(dailySummaryState.expectedAt)} | Real: ${formatTelemetryDate(dailySummaryState.finishedAt ?? dailySummaryState.actualAt ?? dailySummaryState.startedAt)}`
+        : "Sin registro";
 
       const lines = [
         `🔍 <b>ESTADO — Radar Licitaciones MX</b>`,
@@ -150,12 +244,17 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `${dbIcon} DB: <b>${serviceLabel(status.services.database)}</b> (${status.dbConnected ? "Conectada" : "Desconectada"})`,
         `🧱 Schema: <b>${status.dbSchemaValid ? "Válido" : "Inválido"}</b>`,
         `${tgIcon} Telegram: <b>${serviceLabel(status.services.telegram)}</b>`,
+        ...degradationLine,
         ...stalledLine,
         ...lastCycleErrorLine,
         "",
         `⏰ Última: <b>${lastRunDisplay}</b>`,
+        `📨 Última alerta: <b>${lastAlertDisplay}</b>`,
+        `💓 Heartbeat: <b>${lastHeartbeatDisplay}</b>`,
+        `❌ Último error: <code>${escapeHtml(lastErrorLine)}</code>`,
         `🔜 Próxima: ~<b>${nextRun} MX</b>`,
         `📡 Scheduler: <b>${status.schedulerStatus === "active" || schedulerState?.status === "active" ? "✅ Activo" : "⏳ Iniciando"}</b>`,
+        `🧾 Resumen 7am: <b>${escapeHtml(dailySummaryDisplay)}</b>`,
         `🛰 Radares: <b>${radars.length} activos</b>`,
         `🧭 External OSINT: <b>${config.ENABLE_EXTERNAL_LEADS_OSINT ? "activo" : "inactivo"}</b> | Dry run: <b>${formatBool(config.EXTERNAL_LEADS_DRY_RUN)}</b>`,
         external
@@ -295,7 +394,8 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
 
     try {
       const status = healthTracker.getStatus();
-      const lastRunState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_COLLECT_RUN);
+      const rawLastRunState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_COLLECT_RUN);
+      const lastRunState = await resolveLastRunState(rawLastRunState, status.lastCycleAt);
       const externalState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_EXTERNAL_LEADS_RUN);
       const config = getConfig();
       const radars = getActiveRadars();
@@ -305,7 +405,7 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       const lines = [
         `🔧 <b>TELEMETRÍA — Radar Licitaciones MX</b>`,
         "",
-        `<b>Ciclo:</b> ${status.lastCycleAt ? formatMexicoDate(status.lastCycleAt) : "N/A"}`,
+        `<b>Ciclo:</b> ${formatTelemetryDate(getLastRunTimestamp(lastRunState, status.lastCycleAt))}`,
         `<b>Status:</b> ${lastRunState?.status ?? "N/D"} | <b>Mode:</b> ${lastRunState?.mode ?? "N/D"}`,
         "",
         `<b>📊 Indicadores Fase 2A:</b>`,
@@ -315,6 +415,8 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `  Skipped: <b>${lastRunState?.skipped_by_fingerprint ?? 0}</b>`,
         `  New: <b>${lastRunState?.total_new_detected ?? 0}</b>`,
         `  Mutated: <b>${lastRunState?.total_mutated_detected ?? 0}</b>`,
+        `  Matches: <b>${lastRunState?.totalMatches ?? 0}</b>`,
+        `  Alertas enviadas: <b>${lastRunState?.alertsSent ?? 0}</b>`,
         `  Streak: <b>${lastRunState?.known_streak ?? 0}</b>`,
         `  Stop: <code>${String(lastRunState?.stop_reason ?? "N/D").slice(0, 50)}</code>`,
         "",

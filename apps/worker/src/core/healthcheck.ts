@@ -55,6 +55,7 @@ export interface HealthStatus {
   runtimeDbMode: "supabase-rest";
   stalled: boolean;
   stalledForMs: number | null;
+  degradationReasons: string[];
 }
 
 // ─── Tracker singleton ────────────────────────────────────────────────────────
@@ -207,6 +208,23 @@ class HealthTracker {
     const stalled = pastGrace && msSinceLastCycle > STALL_THRESHOLD_MS;
     const stalledForMs = stalled ? msSinceLastCycle : null;
 
+    const degradationReasons: string[] = [];
+
+    if (this.dbHealth === "down") degradationReasons.push("DB down");
+    if (!this.dbSchemaValid) degradationReasons.push("schema inválido");
+    if (this.telegramHealth === "down") degradationReasons.push("Telegram down");
+    if (stalled) {
+      degradationReasons.push(
+        `sin ciclos recientes por ${Math.floor((stalledForMs ?? 0) / 60_000)} min`,
+      );
+    }
+    if (this.schedulerStatus === "stopped") degradationReasons.push("scheduler detenido");
+    if (this.lastCycleStatus === "error") degradationReasons.push("último ciclo con error");
+    for (const [name, value] of Object.entries(services)) {
+      if (value === "degraded") degradationReasons.push(`${name} degradado`);
+      if (value === "unknown") degradationReasons.push(`${name} sin verificación`);
+    }
+
     // Overall: down si DB no conectada o schema inválido o telegram caído
     const criticalDown =
       this.dbHealth === "down" ||
@@ -243,6 +261,7 @@ class HealthTracker {
       runtimeDbMode: "supabase-rest",
       stalled,
       stalledForMs,
+      degradationReasons,
     };
   }
 }

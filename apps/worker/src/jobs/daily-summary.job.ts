@@ -4,18 +4,37 @@
  */
 import { v4 as uuidv4 } from 'uuid';
 import { createModuleLogger } from '../core/logger';
-import { todayMexicoStr, nowISO } from '../core/time';
+import { formatMexicoDate, mexicoDateAtHourISO, todayMexicoStr, nowISO } from '../core/time';
 import { getSupabaseClient } from '../storage/client';
 import { sendEnhancedDailySummary } from '../alerts/telegram.alerts';
 import { buildSummaryData } from '../modules/alert-filter';
 import { healthTracker } from '../core/healthcheck';
+import { getConfig } from '../config/env';
+import { setState, STATE_KEYS } from '../core/system-state';
 
 const log = createModuleLogger('daily-summary-job');
 
 export async function runDailySummaryJob(): Promise<void> {
   log.info('Generando resumen diario mejorado');
 
+  const config = getConfig();
   const today = todayMexicoStr();
+  const expectedAt = mexicoDateAtHourISO(today, config.DAILY_SUMMARY_HOUR);
+  const startedAt = nowISO();
+
+  await setState(STATE_KEYS.LAST_DAILY_SUMMARY, {
+    status: 'running',
+    summaryDate: today,
+    expectedAt,
+    expectedAtMx: formatMexicoDate(expectedAt),
+    startedAt,
+    finishedAt: null,
+    actualAt: startedAt,
+    telegramMessageId: null,
+    chatConfigured: Boolean(config.TELEGRAM_CHAT_ID),
+    skippedByDedup: false,
+    failureReason: null,
+  });
 
   try {
     const summaryData = await buildSummaryData();
@@ -50,7 +69,30 @@ export async function runDailySummaryJob(): Promise<void> {
     }
 
     // Enviar a Telegram con nuevo formato de secciones
-    await sendEnhancedDailySummary(summaryData);
+    const telegramMessageId = await sendEnhancedDailySummary(summaryData);
+    const finishedAt = nowISO();
+
+    await setState(STATE_KEYS.LAST_DAILY_SUMMARY, {
+      status: 'success',
+      summaryDate: today,
+      expectedAt,
+      expectedAtMx: formatMexicoDate(expectedAt),
+      startedAt,
+      finishedAt,
+      actualAt: finishedAt,
+      telegramMessageId,
+      chatConfigured: Boolean(config.TELEGRAM_CHAT_ID),
+      skippedByDedup: false,
+      failureReason: null,
+      totalSeen: summaryData.totalSeen,
+      totalNew: summaryData.totalNew,
+      totalAlerts: summaryData.totalAlerts,
+      newActive: summaryData.newActive.length,
+      recentDesierta: summaryData.recentDesierta.length,
+      soonExpiring: summaryData.soonExpiring.length,
+      highScore: summaryData.highScore.length,
+      technicalIncidents: summaryData.technicalIncidents,
+    });
 
     log.info(
       {
@@ -64,6 +106,22 @@ export async function runDailySummaryJob(): Promise<void> {
       'Resumen diario enviado',
     );
   } catch (err) {
-    log.error({ err }, 'Error generando resumen diario');
+    const message = err instanceof Error ? err.message : String(err);
+    const finishedAt = nowISO();
+    await setState(STATE_KEYS.LAST_DAILY_SUMMARY, {
+      status: 'error',
+      summaryDate: today,
+      expectedAt,
+      expectedAtMx: formatMexicoDate(expectedAt),
+      startedAt,
+      finishedAt,
+      actualAt: finishedAt,
+      telegramMessageId: null,
+      chatConfigured: Boolean(config.TELEGRAM_CHAT_ID),
+      skippedByDedup: false,
+      failureReason: message,
+      telegramRespondedError: /telegram/i.test(message),
+    });
+    log.error({ err, expectedAt, actualAt: finishedAt }, 'Error generando resumen diario');
   }
 }

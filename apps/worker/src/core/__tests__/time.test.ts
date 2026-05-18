@@ -1,4 +1,4 @@
-import { formatDateSafe } from "../time";
+import { formatDateSafe, formatMexicoDate, mexicoDateAtHourISO } from "../time";
 
 describe("formatDateSafe", () => {
   it("null → 'No disponible'", () => {
@@ -32,5 +32,21 @@ describe("formatDateSafe", () => {
 
   it("dd/MM/yyyy HH:mm → dd/MM/yyyy — HH:mm h CDMX", () => {
     expect(formatDateSafe("01/06/2026 04:00")).toBe("01/06/2026 — 04:00 h CDMX");
+  });
+});
+
+describe("formatMexicoDate", () => {
+  it("acepta timestamps numéricos guardados en system_state", () => {
+    expect(formatMexicoDate(1779108960000)).toBe("18/05/2026 06:56");
+  });
+
+  it("acepta timestamps numéricos como string", () => {
+    expect(formatMexicoDate("1779108960000")).toBe("18/05/2026 06:56");
+  });
+});
+
+describe("mexicoDateAtHourISO", () => {
+  it("convierte hora local MX a ISO UTC para el resumen diario", () => {
+    expect(mexicoDateAtHourISO("2026-05-18", 7)).toBe("2026-05-18T13:00:00.000Z");
   });
 });

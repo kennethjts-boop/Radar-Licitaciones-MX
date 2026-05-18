@@ -25,6 +25,7 @@ export const STATE_KEYS = {
   SCHEDULER_STATUS: "scheduler_status",
   LAST_COLLECT_RUN: "last_collect_run",
   LAST_EXTERNAL_LEADS_RUN: "last_external_leads_run",
+  LAST_DAILY_SUMMARY: "last_daily_summary",
   WORKER_VERSION: "worker_version",
 } as const;
 

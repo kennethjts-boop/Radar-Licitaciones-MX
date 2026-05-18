@@ -171,3 +171,22 @@ export async function markAlertFailed(alertId: string): Promise<void> {
     );
   }
 }
+
+export async function getLastSentAlert(): Promise<DbAlert | null> {
+  const { data, error } = await getSupabaseClient()
+    .from("alerts")
+    .select("*")
+    .eq("telegram_status", "sent")
+    .order("sent_at", { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error && error.code !== "PGRST116") {
+    throw new StorageError(
+      `Error obteniendo última alerta enviada: ${error.message}`,
+      "get_last_sent_alert",
+    );
+  }
+
+  return data ?? null;
+}

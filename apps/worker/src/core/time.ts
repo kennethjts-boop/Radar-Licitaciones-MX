@@ -5,7 +5,35 @@
 import { formatInTimeZone, toZonedTime, fromZonedTime } from "date-fns-tz";
 import { format, parse, parseISO, isValid } from "date-fns";
 
-const MX_TIMEZONE = "America/Mexico_City";
+export const MX_TIMEZONE = "America/Mexico_City";
+
+type DateInput = Date | string | number | null | undefined;
+
+function parseDateInput(date: DateInput): Date | null {
+  if (date === null || date === undefined || date === "") return null;
+  if (date instanceof Date) return isValid(date) ? date : null;
+
+  if (typeof date === "number") {
+    const parsed = new Date(date);
+    return Number.isFinite(date) && isValid(parsed) ? parsed : null;
+  }
+
+  const trimmed = date.trim();
+  if (!trimmed) return null;
+
+  if (/^\d{13}$/.test(trimmed)) {
+    const parsed = new Date(Number(trimmed));
+    return isValid(parsed) ? parsed : null;
+  }
+
+  if (/^\d{10}$/.test(trimmed)) {
+    const parsed = new Date(Number(trimmed) * 1000);
+    return isValid(parsed) ? parsed : null;
+  }
+
+  const parsed = parseISO(trimmed);
+  return isValid(parsed) ? parsed : null;
+}
 
 /**
  * Retorna la fecha/hora actual en México como Date objeto.
@@ -27,7 +55,7 @@ export function nowISO(): string {
  * Retorna "No disponible" cuando la fecha es nula o inválida.
  */
 export function formatMexicoDate(
-  date: Date | string | null | undefined,
+  date: DateInput,
   fmt = "dd/MM/yyyy HH:mm",
 ): string {
   if (!date) return "No disponible";
@@ -39,9 +67,15 @@ export function formatMexicoDate(
     if (!isValid(d)) return "No disponible";
     return formatInTimeZone(d, MX_TIMEZONE, fmt);
   }
-  const d = typeof date === "string" ? parseISO(date) : date;
-  if (!isValid(d)) return "No disponible";
+  const d = parseDateInput(date);
+  if (!d) return "No disponible";
   return formatInTimeZone(d, MX_TIMEZONE, fmt);
+}
+
+export function mexicoDateAtHourISO(date: string, hour: number): string {
+  const safeHour = Math.max(0, Math.min(23, Math.trunc(hour)));
+  const hourText = String(safeHour).padStart(2, "0");
+  return fromZonedTime(`${date}T${hourText}:00:00`, MX_TIMEZONE).toISOString();
 }
 
 const FMT_DATE_ONLY = "dd/MM/yyyy";
