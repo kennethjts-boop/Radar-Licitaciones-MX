@@ -60,6 +60,12 @@ import type { CycleMetrics } from '../modules/alert-filter';
 import { getConfig } from '../config/env';
 import { enrichProcurement } from "./enrich-procurement.job";
 import { filterProcurementScope } from "../services/procurement-scope-filter";
+import { matchCommercialOpportunity } from "../modules/commercial-matching";
+import {
+  createCommercialMatchingTelemetry,
+  recordCommercialMatchTelemetry,
+  type CommercialMatchingTelemetry,
+} from "../modules/commercial-matching/telemetry";
 
 const log = createModuleLogger("collect-job");
 
@@ -107,6 +113,28 @@ export interface CollectJobResult {
   totalMatches: number;
   pagesScanned: number;
   stopReason: string | null;
+}
+
+function procurementToCommercialInput(item: NormalizedProcurement) {
+  return {
+    title: item.title,
+    description: item.description,
+    buyerName: item.dependencyName,
+    dependency: item.dependencyName,
+    unit: item.buyingUnit,
+    procedureId: item.procedureNumber ?? item.licitationNumber ?? item.expedienteId,
+    source: item.source,
+    sourceUrl: item.sourceUrl,
+    publicationDate: item.publicationDate,
+    state: item.state,
+    municipality: item.municipality,
+    placeOfExecution: item.rawJson.placeOfExecution as string | null | undefined,
+    placeOfDelivery: item.rawJson.placeOfDelivery as string | null | undefined,
+    fullText: item.canonicalText,
+    attachmentsText: item.attachments
+      .map((attachment) => attachment.detectedText)
+      .filter((text): text is string => Boolean(text)),
+  };
 }
 
 async function processAttachmentsForProcurement(
@@ -357,6 +385,8 @@ export async function runCollectJob(): Promise<CollectJobResult> {
     let capufeDeepReportsAttempted = 0;
     const capufeDeepReportsSent = new Set<string>();
     let alertsSentThisCycle = 0;
+    const commercialTelemetry: CommercialMatchingTelemetry =
+      createCommercialMatchingTelemetry();
     const cycleMetrics: CycleMetrics = {
       found: 0, alertable: 0, sent: 0, excluded: 0, excludedClosed: 0, excludedOld: 0,
     };
@@ -379,6 +409,7 @@ export async function runCollectJob(): Promise<CollectJobResult> {
       healthTracker.setPlaywrightHealth("ok");
 
       itemsSeen = collectResult.items.length;
+      commercialTelemetry.rawResultsReceived = itemsSeen;
       log.info({ itemsSeen }, "Items colectados");
 
       const radars = getActiveRadars();
@@ -445,6 +476,18 @@ export async function runCollectJob(): Promise<CollectJobResult> {
             upsertResult.isUpdated && upsertResult.changedFields["status"]
               ? (upsertResult.changedFields["status"].prev as ProcurementStatus)
               : null;
+
+          const commercialInput = procurementToCommercialInput(item);
+          const commercialResult = matchCommercialOpportunity(commercialInput, {
+            minScore: config.COMMERCIAL_MATCHING_MIN_SCORE,
+            requireTerritory: config.COMMERCIAL_MATCHING_REQUIRE_TERRITORY,
+            debug: config.COMMERCIAL_MATCHING_DEBUG,
+          });
+          recordCommercialMatchTelemetry(
+            commercialTelemetry,
+            commercialInput,
+            commercialResult,
+          );
 
           // 3. Match contra radares
           const matches = evaluateAllRadars(
@@ -731,6 +774,7 @@ export async function runCollectJob(): Promise<CollectJobResult> {
         metadata: {
           totalMatches,
           pagesScanned: collectResult?.pagesScanned || 0,
+          commercialMatching: commercialTelemetry,
         },
       });
 
@@ -761,6 +805,7 @@ export async function runCollectJob(): Promise<CollectJobResult> {
           totalMatches,
           alertsSent: alertsSentThisCycle,
           alertMetrics: cycleMetrics,
+          commercialMatching: commercialTelemetry,
         });
       })();
 

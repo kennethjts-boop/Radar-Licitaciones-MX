@@ -10,7 +10,21 @@ export function buildExternalLead(
   candidate: ExternalLeadCandidate,
   lookbackDays: number,
 ): ExternalLead {
-  const score = scoreExternalLead(candidate, lookbackDays);
+  const baseScore = scoreExternalLead(candidate, lookbackDays);
+  const commercialScore = candidate.scoreBreakdown?.finalScore;
+  const finalScore = typeof commercialScore === "number" ? commercialScore : baseScore.score;
+  const score = {
+    ...baseScore,
+    score: finalScore,
+    confidence: finalScore >= 75 ? "HIGH" as const : finalScore >= 45 ? "MEDIUM" as const : "LOW" as const,
+    nextAction: candidate.scoreReasons?.length
+      ? finalScore >= 60
+        ? "revisar posible oportunidad publica y validar fuente"
+        : "monitorear candidato comercial"
+      : baseScore.nextAction,
+    scoreReasons: candidate.scoreReasons ?? baseScore.scoreReasons,
+    scoreBreakdown: candidate.scoreBreakdown ?? baseScore.scoreBreakdown,
+  };
   const contact = sanitizePublicContact(candidate);
 
   return {
@@ -37,9 +51,20 @@ export function buildExternalLead(
     status: "new",
     fingerprintHash: buildExternalLeadFingerprint(candidate),
     amountVisible: candidate.amountVisible,
+    amount: candidate.amount ?? null,
     buyerAreaIdentified: candidate.buyerAreaIdentified,
     isOfficialSource: candidate.isOfficialSource,
     sourcePublishedAt: candidate.sourcePublishedAt,
-    raw: candidate.raw,
+    scoreReasons: score.scoreReasons,
+    scoreBreakdown: score.scoreBreakdown,
+    raw: {
+      ...candidate.raw,
+      sourceId: candidate.sourceId ?? candidate.sourceName,
+      canonicalUrl: candidate.canonicalUrl ?? candidate.sourceUrl,
+      dependency: candidate.dependency ?? candidate.organizationName,
+      procedureId: candidate.procedureId ?? null,
+      scoreReasons: score.scoreReasons,
+      scoreBreakdown: score.scoreBreakdown,
+    },
   };
 }

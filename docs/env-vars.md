@@ -76,7 +76,7 @@ EXTERNAL_LEADS_DRY_RUN=true
 EXTERNAL_LEADS_MAX_RESULTS_PER_RUN=5
 # Límite máximo de leads procesados/alertados por ciclo.
 
-EXTERNAL_LEADS_MIN_SCORE=45
+EXTERNAL_LEADS_MIN_SCORE=60
 # Score mínimo 0-100 para guardar/alertar leads externos.
 
 EXTERNAL_LEADS_LOOKBACK_DAYS=180
@@ -92,9 +92,38 @@ EXTERNAL_LEADS_TARGET_LOCATIONS=
 # de EXTERNAL_LEADS_MORELOS_ONLY. Ejemplo:
 # morelos,jalisco,guadalajara,cdmx,estado-de-mexico
 
-EXTERNAL_LEADS_TELEGRAM_ENABLED=true
+EXTERNAL_LEADS_TELEGRAM_ENABLED=false
 # Control independiente de alertas Telegram OSINT. Si es false, el módulo guarda
 # leads pero no manda mensajes.
+
+COMMERCIAL_MATCHING_ENABLED=true
+# Activa el motor unico de inteligencia comercial para ComprasMX y External OSINT.
+
+COMMERCIAL_MATCHING_MIN_SCORE=60
+# Score minimo 0-100 para considerar una oportunidad comercial alertable.
+
+COMMERCIAL_MATCHING_REQUIRE_TERRITORY=true
+# Si es true, exige Morelos, Guadalajara/Jalisco, CDMX o Edomex; nacional queda
+# como "Nacional / posible" con penalizacion.
+
+COMMERCIAL_MATCHING_DEBUG=true
+# Guarda telemetria de descartes y candidatos comerciales en /debug_resumen.
+
+EXTERNAL_LEADS_DISCOVERY_MODE=true
+# Modo de inspección seguro: registra telemetría completa, muestra descartes y
+# fuerza Telegram apagado para External OSINT.
+
+EXTERNAL_LEADS_DEBUG_DISCARDS=true
+# Incluye topDiscardedCandidates sanitizados en system_state y healthcheck.
+
+EXTERNAL_LEADS_SAVE_LOW_SCORE_CANDIDATES=false
+# Si es false, los candidatos debajo del score mínimo no se guardan.
+
+EXTERNAL_LEADS_MAX_RAW_RESULTS_PER_SOURCE=50
+# Límite de resultados crudos por adapter/fuente por ciclo.
+
+EXTERNAL_LEADS_SOURCE_TIMEOUT_MS=15000
+# Timeout HTTP por fuente/adaptador.
 
 La migración `docs/migrations/12_external_leads_osint.sql` debe ejecutarse una
 vez antes de pasar `EXTERNAL_LEADS_DRY_RUN=false`. El runtime opera por Supabase
@@ -134,11 +163,20 @@ DAILY_SUMMARY_HOUR=7
 ENABLE_EXTERNAL_LEADS_OSINT=false
 EXTERNAL_LEADS_DRY_RUN=true
 EXTERNAL_LEADS_MAX_RESULTS_PER_RUN=5
-EXTERNAL_LEADS_MIN_SCORE=45
+EXTERNAL_LEADS_MIN_SCORE=60
 EXTERNAL_LEADS_LOOKBACK_DAYS=180
 EXTERNAL_LEADS_MORELOS_ONLY=true
 EXTERNAL_LEADS_TARGET_LOCATIONS=
-EXTERNAL_LEADS_TELEGRAM_ENABLED=true
+EXTERNAL_LEADS_TELEGRAM_ENABLED=false
+COMMERCIAL_MATCHING_ENABLED=true
+COMMERCIAL_MATCHING_MIN_SCORE=60
+COMMERCIAL_MATCHING_REQUIRE_TERRITORY=true
+COMMERCIAL_MATCHING_DEBUG=true
+EXTERNAL_LEADS_DISCOVERY_MODE=true
+EXTERNAL_LEADS_DEBUG_DISCARDS=true
+EXTERNAL_LEADS_SAVE_LOW_SCORE_CANDIDATES=false
+EXTERNAL_LEADS_MAX_RAW_RESULTS_PER_SOURCE=50
+EXTERNAL_LEADS_SOURCE_TIMEOUT_MS=15000
 APP_TIMEZONE=America/Mexico_City
 RAILWAY_ENVIRONMENT=
 ```

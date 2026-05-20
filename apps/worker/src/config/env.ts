@@ -81,7 +81,7 @@ const envSchema = z.object({
     .string()
     .default("5")
     .transform(Number),
-  EXTERNAL_LEADS_MIN_SCORE: z.string().default("45").transform(Number),
+  EXTERNAL_LEADS_MIN_SCORE: z.string().default("60").transform(Number),
   EXTERNAL_LEADS_LOOKBACK_DAYS: z.string().default("180").transform(Number),
   EXTERNAL_LEADS_MORELOS_ONLY: z
     .string()
@@ -99,8 +99,44 @@ const envSchema = z.object({
     }),
   EXTERNAL_LEADS_TELEGRAM_ENABLED: z
     .string()
+    .default("false")
+    .transform((v) => v === "true"),
+  COMMERCIAL_MATCHING_ENABLED: z
+    .string()
     .default("true")
     .transform((v) => v === "true"),
+  COMMERCIAL_MATCHING_MIN_SCORE: z
+    .string()
+    .default("60")
+    .transform(Number),
+  COMMERCIAL_MATCHING_REQUIRE_TERRITORY: z
+    .string()
+    .default("true")
+    .transform((v) => v === "true"),
+  COMMERCIAL_MATCHING_DEBUG: z
+    .string()
+    .default("true")
+    .transform((v) => v === "true"),
+  EXTERNAL_LEADS_DISCOVERY_MODE: z
+    .string()
+    .default("true")
+    .transform((v) => v === "true"),
+  EXTERNAL_LEADS_DEBUG_DISCARDS: z
+    .string()
+    .default("true")
+    .transform((v) => v === "true"),
+  EXTERNAL_LEADS_SAVE_LOW_SCORE_CANDIDATES: z
+    .string()
+    .default("false")
+    .transform((v) => v === "true"),
+  EXTERNAL_LEADS_MAX_RAW_RESULTS_PER_SOURCE: z
+    .string()
+    .default("50")
+    .transform(Number),
+  EXTERNAL_LEADS_SOURCE_TIMEOUT_MS: z
+    .string()
+    .default("15000")
+    .transform(Number),
 
   // OpenAI
   OPENAI_API_KEY: z.string().min(10, { message: "OPENAI_API_KEY requerido" }).optional(),

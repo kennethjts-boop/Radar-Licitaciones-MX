@@ -100,6 +100,82 @@ function formatBool(value: unknown): string {
   return value === true ? "true" : "false";
 }
 
+function numberField(state: Record<string, unknown> | null | undefined, key: string): number {
+  const value = state?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function externalNoLeadCause(external: Record<string, unknown> | null | undefined): string {
+  if (!external) return "sin ciclo registrado";
+  const raw = numberField(external, "rawResultsReceived");
+  const detected = numberField(external, "detected");
+  const discardedScore = numberField(external, "discardedByScore");
+  const discardedEvidence =
+    numberField(external, "discardedByEvidence") +
+    numberField(external, "discardedByMissingEvidence");
+  const discardedKeyword = numberField(external, "discardedByKeyword");
+  const discardedScope = numberField(external, "discardedByScope");
+
+  if (detected > 0) return `${detected} detectados; revisar score/guardado`;
+  if (raw === 0) return `${numberField(external, "sourcesReviewed")} fuentes, 0 resultados crudos`;
+  if (discardedScore + discardedEvidence > 0) {
+    return `${raw} resultados crudos, ${discardedScore + discardedEvidence} descartados por score/evidencia`;
+  }
+  if (discardedKeyword + discardedScope > 0) {
+    return `${raw} resultados crudos, ${discardedKeyword + discardedScope} descartados por keyword/alcance`;
+  }
+  return `${raw} resultados crudos, sin candidatos suficientes`;
+}
+
+function formatTopDiscarded(external: Record<string, unknown> | null | undefined): string[] {
+  const rawItems = external?.topDiscardedCandidates;
+  if (!Array.isArray(rawItems) || rawItems.length === 0) return ["  Top descartados: <b>ninguno</b>"];
+
+  return [
+    "  Top descartados:",
+    ...rawItems.slice(0, 5).map((item) => {
+      const candidate = item as Record<string, unknown>;
+      const title = String(candidate.title ?? "sin título").slice(0, 80);
+      const source = String(candidate.sourceName ?? "fuente").slice(0, 40);
+      const score = candidate.estimatedScore ?? "N/D";
+      const reasons = Array.isArray(candidate.reasons)
+        ? candidate.reasons.join(", ")
+        : "N/D";
+      const publicUrl = candidate.publicUrl || candidate.sourceUrl
+        ? ` | ${String(candidate.publicUrl ?? candidate.sourceUrl).slice(0, 90)}`
+        : "";
+      return `  - <b>${escapeHtml(title)}</b> | ${escapeHtml(source)} | score ${escapeHtml(score)} | ${escapeHtml(reasons)}${escapeHtml(publicUrl)}`;
+    }),
+  ];
+}
+
+function formatCommercialMap(value: unknown): string {
+  if (!value || typeof value !== "object") return "ninguno";
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, count]) => typeof count === "number" && count > 0)
+    .slice(0, 5);
+  return entries.length > 0
+    ? entries.map(([key, count]) => `${key}: ${count}`).join(" | ")
+    : "ninguno";
+}
+
+function formatCommercialCandidates(
+  commercial: Record<string, unknown> | null | undefined,
+  key: "topMatchedCandidates" | "topDiscardedCandidates",
+): string[] {
+  const items = commercial?.[key];
+  if (!Array.isArray(items) || items.length === 0) {
+    return [`  ${key === "topMatchedCandidates" ? "Top comerciales" : "Top descartados comerciales"}: <b>ninguno</b>`];
+  }
+  return [
+    `  ${key === "topMatchedCandidates" ? "Top comerciales" : "Top descartados comerciales"}:`,
+    ...items.slice(0, 5).map((item) => {
+      const candidate = item as Record<string, unknown>;
+      return `  - <b>${escapeHtml(String(candidate.title ?? "sin título").slice(0, 80))}</b> | ${escapeHtml(candidate.profile ?? "perfil")} | score ${escapeHtml(candidate.score ?? "N/D")} | ${escapeHtml(candidate.reason ?? "match")}`;
+    }),
+  ];
+}
+
 function pickFirst(state: Record<string, unknown> | null | undefined, keys: string[]): unknown {
   if (!state) return null;
   for (const key of keys) {
@@ -233,9 +309,14 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       const external =
         status.externalLeads.status !== "none" ? status.externalLeads : externalState;
       const lastErrorLine = buildLastErrorLine(lastRunState, dailySummaryState, external as Record<string, unknown> | null);
+      const externalRecord = external as Record<string, unknown> | null;
       const dailySummaryDisplay = dailySummaryState
         ? `${dailySummaryState.status ?? "N/D"} | Esperado: ${formatTelemetryDate(dailySummaryState.expectedAt)} | Real: ${formatTelemetryDate(dailySummaryState.finishedAt ?? dailySummaryState.actualAt ?? dailySummaryState.startedAt)}`
         : "Sin registro";
+      const commercialState = lastRunState?.commercialMatching as Record<string, unknown> | undefined;
+      const externalSummary = config.ENABLE_EXTERNAL_LEADS_OSINT
+        ? `vivo, ${numberField(externalRecord, "detected") > 0 ? "con leads" : `sin leads: ${externalNoLeadCause(externalRecord)}`}`
+        : "inactivo";
 
       const lines = [
         `🔍 <b>ESTADO — Radar Licitaciones MX</b>`,
@@ -256,9 +337,10 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `📡 Scheduler: <b>${status.schedulerStatus === "active" || schedulerState?.status === "active" ? "✅ Activo" : "⏳ Iniciando"}</b>`,
         `🧾 Resumen 7am: <b>${escapeHtml(dailySummaryDisplay)}</b>`,
         `🛰 Radares: <b>${radars.length} activos</b>`,
-        `🧭 External OSINT: <b>${config.ENABLE_EXTERNAL_LEADS_OSINT ? "activo" : "inactivo"}</b> | Dry run: <b>${formatBool(config.EXTERNAL_LEADS_DRY_RUN)}</b>`,
+        `💼 Motor comercial: <b>${config.COMMERCIAL_MATCHING_ENABLED ? "activo" : "inactivo"}</b> | Candidatos: <b>${numberField(commercialState, "commercialCandidates")}</b> | Matches perfiles: <b>${numberField(commercialState, "matchedProfiles")}</b>`,
+        `🧭 External OSINT: <b>${escapeHtml(externalSummary)}</b> | Dry run: <b>${formatBool(config.EXTERNAL_LEADS_DRY_RUN)}</b> | Discovery: <b>${formatBool(config.EXTERNAL_LEADS_DISCOVERY_MODE)}</b>`,
         external
-          ? `   Último: <b>${external.status ?? "N/D"}</b> | Detectados: <b>${external.detected ?? 0}</b> | Guardados: <b>${external.saved ?? 0}</b> | Alertas: <b>${external.alerted ?? 0}</b>`
+          ? `   Último: <b>${external.status ?? "N/D"}</b> | Fuentes: <b>${numberField(externalRecord, "sourcesReviewed")}</b> | Raw: <b>${numberField(externalRecord, "rawResultsReceived")}</b> | Detectados: <b>${numberField(externalRecord, "detected")}</b> | Guardados: <b>${numberField(externalRecord, "saved")}</b> | Alertas: <b>${numberField(externalRecord, "alerted")}</b> | Errores: <b>${Array.isArray(externalRecord?.errors) ? externalRecord.errors.length : 0}</b>`
           : `   Último: <b>N/D</b>`,
         "",
         `⏱ Uptime: <b>${formatDuration(status.uptimeMs)}</b>`,
@@ -401,6 +483,8 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       const radars = getActiveRadars();
       const external =
         status.externalLeads.status !== "none" ? status.externalLeads : externalState;
+      const externalRecord = external as Record<string, unknown> | null;
+      const commercialState = lastRunState?.commercialMatching as Record<string, unknown> | undefined;
 
       const lines = [
         `🔧 <b>TELEMETRÍA — Radar Licitaciones MX</b>`,
@@ -420,14 +504,39 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `  Streak: <b>${lastRunState?.known_streak ?? 0}</b>`,
         `  Stop: <code>${String(lastRunState?.stop_reason ?? "N/D").slice(0, 50)}</code>`,
         "",
+        `<b>💼 Motor comercial:</b> ${config.COMMERCIAL_MATCHING_ENABLED ? "activo" : "inactivo"}`,
+        `  Revisados: <b>${numberField(commercialState, "totalReviewed")}</b>`,
+        `  Raw results: <b>${numberField(commercialState, "rawResultsReceived")}</b>`,
+        `  Candidatos comerciales: <b>${numberField(commercialState, "commercialCandidates")}</b>`,
+        `  Matches por perfil: <code>${escapeHtml(formatCommercialMap(commercialState?.matchesByProfile))}</code>`,
+        `  Matches por territorio: <code>${escapeHtml(formatCommercialMap(commercialState?.matchesByTerritory))}</code>`,
+        `  Desc. sin territorio: <b>${numberField(commercialState, "discardedByNoTerritory")}</b>`,
+        `  Desc. keyword: <b>${numberField(commercialState, "discardedByKeyword")}</b>`,
+        `  Desc. negative keyword: <b>${numberField(commercialState, "discardedByNegativeKeyword")}</b>`,
+        `  Desc. bajo score: <b>${numberField(commercialState, "discardedByLowScore")}</b>`,
+        `  Desc. evidencia: <b>${numberField(commercialState, "discardedByMissingEvidence")}</b>`,
+        ...formatCommercialCandidates(commercialState, "topMatchedCandidates"),
+        ...formatCommercialCandidates(commercialState, "topDiscardedCandidates"),
+        "",
         `<b>🧭 External OSINT:</b> ${config.ENABLE_EXTERNAL_LEADS_OSINT ? "activo" : "inactivo"}`,
         `  Dry run: <b>${formatBool(config.EXTERNAL_LEADS_DRY_RUN)}</b>`,
+        `  Discovery mode: <b>${formatBool(config.EXTERNAL_LEADS_DISCOVERY_MODE)}</b>`,
         `  Último ciclo: <b>${external?.status ?? "N/D"}</b>`,
-        `  Fuentes: <b>${external?.sourcesReviewed ?? 0}</b>`,
-        `  Detectados: <b>${external?.detected ?? 0}</b>`,
-        `  Guardados: <b>${external?.saved ?? 0}</b>`,
-        `  Alertas: <b>${external?.alerted ?? 0}</b>`,
-        `  Errores: <b>${Array.isArray(external?.errors) ? external.errors.length : 0}</b>`,
+        `  Fuentes revisadas: <b>${numberField(externalRecord, "sourcesReviewed")}</b>`,
+        `  Resultados crudos: <b>${numberField(externalRecord, "rawResultsReceived")}</b>`,
+        `  Normalizados: <b>${numberField(externalRecord, "normalized")}</b>`,
+        `  Detectados: <b>${numberField(externalRecord, "detected")}</b>`,
+        `  Guardados: <b>${numberField(externalRecord, "saved")}</b>`,
+        `  Alertas: <b>${numberField(externalRecord, "alerted")}</b>`,
+        `  Descartados keyword: <b>${numberField(externalRecord, "discardedByKeyword")}</b>`,
+        `  Descartados evidencia: <b>${numberField(externalRecord, "discardedByEvidence") + numberField(externalRecord, "discardedByMissingEvidence")}</b>`,
+        `  Descartados fecha: <b>${numberField(externalRecord, "discardedByDate")}</b>`,
+        `  Descartados sanitización: <b>${numberField(externalRecord, "discardedBySanitization")}</b>`,
+        `  Descartados alcance: <b>${numberField(externalRecord, "discardedByScope")}</b>`,
+        `  Descartados score: <b>${numberField(externalRecord, "discardedByScore")}</b>`,
+        `  Descartados dedupe: <b>${numberField(externalRecord, "discardedByDeduplication")}</b>`,
+        `  Errores: <b>${Array.isArray(externalRecord?.errors) ? externalRecord.errors.length : 0}</b>`,
+        ...formatTopDiscarded(externalRecord),
         "",
         lastRunState?.errorMessage ? `⚠️ <b>Error:</b> <code>${String(lastRunState.errorMessage).slice(0, 100)}</code>` : "",
         "",

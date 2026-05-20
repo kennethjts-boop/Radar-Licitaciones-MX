@@ -6,6 +6,8 @@ import type { ExternalLeadRunResult } from "../modules/external-opportunity-disc
 process.env.ENABLE_EXTERNAL_LEADS_OSINT ??= "true";
 process.env.EXTERNAL_LEADS_DRY_RUN ??= "true";
 process.env.EXTERNAL_LEADS_TELEGRAM_ENABLED ??= "false";
+process.env.EXTERNAL_LEADS_DISCOVERY_MODE ??= "true";
+process.env.EXTERNAL_LEADS_DEBUG_DISCARDS ??= "true";
 
 const REPORT_PATH = path.resolve(
   process.cwd(),
@@ -23,7 +25,13 @@ async function writeActivationReport(
     result.skippedLowScore +
     result.skippedMissingSourceUrl +
     result.skippedMissingEvidence +
-    result.skippedDuplicateAlert;
+    result.skippedDuplicateAlert +
+    result.discardedByKeyword +
+    result.discardedByEvidence +
+    result.discardedByDate +
+    result.discardedBySanitization +
+    result.discardedByScope +
+    result.discardedByDeduplication;
   const sourceErrors = result.sourceQueries
     .filter((query) => !query.ok)
     .map(
@@ -33,7 +41,7 @@ async function writeActivationReport(
   const runtimeErrors = result.errors.map((error) => `runtime -> ${error}`);
   const recommendation =
     result.status === "success"
-      ? "Listo para activar en Railway con EXTERNAL_LEADS_DRY_RUN=false, manteniendo límites y Telegram controlado."
+      ? "Dry-run validado. Mantener Telegram apagado y revisar errores recuperables de fuente antes de producción."
       : "No activar en producción hasta corregir los errores fatales del dry-run.";
 
   const report = [
@@ -47,8 +55,17 @@ async function writeActivationReport(
     `- Dry run: ${result.dryRun}`,
     `- Consultas realizadas: ${result.sourceQueries.length}`,
     `- Fuentes revisadas: ${result.sourcesReviewed}`,
+    `- Resultados crudos: ${result.rawResultsReceived}`,
+    `- Normalizados: ${result.normalized}`,
     `- Leads detectados: ${result.detected}`,
     `- Leads descartados: ${discarded}`,
+    `- Descartados por keyword: ${result.discardedByKeyword}`,
+    `- Descartados por evidencia: ${result.discardedByEvidence + result.discardedByMissingEvidence}`,
+    `- Descartados por fecha: ${result.discardedByDate}`,
+    `- Descartados por sanitización: ${result.discardedBySanitization}`,
+    `- Descartados por alcance: ${result.discardedByScope}`,
+    `- Descartados por score: ${result.discardedByScore}`,
+    `- Descartados por deduplicación: ${result.discardedByDeduplication}`,
     `- Pasarian a guardado: ${result.telegramCandidates}`,
     `- Guardados reales: ${result.saved}`,
     `- Alertas enviadas reales: ${result.alerted}`,
@@ -69,6 +86,14 @@ async function writeActivationReport(
     "## Errores encontrados",
     "",
     formatList([...sourceErrors, ...runtimeErrors]),
+    "",
+    "## Top descartados sanitizados",
+    "",
+    formatList(
+      result.topDiscardedCandidates.map((candidate) =>
+        `${candidate.title} | ${candidate.sourceName} | score ${candidate.estimatedScore ?? "N/D"} | ${candidate.reasons.join(", ")}${candidate.publicUrl ? ` | ${candidate.publicUrl}` : ""}`,
+      ),
+    ),
     "",
     "## Recomendacion final",
     "",
@@ -106,13 +131,21 @@ async function main(): Promise<void> {
       "External Leads OSINT — Dry Run",
       "==============================",
       `Dry run: ${result.dryRun}`,
+      `Discovery mode: ${result.discoveryMode}`,
       `Status: ${result.status}${result.reason ? ` (${result.reason})` : ""}`,
       `Fuentes revisadas: ${result.sourcesReviewed}`,
+      `Resultados crudos: ${result.rawResultsReceived}`,
+      `Normalizados: ${result.normalized}`,
       `Leads detectados: ${result.detected}`,
+      `Descartados keyword: ${result.discardedByKeyword}`,
+      `Descartados evidencia: ${result.discardedByEvidence + result.discardedByMissingEvidence}`,
+      `Descartados fecha: ${result.discardedByDate}`,
+      `Descartados sanitización: ${result.discardedBySanitization}`,
+      `Descartados alcance: ${result.discardedByScope}`,
       `Descartados por score: ${result.skippedLowScore}`,
       `Descartados sin source_url: ${result.skippedMissingSourceUrl}`,
       `Descartados sin evidence_text: ${result.skippedMissingEvidence}`,
-      `Descartados por duplicado: ${result.skippedDuplicateAlert}`,
+      `Descartados por dedupe: ${result.discardedByDeduplication}`,
       `Candidatos Telegram: ${result.telegramCandidates}`,
       `Guardados: ${result.saved}`,
       `Alertas enviadas: ${result.alerted}`,

@@ -112,6 +112,14 @@ export interface MatchResult {
   matchedTerms: string[];
   excludedTerms: string[];
   explanation: string;
+  commercialProfileId?: string;
+  commercialProfileName?: string;
+  commercialCompanyName?: string;
+  commercialScoreReasons?: string[];
+  commercialTerritoryMatched?: string | null;
+  commercialShouldSave?: boolean;
+  commercialShouldAlert?: boolean;
+  commercialDiscardReason?: string | null;
   isNew: boolean; // true si el expediente no existía antes
   isStatusChange: boolean;
   previousStatus: ProcurementStatus | null;
@@ -145,6 +153,11 @@ export interface EnrichedAlert {
   procurement: NormalizedProcurement;
   matchedTerms: string[];
   explanation: string;
+  commercialProfileId?: string;
+  commercialProfileName?: string;
+  commercialCompanyName?: string;
+  commercialScoreReasons?: string[];
+  commercialTerritoryMatched?: string | null;
   hasHistory: boolean;
   historyCount: number;
   detectedAt: string; // ISO-8601
@@ -192,4 +205,5 @@ export interface RadarConfig {
   entityTerms: string[];
   rules: RadarRule[];
   minScore: number; // 0.0 – 1.0, umbral para disparar alerta
+  commercialProfileId?: string;
 }

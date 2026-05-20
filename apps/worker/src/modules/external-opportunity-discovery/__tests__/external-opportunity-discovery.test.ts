@@ -331,6 +331,11 @@ describe("external-opportunity-discovery job hardening", () => {
     lookbackDays: 180,
     morelosOnly: true,
     telegramEnabled: true,
+    discoveryMode: false,
+    debugDiscards: true,
+    saveLowScoreCandidates: false,
+    maxRawResultsPerSource: 50,
+    sourceTimeoutMs: 15000,
   };
 
   it("dry-run no guarda ni alerta", async () => {

@@ -265,6 +265,20 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
   const score = (alert.matchScore * 100).toFixed(0);
   const opportunityScore = (alert.opportunityScore * 100).toFixed(0);
   const documentScore = (alert.documentScore * 100).toFixed(0);
+  const commercialLines = alert.commercialProfileId || alert.explanation.includes("Match comercial")
+    ? [
+        `🏢 <b>Perfil comercial:</b> ${escapeHtml(alert.commercialProfileName ?? alert.radarName)}`,
+        alert.commercialCompanyName
+          ? `🏷 <b>Empresa:</b> ${escapeHtml(alert.commercialCompanyName)}`
+          : "",
+        alert.commercialTerritoryMatched
+          ? `📍 <b>Territorio detectado:</b> ${escapeHtml(alert.commercialTerritoryMatched)}`
+          : "",
+        ...(alert.commercialScoreReasons ?? [])
+          .slice(0, 5)
+          .map((reason) => `• ${escapeHtml(reason)}`),
+      ]
+    : [];
 
   // Fechas reales del API (vienen en ISO "2026-04-17T10:30:00")
   const raw = p.rawJson as Record<string, unknown>;
@@ -286,6 +300,8 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
     `💼 <b>Potencial comercial:</b> ${opportunityScore}%`,
     `📄 <b>Calidad documental:</b> ${documentScore}%`,
     "",
+    ...commercialLines,
+    commercialLines.length > 0 ? "" : "",
     `📌 <b>${escapeHtml(p.title ?? "")}</b>`,
     "",
     `🏛 <b>Dependencia:</b> ${escapeHtml(p.dependencyName ?? "N/D")}`,
@@ -311,7 +327,8 @@ export function formatMatchAlert(alert: EnrichedAlert): string {
     fechaInicioContrato ? `🗓 <b>Inicio Contrato:</b> ${fmtDate(fechaInicioContrato)}` : "",
     "",
     `🎯 <b>Razones del Match:</b>`,
-    `Términos: ${alert.matchedTerms.slice(0, 8).join(" · ")}`,
+    `Términos: ${escapeHtml(alert.matchedTerms.slice(0, 8).join(" · "))}`,
+    alert.explanation ? `Explicación: ${escapeHtml(alert.explanation).slice(0, 400)}` : "",
     alert.procurement.attachments.length > 0
       ? `📎 Adjuntos: ${alert.procurement.attachments.length} archivo(s)`
       : "",

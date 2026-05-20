@@ -4,6 +4,11 @@
  */
 import { createModuleLogger } from "../core/logger";
 import { findMatchingTerms, findExcludedTerms } from "../core/text";
+import {
+  getCommercialProfile,
+  type CommercialProfileId,
+} from "../modules/commercial-profiles";
+import { matchCommercialOpportunity } from "../modules/commercial-matching";
 import type {
   NormalizedProcurement,
   MatchResult,
@@ -24,6 +29,19 @@ function scoreToLevel(score: number): MatchLevel {
 
 function clampScore(score: number): number {
   return Math.max(0, Math.min(1, Math.round(score * 1000) / 1000));
+}
+
+function commercialMatchingEnabled(): boolean {
+  return process.env.COMMERCIAL_MATCHING_ENABLED !== "false";
+}
+
+function commercialMinScore(): number {
+  const parsed = Number(process.env.COMMERCIAL_MATCHING_MIN_SCORE ?? "60");
+  return Number.isFinite(parsed) ? parsed : 60;
+}
+
+function commercialRequireTerritory(): boolean {
+  return process.env.COMMERCIAL_MATCHING_REQUIRE_TERRITORY !== "false";
 }
 
 function calculateOpportunityScore(procurement: NormalizedProcurement): number {
@@ -81,6 +99,15 @@ export function evaluateProcurementAgainstRadar(
   isNew: boolean,
   previousStatus: NormalizedProcurement["status"] | null = null,
 ): MatchResult | null {
+  if (radar.commercialProfileId) {
+    return evaluateProcurementAgainstCommercialRadar(
+      procurement,
+      radar,
+      isNew,
+      previousStatus,
+    );
+  }
+
   const canonical = procurement.canonicalText;
 
   // 1. Encontrar términos excluidos → si aparece alguno requerido de exclusión, descartar
@@ -186,6 +213,95 @@ export function evaluateProcurementAgainstRadar(
     matchedTerms,
     excludedTerms: excludedFound,
     explanation,
+    isNew,
+    isStatusChange:
+      previousStatus !== null && previousStatus !== procurement.status,
+    previousStatus,
+  };
+}
+
+function evaluateProcurementAgainstCommercialRadar(
+  procurement: NormalizedProcurement,
+  radar: RadarConfig,
+  isNew: boolean,
+  previousStatus: NormalizedProcurement["status"] | null,
+): MatchResult | null {
+  if (!commercialMatchingEnabled()) return null;
+
+  const profile = getCommercialProfile(radar.commercialProfileId as CommercialProfileId);
+  const result = matchCommercialOpportunity(
+    {
+      title: procurement.title,
+      description: procurement.description,
+      buyerName: procurement.dependencyName,
+      dependency: procurement.dependencyName,
+      unit: procurement.buyingUnit,
+      procedureId:
+        procurement.procedureNumber ??
+        procurement.licitationNumber ??
+        procurement.expedienteId,
+      source: procurement.source,
+      sourceUrl: procurement.sourceUrl,
+      publicationDate: procurement.publicationDate,
+      state: procurement.state,
+      municipality: procurement.municipality,
+      placeOfExecution: procurement.rawJson.placeOfExecution as string | null | undefined,
+      placeOfDelivery: procurement.rawJson.placeOfDelivery as string | null | undefined,
+      fullText: procurement.canonicalText,
+      attachmentsText: procurement.attachments
+        .map((attachment) => attachment.detectedText)
+        .filter((text): text is string => Boolean(text)),
+    },
+    {
+      profiles: [profile],
+      minScore: Math.max(commercialMinScore(), radar.minScore * 100),
+      requireTerritory: commercialRequireTerritory(),
+      debug: process.env.COMMERCIAL_MATCHING_DEBUG !== "false",
+    },
+  );
+  const profileMatch = result.matchedProfiles[0];
+  if (!profileMatch || !profileMatch.shouldAlert) {
+    log.trace(
+      {
+        radarKey: radar.key,
+        externalId: procurement.externalId,
+        score: result.score,
+        reason: result.discardReason,
+      },
+      "Commercial profile discarded",
+    );
+    return null;
+  }
+
+  const matchScore = clampScore(profileMatch.score / 100);
+  const explanation = [
+    `Match comercial ${profileMatch.scoreLevel.toUpperCase()} (${profileMatch.score}%) para ${profileMatch.displayName}.`,
+    `Territorio: ${profileMatch.territoryMatched ?? "N/D"}.`,
+    `Razones: ${profileMatch.scoreReasons.slice(0, 5).join("; ")}.`,
+  ].join(" ");
+
+  return {
+    radarKey: radar.key,
+    procurementId: procurement.externalId,
+    matchScore,
+    opportunityScore: calculateOpportunityScore(procurement),
+    documentScore: calculateDocumentScore(procurement),
+    matchLevel: scoreToLevel(matchScore),
+    matchedTerms: [
+      ...profileMatch.keywordMatches.primary,
+      ...profileMatch.keywordMatches.secondary,
+      ...profileMatch.keywordMatches.strongContext,
+    ].slice(0, 12),
+    excludedTerms: profileMatch.negativeMatches,
+    explanation,
+    commercialProfileId: profileMatch.profileId,
+    commercialProfileName: profileMatch.displayName,
+    commercialCompanyName: profileMatch.companyName,
+    commercialScoreReasons: profileMatch.scoreReasons,
+    commercialTerritoryMatched: profileMatch.territoryMatched,
+    commercialShouldSave: profileMatch.shouldSave,
+    commercialShouldAlert: profileMatch.shouldAlert,
+    commercialDiscardReason: profileMatch.discardReason,
     isNew,
     isStatusChange:
       previousStatus !== null && previousStatus !== procurement.status,

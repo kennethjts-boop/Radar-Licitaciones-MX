@@ -286,7 +286,7 @@ describe("business line radars", () => {
     expect(keys).toContain("grupo_constructor_nag_mantenimiento_morelos");
   });
 
-  it("no activa nueva vertical por CAPUFE nacional sin Morelos", () => {
+  it("marca nueva vertical CAPUFE nacional como posible con score penalizado", () => {
     const proc = makeProcurement({
       dependencyName: "CAPUFE",
       state: "NACIONAL",
@@ -296,7 +296,9 @@ describe("business line radars", () => {
     const radar = getRadarByKey("hm_highmil_lubricantes_morelos");
     expect(radar).toBeDefined();
     const result = evaluateProcurementAgainstRadar(proc, radar!, true);
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result!.commercialTerritoryMatched).toBe("Nacional / posible");
+    expect(result!.matchScore).toBeLessThan(0.75);
   });
 
   it("conserva excepcion CAPUFE nacional por licitacion desierta", () => {

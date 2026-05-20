@@ -1,8 +1,9 @@
-import { findMatchingTerms } from "../../core/text";
+import { findMatchingTerms, textContainsTerm } from "../../core/text";
 import { MORELOS_TERMS } from "./keywords";
 import type {
   ExternalLeadCandidate,
   ExternalLeadConfidence,
+  ExternalLeadScoreBreakdown,
   ExternalLeadScoreResult,
 } from "./types";
 
@@ -22,35 +23,78 @@ function nextActionForScore(score: number): string {
   return "monitorear";
 }
 
-function isRecentEnough(sourcePublishedAt: string | null, lookbackDays: number): boolean {
-  if (!sourcePublishedAt) return false;
+function ageDays(sourcePublishedAt: string | null): number | null {
+  if (!sourcePublishedAt) return null;
   const published = new Date(sourcePublishedAt).getTime();
-  if (!Number.isFinite(published)) return false;
-  const cutoff = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
-  return published >= cutoff;
+  if (!Number.isFinite(published)) return null;
+  return Math.max(0, Math.floor((Date.now() - published) / (24 * 60 * 60 * 1000)));
+}
+
+function scoreFreshness(
+  sourcePublishedAt: string | null,
+  lookbackDays: number,
+  reasons: string[],
+): number {
+  const age = ageDays(sourcePublishedAt);
+  if (age === null) {
+    reasons.push("fresh: publication date unavailable");
+    return 2;
+  }
+  if (age <= 7) {
+    reasons.push("fresh: less than 7 days");
+    return 12;
+  }
+  if (age <= 30) {
+    reasons.push("fresh: less than 30 days");
+    return 8;
+  }
+  if (age <= lookbackDays) {
+    reasons.push(`fresh: within ${lookbackDays} days`);
+    return 5;
+  }
+
+  reasons.push(`fresh: older than ${lookbackDays} days`);
+  return 0;
+}
+
+function hasAny(text: string, terms: string[]): boolean {
+  return terms.some((term) => textContainsTerm(text, term));
 }
 
 export function scoreExternalLead(
   candidate: ExternalLeadCandidate,
   lookbackDays: number,
 ): ExternalLeadScoreResult {
-  let score = 0;
+  const reasons: string[] = [];
+  const text = [
+    candidate.title,
+    candidate.evidenceText,
+    candidate.organizationName ?? "",
+    candidate.state ?? "",
+    candidate.municipality ?? "",
+    candidate.sourceUrl,
+  ].join(" ");
+  const normalizedText = text.toLowerCase();
 
-  if (candidate.sourceUrl && candidate.isOfficialSource) score += 15;
+  const distinctKeywords = new Set(candidate.matchedKeywords.map((term) => term.toLowerCase()));
+  const keywordScore = Math.min(24, distinctKeywords.size * 6);
+  if (distinctKeywords.size > 0) {
+    reasons.push(`keyword: ${candidate.matchedKeywords.slice(0, 4).join(", ")}`);
+  } else {
+    reasons.push("keyword: none");
+  }
 
-  switch (candidate.opportunityType) {
-    case "licitacion":
-      score += 25;
-      break;
-    case "licitacion_proxima":
-      score += 20;
-      break;
-    case "contrato_historico":
-      score += 14;
-      break;
-    case "senal_comercial_publica":
-      score += 8;
-      break;
+  const freshnessScore = scoreFreshness(candidate.sourcePublishedAt, lookbackDays, reasons);
+
+  let sourceTrustScore = 0;
+  if (candidate.sourceUrl && candidate.isOfficialSource) {
+    sourceTrustScore = 16;
+    reasons.push("source: official");
+  } else if (candidate.sourceUrl) {
+    sourceTrustScore = 5;
+    reasons.push("source: public non-official");
+  } else {
+    reasons.push("source: missing public URL");
   }
 
   const scopeText = [
@@ -59,29 +103,107 @@ export function scoreExternalLead(
     candidate.title,
     candidate.evidenceText,
   ].join(" ");
-  if (candidate.state === "Morelos" || findMatchingTerms(scopeText, MORELOS_TERMS).length > 0) {
-    score += 20;
-  }
-
-  const distinctKeywords = new Set(candidate.matchedKeywords.map((term) => term.toLowerCase()));
-  score += Math.min(22, distinctKeywords.size * 5);
   const hasMorelosScope =
     candidate.state === "Morelos" || findMatchingTerms(scopeText, MORELOS_TERMS).length > 0;
+  const geographyScore = hasMorelosScope ? 18 : hasAny(scopeText, ["capufe", "caminos y puentes federales"]) ? 10 : 2;
+  if (hasMorelosScope) reasons.push("geography: Morelos");
+  else if (geographyScore >= 10) reasons.push("geography: CAPUFE national");
+  else reasons.push("geography: weak or broad");
 
-  if (candidate.amountVisible) score += 8;
-  if (candidate.buyerAreaIdentified || candidate.contactArea) score += 8;
-  if (isRecentEnough(candidate.sourcePublishedAt, lookbackDays)) score += 8;
+  let opportunityScore = 0;
+  switch (candidate.opportunityType) {
+    case "licitacion":
+      opportunityScore = 20;
+      reasons.push("opportunity: active public tender");
+      break;
+    case "licitacion_proxima":
+      opportunityScore = 16;
+      reasons.push("opportunity: upcoming tender signal");
+      break;
+    case "contrato_historico":
+      opportunityScore = 10;
+      reasons.push("opportunity: historical contract");
+      break;
+    case "senal_comercial_publica":
+      opportunityScore = 5;
+      reasons.push("opportunity: weak public signal");
+      break;
+  }
 
-  if (!candidate.evidenceText.trim()) score = Math.min(score, 35);
-  if (!candidate.isOfficialSource) score = Math.min(score, 45);
-  if (distinctKeywords.size <= 1) score = Math.min(score, 55);
+  if (
+    hasAny(normalizedText, [
+      "desierta",
+      "sin participantes",
+      "segunda convocatoria",
+      "baja competencia",
+      "adjudicacion directa",
+      "adjudicación directa",
+    ])
+  ) {
+    opportunityScore += 6;
+    reasons.push("opportunity: low competition or deserted signal");
+  }
+
+  let evidenceScore = 0;
+  if (candidate.sourceUrl) evidenceScore += 4;
+  if (candidate.evidenceText.trim().length >= 60) evidenceScore += 5;
+  if (candidate.amountVisible) evidenceScore += 4;
+  if (candidate.buyerAreaIdentified || candidate.contactArea) evidenceScore += 4;
+  evidenceScore = Math.min(15, evidenceScore);
+  if (candidate.sourceUrl) reasons.push("evidence: public URL");
+  if (candidate.amountVisible) reasons.push("evidence: amount visible");
+  if (candidate.buyerAreaIdentified || candidate.contactArea) reasons.push("evidence: buyer area identified");
+
+  let urgencyScore = 0;
+  if (
+    hasAny(normalizedText, [
+      "vence",
+      "junta de aclaraciones",
+      "presentacion de proposiciones",
+      "presentación de proposiciones",
+      "apertura de proposiciones",
+      "convocatoria",
+      "bases",
+    ])
+  ) {
+    urgencyScore = 7;
+    reasons.push("urgency: tender calendar signal");
+  }
+
+  let score =
+    keywordScore +
+    freshnessScore +
+    sourceTrustScore +
+    geographyScore +
+    opportunityScore +
+    evidenceScore +
+    urgencyScore;
+
+  if (!candidate.evidenceText.trim()) {
+    score = Math.min(score, 35);
+    reasons.push("penalty: missing evidence text");
+  }
+  if (!candidate.sourceUrl.trim()) {
+    score = Math.min(score, 30);
+    reasons.push("penalty: missing source URL");
+  }
+  if (!candidate.isOfficialSource) {
+    score = Math.min(score, 45);
+    reasons.push("penalty: non-official source cap");
+  }
+  if (distinctKeywords.size <= 1) {
+    score = Math.min(score, 55);
+    reasons.push("penalty: weak keyword diversity");
+  }
   if (
     candidate.opportunityType === "senal_comercial_publica" &&
     (distinctKeywords.size <= 2 || !candidate.buyerAreaIdentified || !candidate.isOfficialSource)
   ) {
     score = Math.min(score, 44);
+    reasons.push("penalty: weak commercial signal");
   } else if (candidate.opportunityType === "senal_comercial_publica") {
     score = Math.min(score, 65);
+    reasons.push("penalty: public signal cap");
   }
   if (candidate.opportunityType === "contrato_historico") {
     const hasStrongHistoricalEvidence =
@@ -91,14 +213,31 @@ export function scoreExternalLead(
       candidate.isOfficialSource &&
       hasMorelosScope;
     score = Math.min(score, hasStrongHistoricalEvidence ? 78 : 74);
+    reasons.push(
+      hasStrongHistoricalEvidence
+        ? "cap: strong historical contract"
+        : "cap: historical contract requires manual validation",
+    );
   }
 
   const finalScore = clampScore(score);
+  const scoreBreakdown: ExternalLeadScoreBreakdown = {
+    keywordScore,
+    freshnessScore,
+    sourceTrustScore,
+    geographyScore,
+    opportunityScore,
+    evidenceScore,
+    urgencyScore,
+    finalScore,
+  };
 
   return {
     score: finalScore,
     confidence: confidenceFromScore(finalScore),
     nextAction: nextActionForScore(finalScore),
+    scoreReasons: [...new Set(reasons)].slice(0, 12),
+    scoreBreakdown,
   };
 }
 

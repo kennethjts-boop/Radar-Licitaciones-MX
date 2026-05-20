@@ -45,10 +45,23 @@ export interface HealthStatus {
     status: "success" | "error" | "skipped" | "none";
     enabled: boolean;
     dryRun: boolean;
+    discoveryMode: boolean;
     sourcesReviewed: number;
+    rawResultsReceived: number;
+    normalized: number;
     detected: number;
     saved: number;
     alerted: number;
+    discardedByKeyword: number;
+    discardedByEvidence: number;
+    discardedByDate: number;
+    discardedBySanitization: number;
+    discardedByScope: number;
+    discardedByScore: number;
+    discardedByDeduplication: number;
+    discardedByMissingSourceUrl: number;
+    discardedByMissingEvidence: number;
+    topDiscardedCandidates: unknown[];
     errors: string[];
   };
   uptimeMs: number;
@@ -78,10 +91,23 @@ class HealthTracker {
     status: "none" as "success" | "error" | "skipped" | "none",
     enabled: false,
     dryRun: true,
+    discoveryMode: true,
     sourcesReviewed: 0,
+    rawResultsReceived: 0,
+    normalized: 0,
     detected: 0,
     saved: 0,
     alerted: 0,
+    discardedByKeyword: 0,
+    discardedByEvidence: 0,
+    discardedByDate: 0,
+    discardedBySanitization: 0,
+    discardedByScope: 0,
+    discardedByScore: 0,
+    discardedByDeduplication: 0,
+    discardedByMissingSourceUrl: 0,
+    discardedByMissingEvidence: 0,
+    topDiscardedCandidates: [] as unknown[],
     errors: [] as string[],
   };
 
@@ -156,10 +182,23 @@ class HealthTracker {
     status: "success" | "error" | "skipped";
     enabled: boolean;
     dryRun: boolean;
+    discoveryMode: boolean;
     sourcesReviewed: number;
+    rawResultsReceived: number;
+    normalized: number;
     detected: number;
     saved: number;
     alerted: number;
+    discardedByKeyword: number;
+    discardedByEvidence: number;
+    discardedByDate: number;
+    discardedBySanitization: number;
+    discardedByScope: number;
+    discardedByScore: number;
+    discardedByDeduplication: number;
+    discardedByMissingSourceUrl: number;
+    discardedByMissingEvidence: number;
+    topDiscardedCandidates: unknown[];
     errors: string[];
   }): void {
     this.externalLeadsStatus = {
@@ -167,10 +206,23 @@ class HealthTracker {
       status: params.status,
       enabled: params.enabled,
       dryRun: params.dryRun,
+      discoveryMode: params.discoveryMode,
       sourcesReviewed: params.sourcesReviewed,
+      rawResultsReceived: params.rawResultsReceived,
+      normalized: params.normalized,
       detected: params.detected,
       saved: params.saved,
       alerted: params.alerted,
+      discardedByKeyword: params.discardedByKeyword,
+      discardedByEvidence: params.discardedByEvidence,
+      discardedByDate: params.discardedByDate,
+      discardedBySanitization: params.discardedBySanitization,
+      discardedByScope: params.discardedByScope,
+      discardedByScore: params.discardedByScore,
+      discardedByDeduplication: params.discardedByDeduplication,
+      discardedByMissingSourceUrl: params.discardedByMissingSourceUrl,
+      discardedByMissingEvidence: params.discardedByMissingEvidence,
+      topDiscardedCandidates: params.topDiscardedCandidates,
       errors: params.errors.slice(0, 10),
     };
     log.info(
@@ -178,10 +230,23 @@ class HealthTracker {
         status: params.status,
         enabled: params.enabled,
         dryRun: params.dryRun,
+        discoveryMode: params.discoveryMode,
         sourcesReviewed: params.sourcesReviewed,
+        rawResultsReceived: params.rawResultsReceived,
+        normalized: params.normalized,
         detected: params.detected,
         saved: params.saved,
         alerted: params.alerted,
+        discardedByKeyword: params.discardedByKeyword,
+        discardedByEvidence: params.discardedByEvidence,
+        discardedByDate: params.discardedByDate,
+        discardedBySanitization: params.discardedBySanitization,
+        discardedByScope: params.discardedByScope,
+        discardedByScore: params.discardedByScore,
+        discardedByDeduplication: params.discardedByDeduplication,
+        discardedByMissingSourceUrl: params.discardedByMissingSourceUrl,
+        discardedByMissingEvidence: params.discardedByMissingEvidence,
+        topDiscardedCandidates: params.topDiscardedCandidates.length,
         errors: params.errors.length,
       },
       "Ciclo external leads registrado en memoria",

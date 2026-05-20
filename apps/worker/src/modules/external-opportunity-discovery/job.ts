@@ -2,7 +2,10 @@ import { getConfig } from "../../config/env";
 import { healthTracker } from "../../core/healthcheck";
 import { createModuleLogger } from "../../core/logger";
 import { setState, STATE_KEYS } from "../../core/system-state";
-import { dedupeExternalLeadCandidates } from "./matching";
+import {
+  buildDiscardedCandidateSummary,
+  dedupeExternalLeadCandidatesWithTelemetry,
+} from "./matching";
 import { buildExternalLead } from "./lead-builder";
 import { shouldAlertExternalLead } from "./scoring";
 import { discoverExternalLeadCandidates } from "./sources";
@@ -16,6 +19,7 @@ import {
 } from "./repository";
 import type {
   ExternalLeadCandidate,
+  ExternalLeadDiscardedCandidate,
   ExternalLeadRunOptions,
   ExternalLeadRunResult,
   ExternalLeadSourceQueryResult,
@@ -29,6 +33,16 @@ type ExternalLeadDiscoveryResult = {
   errorsBySource: Record<string, string[]>;
   sourcesReviewed: number;
   sourceQueries?: ExternalLeadSourceQueryResult[];
+  discardedCandidates?: ExternalLeadDiscardedCandidate[];
+  rawResultsReceived?: number;
+  normalized?: number;
+  discardedByKeyword?: number;
+  discardedByEvidence?: number;
+  discardedByDate?: number;
+  discardedBySanitization?: number;
+  discardedByScope?: number;
+  discardedByMissingSourceUrl?: number;
+  discardedByMissingEvidence?: number;
 };
 
 export interface ExternalLeadJobDependencies {
@@ -53,6 +67,11 @@ export function getExternalLeadRunOptions(): ExternalLeadRunOptions {
     morelosOnly: config.EXTERNAL_LEADS_MORELOS_ONLY,
     targetLocations: config.EXTERNAL_LEADS_TARGET_LOCATIONS,
     telegramEnabled: config.EXTERNAL_LEADS_TELEGRAM_ENABLED,
+    discoveryMode: config.EXTERNAL_LEADS_DISCOVERY_MODE,
+    debugDiscards: config.EXTERNAL_LEADS_DEBUG_DISCARDS,
+    saveLowScoreCandidates: config.EXTERNAL_LEADS_SAVE_LOW_SCORE_CANDIDATES,
+    maxRawResultsPerSource: config.EXTERNAL_LEADS_MAX_RAW_RESULTS_PER_SOURCE,
+    sourceTimeoutMs: config.EXTERNAL_LEADS_SOURCE_TIMEOUT_MS,
   };
 }
 
@@ -64,10 +83,23 @@ async function recordExternalLeadRunState(
     status: result.status,
     enabled: options.enabled,
     dryRun: options.dryRun,
+    discoveryMode: options.discoveryMode,
     sourcesReviewed: result.sourcesReviewed,
+    rawResultsReceived: result.rawResultsReceived,
+    normalized: result.normalized,
     detected: result.detected,
     saved: result.saved,
     alerted: result.alerted,
+    discardedByKeyword: result.discardedByKeyword,
+    discardedByEvidence: result.discardedByEvidence,
+    discardedByDate: result.discardedByDate,
+    discardedBySanitization: result.discardedBySanitization,
+    discardedByScope: result.discardedByScope,
+    discardedByScore: result.discardedByScore,
+    discardedByDeduplication: result.discardedByDeduplication,
+    discardedByMissingSourceUrl: result.discardedByMissingSourceUrl,
+    discardedByMissingEvidence: result.discardedByMissingEvidence,
+    topDiscardedCandidates: result.topDiscardedCandidates,
     errors: result.errors,
   });
 
@@ -77,15 +109,32 @@ async function recordExternalLeadRunState(
     finishedAt: new Date().toISOString(),
     enabled: options.enabled,
     dryRun: options.dryRun,
-    telegramEnabled: options.telegramEnabled,
+    discoveryMode: options.discoveryMode,
+    telegramEnabled: options.telegramEnabled && !options.discoveryMode,
+    debugDiscards: options.debugDiscards,
+    saveLowScoreCandidates: options.saveLowScoreCandidates,
     targetLocations: options.targetLocations ?? null,
     morelosOnly: options.morelosOnly,
     minScore: options.minScore,
     maxResultsPerRun: options.maxResultsPerRun,
+    maxRawResultsPerSource: options.maxRawResultsPerSource,
+    sourceTimeoutMs: options.sourceTimeoutMs,
     sourcesReviewed: result.sourcesReviewed,
+    rawResultsReceived: result.rawResultsReceived,
+    normalized: result.normalized,
     detected: result.detected,
     saved: result.saved,
     alerted: result.alerted,
+    discardedByKeyword: result.discardedByKeyword,
+    discardedByEvidence: result.discardedByEvidence,
+    discardedByDate: result.discardedByDate,
+    discardedBySanitization: result.discardedBySanitization,
+    discardedByScope: result.discardedByScope,
+    discardedByScore: result.discardedByScore,
+    discardedByDeduplication: result.discardedByDeduplication,
+    discardedByMissingSourceUrl: result.discardedByMissingSourceUrl,
+    discardedByMissingEvidence: result.discardedByMissingEvidence,
+    topDiscardedCandidates: result.topDiscardedCandidates,
     skippedLowScore: result.skippedLowScore,
     skippedMissingSourceUrl: result.skippedMissingSourceUrl,
     skippedMissingEvidence: result.skippedMissingEvidence,
@@ -99,16 +148,30 @@ async function recordExternalLeadRunState(
 function emptyResult(
   status: ExternalLeadRunResult["status"],
   dryRun: boolean,
+  discoveryMode: boolean,
   reason?: string,
 ): ExternalLeadRunResult {
   return {
     status,
     reason,
     dryRun,
+    discoveryMode,
     sourcesReviewed: 0,
+    rawResultsReceived: 0,
+    normalized: 0,
     detected: 0,
     saved: 0,
     alerted: 0,
+    discardedByKeyword: 0,
+    discardedByEvidence: 0,
+    discardedByDate: 0,
+    discardedBySanitization: 0,
+    discardedByScope: 0,
+    discardedByScore: 0,
+    discardedByDeduplication: 0,
+    discardedByMissingSourceUrl: 0,
+    discardedByMissingEvidence: 0,
+    topDiscardedCandidates: [],
     skippedLowScore: 0,
     skippedMissingSourceUrl: 0,
     skippedMissingEvidence: 0,
@@ -128,7 +191,12 @@ export async function runExternalLeadsOsintJob(
   const recordState = dependencies.recordState ?? recordExternalLeadRunState;
 
   if (!options.enabled) {
-    const skipped = emptyResult("skipped", options.dryRun, "ENABLE_EXTERNAL_LEADS_OSINT=false");
+    const skipped = emptyResult(
+      "skipped",
+      options.dryRun,
+      options.discoveryMode,
+      "ENABLE_EXTERNAL_LEADS_OSINT=false",
+    );
     await recordState(skipped, options).catch((err) =>
       log.warn({ err }, "No se pudo registrar estado OSINT skipped"),
     );
@@ -138,6 +206,8 @@ export async function runExternalLeadsOsintJob(
   const errors: string[] = [];
   let errorsBySource: Record<string, string[]> = {};
   let sourcesReviewed = 0;
+  let rawResultsReceived = 0;
+  let normalized = 0;
   let saved = 0;
   let alerted = 0;
   let skippedLowScore = 0;
@@ -145,6 +215,16 @@ export async function runExternalLeadsOsintJob(
   let skippedMissingEvidence = 0;
   let skippedDuplicateAlert = 0;
   let telegramCandidates = 0;
+  let discardedByKeyword = 0;
+  let discardedByEvidence = 0;
+  let discardedByDate = 0;
+  let discardedBySanitization = 0;
+  let discardedByScope = 0;
+  let discardedByScore = 0;
+  let discardedByDeduplication = 0;
+  let discardedByMissingSourceUrl = 0;
+  let discardedByMissingEvidence = 0;
+  const discardedCandidates: ExternalLeadDiscardedCandidate[] = [];
   let sourceQueries: ExternalLeadRunResult["sourceQueries"] = [];
 
   try {
@@ -153,13 +233,36 @@ export async function runExternalLeadsOsintJob(
     errorsBySource = discovery.errorsBySource;
     sourcesReviewed = discovery.sourcesReviewed;
     sourceQueries = discovery.sourceQueries ?? [];
-    const candidates = dedupeExternalLeadCandidates(discovery.candidates);
+    rawResultsReceived = discovery.rawResultsReceived ?? 0;
+    normalized = discovery.normalized ?? discovery.candidates.length;
+    discardedByKeyword = discovery.discardedByKeyword ?? 0;
+    discardedByEvidence = discovery.discardedByEvidence ?? 0;
+    discardedByDate = discovery.discardedByDate ?? 0;
+    discardedBySanitization = discovery.discardedBySanitization ?? 0;
+    discardedByScope = discovery.discardedByScope ?? 0;
+    discardedByMissingSourceUrl = discovery.discardedByMissingSourceUrl ?? 0;
+    discardedByMissingEvidence = discovery.discardedByMissingEvidence ?? 0;
+    discardedCandidates.push(...(discovery.discardedCandidates ?? []));
+
+    const deduped = dedupeExternalLeadCandidatesWithTelemetry(discovery.candidates);
+    const candidates = deduped.deduped;
+    discardedByDeduplication += deduped.discardedDuplicateCount;
+    discardedCandidates.push(...deduped.discardedDuplicates);
 
     for (const candidate of candidates) {
       const lead = buildExternalLead(candidate, options.lookbackDays);
 
       if (!lead.sourceUrl.trim()) {
         skippedMissingSourceUrl++;
+        discardedByMissingSourceUrl++;
+        discardedCandidates.push(
+          buildDiscardedCandidateSummary({
+            ...candidate,
+            reasons: ["missing_source_url"],
+            estimatedScore: lead.estimatedInterestScore,
+            confidence: lead.confidence,
+          }),
+        );
         log.info(
           { title: lead.title, vertical: lead.vertical },
           "Lead OSINT descartado por falta de source_url",
@@ -169,6 +272,15 @@ export async function runExternalLeadsOsintJob(
 
       if (!lead.evidenceText.trim()) {
         skippedMissingEvidence++;
+        discardedByMissingEvidence++;
+        discardedCandidates.push(
+          buildDiscardedCandidateSummary({
+            ...candidate,
+            reasons: ["missing_evidence", "evidence"],
+            estimatedScore: lead.estimatedInterestScore,
+            confidence: lead.confidence,
+          }),
+        );
         log.info(
           { sourceUrl: lead.sourceUrl, vertical: lead.vertical },
           "Lead OSINT descartado por falta de evidence_text",
@@ -178,6 +290,15 @@ export async function runExternalLeadsOsintJob(
 
       if (!shouldAlertExternalLead(lead.estimatedInterestScore, options.minScore, lead.confidence)) {
         skippedLowScore++;
+        discardedByScore++;
+        discardedCandidates.push(
+          buildDiscardedCandidateSummary({
+            ...candidate,
+            reasons: ["score"],
+            estimatedScore: lead.estimatedInterestScore,
+            confidence: lead.confidence,
+          }),
+        );
         log.info(
           {
             sourceUrl: lead.sourceUrl,
@@ -188,6 +309,19 @@ export async function runExternalLeadsOsintJob(
           },
           "Lead OSINT descartado por score/confidence",
         );
+
+        if (!options.dryRun && options.saveLowScoreCandidates) {
+          try {
+            await (dependencies.upsertLead ?? upsertExternalLead)({
+              ...lead,
+              status: "monitoring",
+            });
+            saved++;
+          } catch (leadErr) {
+            const message = leadErr instanceof Error ? leadErr.message : String(leadErr);
+            errors.push(`external low-score lead failed (${lead.fingerprintHash}): ${message}`);
+          }
+        }
         continue;
       }
 
@@ -215,7 +349,7 @@ export async function runExternalLeadsOsintJob(
         const persisted = await (dependencies.upsertLead ?? upsertExternalLead)(lead);
         saved++;
 
-        if (!options.telegramEnabled || alerted >= options.maxResultsPerRun) {
+        if (!options.telegramEnabled || options.discoveryMode || alerted >= options.maxResultsPerRun) {
           continue;
         }
 
@@ -251,13 +385,27 @@ export async function runExternalLeadsOsintJob(
       }
     }
 
+    const hasSuccessfulSource = sourceQueries.some((query) => query.ok);
     const result: ExternalLeadRunResult = {
-      status: errors.length > 0 ? "error" : "success",
+      status: errors.length > 0 && !hasSuccessfulSource ? "error" : "success",
       dryRun: options.dryRun,
+      discoveryMode: options.discoveryMode,
       sourcesReviewed,
+      rawResultsReceived,
+      normalized,
       detected: candidates.length,
       saved,
       alerted,
+      discardedByKeyword,
+      discardedByEvidence,
+      discardedByDate,
+      discardedBySanitization,
+      discardedByScope,
+      discardedByScore,
+      discardedByDeduplication,
+      discardedByMissingSourceUrl,
+      discardedByMissingEvidence,
+      topDiscardedCandidates: topDiscardedCandidates(discardedCandidates),
       skippedLowScore,
       skippedMissingSourceUrl,
       skippedMissingEvidence,
@@ -278,10 +426,23 @@ export async function runExternalLeadsOsintJob(
       status: "error",
       reason: message,
       dryRun: options.dryRun,
+      discoveryMode: options.discoveryMode,
       sourcesReviewed,
+      rawResultsReceived,
+      normalized,
       detected: 0,
       saved,
       alerted,
+      discardedByKeyword,
+      discardedByEvidence,
+      discardedByDate,
+      discardedBySanitization,
+      discardedByScope,
+      discardedByScore,
+      discardedByDeduplication,
+      discardedByMissingSourceUrl,
+      discardedByMissingEvidence,
+      topDiscardedCandidates: topDiscardedCandidates(discardedCandidates),
       skippedLowScore,
       skippedMissingSourceUrl,
       skippedMissingEvidence,
@@ -296,4 +457,17 @@ export async function runExternalLeadsOsintJob(
     );
     return result;
   }
+}
+
+function topDiscardedCandidates(
+  discardedCandidates: ExternalLeadDiscardedCandidate[],
+): ExternalLeadDiscardedCandidate[] {
+  return [...discardedCandidates]
+    .sort((left, right) => {
+      const scoreLeft = left.estimatedScore ?? -1;
+      const scoreRight = right.estimatedScore ?? -1;
+      if (scoreLeft !== scoreRight) return scoreRight - scoreLeft;
+      return right.detectedAt.localeCompare(left.detectedAt);
+    })
+    .slice(0, 5);
 }

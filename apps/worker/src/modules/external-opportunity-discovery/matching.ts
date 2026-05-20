@@ -12,6 +12,8 @@ import type {
   BusinessLineKeywordConfig,
   ExternalLead,
   ExternalLeadCandidate,
+  ExternalLeadDiscardReason,
+  ExternalLeadDiscardedCandidate,
   ExternalOpportunityType,
   PublicContactFields,
 } from "./types";
@@ -28,6 +30,23 @@ const PUBLIC_OFFICIAL_HOSTS = [
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const MX_PHONE_PATTERN =
   /(?:\+?52[\s.-]?)?(?:\(?\d{2,3}\)?[\s.-]?)?\d{3,4}[\s.-]?\d{4}\b/g;
+const TOKEN_PATTERN =
+  /\b(?:bearer|token|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|signature|sig)\s*[:=]\s*[A-Za-z0-9._~+/=-]{8,}/gi;
+const PERSONAL_NAME_PATTERN =
+  /\b(?:c\.?|lic\.?|licenciado|licenciada|ing\.?|dr\.?|dra\.?|mtro\.?|mtra\.?)\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,3}/g;
+const SENSITIVE_URL_PARAMS = new Set([
+  "token",
+  "access_token",
+  "refresh_token",
+  "api_key",
+  "apikey",
+  "key",
+  "secret",
+  "signature",
+  "sig",
+  "code",
+  "auth",
+]);
 
 const TARGET_LOCATION_TERMS = {
   morelos: MORELOS_TERMS,
@@ -127,6 +146,57 @@ export function isAllowedOfficialSourceUrl(sourceUrl: string): boolean {
     );
   } catch {
     return false;
+  }
+}
+
+export function canonicalizeExternalUrl(sourceUrl: string): string {
+  try {
+    const url = new URL(sourceUrl);
+    url.hash = "";
+    url.username = "";
+    url.password = "";
+
+    const entries = [...url.searchParams.entries()]
+      .filter(([key]) => {
+        const normalizedKey = key.toLowerCase();
+        return (
+          !normalizedKey.startsWith("utm_") &&
+          !SENSITIVE_URL_PARAMS.has(normalizedKey)
+        );
+      })
+      .sort(([left], [right]) => left.localeCompare(right));
+
+    url.search = "";
+    for (const [key, value] of entries) {
+      url.searchParams.append(key, value);
+    }
+
+    return url.toString();
+  } catch {
+    return sourceUrl.trim();
+  }
+}
+
+export function sanitizePublicUrl(sourceUrl: string | null | undefined): string | null {
+  if (!sourceUrl) return null;
+
+  try {
+    const url = new URL(sourceUrl);
+    if (!["http:", "https:"].includes(url.protocol)) return null;
+    if (url.username || url.password) {
+      url.username = "";
+      url.password = "";
+    }
+
+    for (const key of [...url.searchParams.keys()]) {
+      if (SENSITIVE_URL_PARAMS.has(key.toLowerCase())) {
+        url.searchParams.set(key, "[REDACTED]");
+      }
+    }
+
+    return url.toString();
+  } catch {
+    return null;
   }
 }
 
@@ -232,13 +302,27 @@ export function isExternalLeadInAllowedScope(
 export function buildExternalLeadFingerprint(
   lead: Pick<
     ExternalLeadCandidate | ExternalLead,
-    "sourceUrl" | "organizationName" | "title" | "vertical" | "opportunityType"
+    | "sourceUrl"
+    | "organizationName"
+    | "title"
+    | "vertical"
+    | "opportunityType"
+    | "sourcePublishedAt"
   >,
 ): string {
+  const optionalLead = lead as Partial<ExternalLeadCandidate>;
+  const publicationDate = lead.sourcePublishedAt
+    ? lead.sourcePublishedAt.slice(0, 10)
+    : "";
   const payload = [
-    normalizeText(lead.sourceUrl),
+    normalizeText(optionalLead.sourceId ?? lead.sourceUrl),
+    normalizeText(canonicalizeExternalUrl(optionalLead.canonicalUrl ?? lead.sourceUrl)),
     normalizeText(lead.organizationName ?? ""),
     normalizeText(lead.title),
+    normalizeText(optionalLead.dependency ?? ""),
+    publicationDate,
+    optionalLead.amount ?? "",
+    normalizeText(optionalLead.procedureId ?? ""),
     lead.vertical,
     lead.opportunityType,
   ].join("|");
@@ -249,23 +333,81 @@ export function buildExternalLeadFingerprint(
 export function dedupeExternalLeadCandidates(
   candidates: ExternalLeadCandidate[],
 ): ExternalLeadCandidate[] {
+  return dedupeExternalLeadCandidatesWithTelemetry(candidates).deduped;
+}
+
+export function dedupeExternalLeadCandidatesWithTelemetry(
+  candidates: ExternalLeadCandidate[],
+): {
+  deduped: ExternalLeadCandidate[];
+  discardedDuplicateCount: number;
+  discardedDuplicates: ExternalLeadDiscardedCandidate[];
+} {
   const seen = new Set<string>();
   const deduped: ExternalLeadCandidate[] = [];
+  const discardedDuplicates: ExternalLeadDiscardedCandidate[] = [];
 
   for (const candidate of candidates) {
     const fingerprint = buildExternalLeadFingerprint(candidate);
-    if (seen.has(fingerprint)) continue;
+    if (seen.has(fingerprint)) {
+      discardedDuplicates.push(
+        buildDiscardedCandidateSummary({
+          ...candidate,
+          reasons: ["deduplication"],
+        }),
+      );
+      continue;
+    }
     seen.add(fingerprint);
     deduped.push(candidate);
   }
 
-  return deduped;
+  return {
+    deduped,
+    discardedDuplicateCount: discardedDuplicates.length,
+    discardedDuplicates,
+  };
+}
+
+export function buildDiscardedCandidateSummary(
+  candidate: Pick<
+    ExternalLeadCandidate,
+    | "sourceName"
+    | "sourceUrl"
+    | "detectedAt"
+    | "title"
+    | "vertical"
+    | "opportunityType"
+    | "matchedKeywords"
+    | "sourcePublishedAt"
+  > & {
+    reasons: ExternalLeadDiscardReason[];
+    estimatedScore?: number | null;
+    confidence?: ExternalLeadDiscardedCandidate["confidence"];
+  },
+): ExternalLeadDiscardedCandidate {
+  return {
+    sourceName: candidate.sourceName,
+    sourceUrl: sanitizePublicUrl(candidate.sourceUrl) ?? "",
+    publicUrl: sanitizePublicUrl(candidate.sourceUrl),
+    detectedAt: candidate.detectedAt,
+    title: redactSensitivePublicData(candidate.title),
+    vertical: candidate.vertical,
+    opportunityType: candidate.opportunityType,
+    matchedKeywords: candidate.matchedKeywords.slice(0, 8),
+    reasons: candidate.reasons,
+    estimatedScore: candidate.estimatedScore ?? null,
+    confidence: candidate.confidence ?? null,
+    sourcePublishedAt: candidate.sourcePublishedAt,
+  };
 }
 
 export function redactSensitivePublicData(text: string): string {
   return text
     .replace(EMAIL_PATTERN, "[REDACTED_EMAIL]")
-    .replace(MX_PHONE_PATTERN, "[REDACTED_PHONE]");
+    .replace(MX_PHONE_PATTERN, "[REDACTED_PHONE]")
+    .replace(TOKEN_PATTERN, "[REDACTED_TOKEN]")
+    .replace(PERSONAL_NAME_PATTERN, "[REDACTED_PERSON]");
 }
 
 export function sanitizePublicContact(
