@@ -1,6 +1,6 @@
 # External Leads OSINT - Activacion final controlada
 
-Fecha: 2026-05-20T23:20:47.502Z
+Fecha: 2026-05-20T23:45:28.878Z
 
 ## Resultado del dry-run
 
@@ -124,11 +124,11 @@ Fecha: 2026-05-20T23:20:47.502Z
 
 ## Top descartados sanitizados
 
-- Continuar leyendo | ISSSTE sitio oficial | score 48 | score | https://www.gob.mx/issste/prensa/informa-director-general-del-issste-marti-batres-cuatro-obras-concluidas-y-16-en-construccion-en-todo-el-pais?idiom=es
-- Continuar leyendo | IMSS sitio oficial | score 32 | score | https://www.gob.mx/imss/prensa/imss-trabaja-en-19-frentes-de-obra-hospitalaria-para-ampliar-su-infraestructura-en-el-pais-zoe-robledo?idiom=es
-- Continuar leyendo | ISSSTE sitio oficial | score 23 | keyword | https://www.gob.mx/issste/prensa/atiende-hr-presidente-benito-juarez-del-issste-en-oaxaca-a-13-pacientes-en-primera-jornada-de-urologia-de-2026?idiom=es
-- Continuar leyendo | ISSSTE sitio oficial | score 23 | keyword | https://www.gob.mx/issste/prensa/atiende-hr-presidente-benito-juarez-del-issste-en-oaxaca-a-13-pacientes-en-primera-jornada-de-urologia-de-2026?idiom=es
-- Continuar leyendo | ISSSTE sitio oficial | score 23 | keyword | https://www.gob.mx/issste/prensa/atiende-hr-presidente-benito-juarez-del-issste-en-oaxaca-a-13-pacientes-en-primera-jornada-de-urologia-de-2026?idiom=es
+- Informa director general del ISSSTE, Martí Batres, cuatro obras concluidas y 16 en construcción en todo el país | ISSSTE sitio oficial | score 48 | score | https://www.gob.mx/issste/prensa/informa-director-general-del-issste-marti-batres-cuatro-obras-concluidas-y-16-en-construccion-en-todo-el-pais?idiom=es
+- IMSS trabaja en 19 frentes de obra hospitalaria para ampliar su infraestructura en el país: Zoé Robledo | IMSS sitio oficial | score 32 | score | https://www.gob.mx/imss/prensa/imss-trabaja-en-19-frentes-de-obra-hospitalaria-para-ampliar-su-infraestructura-en-el-pais-zoe-robledo?idiom=es
+- Atiende HR “Presidente Benito Juárez” del ISSSTE en Oaxaca a 13 pacientes en primera jornada de urología de 2026 | ISSSTE sitio oficial | score 23 | keyword | https://www.gob.mx/issste/prensa/atiende-hr-presidente-benito-juarez-del-issste-en-oaxaca-a-13-pacientes-en-primera-jornada-de-urologia-de-2026?idiom=es
+- Atiende HR “Presidente Benito Juárez” del ISSSTE en Oaxaca a 13 pacientes en primera jornada de urología de 2026 | ISSSTE sitio oficial | score 23 | keyword | https://www.gob.mx/issste/prensa/atiende-hr-presidente-benito-juarez-del-issste-en-oaxaca-a-13-pacientes-en-primera-jornada-de-urologia-de-2026?idiom=es
+- Atiende HR “Presidente Benito Juárez” del ISSSTE en Oaxaca a 13 pacientes en primera jornada de urología de 2026 | ISSSTE sitio oficial | score 23 | keyword | https://www.gob.mx/issste/prensa/atiende-hr-presidente-benito-juarez-del-issste-en-oaxaca-a-13-pacientes-en-primera-jornada-de-urologia-de-2026?idiom=es
 
 ## Recomendacion final
 

@@ -178,4 +178,37 @@ describe("commercial opportunity matching", () => {
     expect(result.territoryMatched).toBe("Nacional / posible");
     expect(result.score).toBeLessThan(80);
   });
+
+  it("NAG: descarta servicio de mantenimiento al parque vehicular del INALI (mantenimiento vehicular)", () => {
+    const result = match(
+      "SERVICIO DE MANTENIMIENTO AL PARQUE VEHICULAR DEL INALI",
+      { state: "CDMX" },
+    );
+    const nagMatch = result.topDiscardedProfiles.find(p => p.profileId === "grupo_constructor_nag_construction")
+      || result.matchedProfiles.find(p => p.profileId === "grupo_constructor_nag_construction");
+    expect(nagMatch).toBeDefined();
+    expect(nagMatch?.discardReason).toBe("negative_keyword");
+  });
+
+  it("HM HIGHMIL: descarta servicio de mantenimiento al parque vehicular del INALI por no tener aceites/lubricantes", () => {
+    const result = match(
+      "SERVICIO DE MANTENIMIENTO AL PARQUE VEHICULAR DEL INALI",
+      { state: "CDMX" },
+    );
+    const hmMatch = result.topDiscardedProfiles.find(p => p.profileId === "hm_highmil_lubricants")
+      || result.matchedProfiles.find(p => p.profileId === "hm_highmil_lubricants");
+    expect(hmMatch).toBeDefined();
+    expect(hmMatch?.discardReason).toBe("no_keyword");
+    expect(hmMatch?.score).toBeLessThanOrEqual(25);
+  });
+
+  it("HM HIGHMIL: coincide con adquisición de aceites lubricantes y anticongelantes para parque vehicular", () => {
+    const result = match(
+      "Adquisición de aceites lubricantes y anticongelantes para parque vehicular",
+      { state: "CDMX" },
+    );
+    const hmMatch = result.matchedProfiles.find(p => p.profileId === "hm_highmil_lubricants");
+    expect(hmMatch).toBeDefined();
+    expect(hmMatch?.score).toBeGreaterThanOrEqual(60);
+  });
 });

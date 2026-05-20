@@ -1,7 +1,7 @@
 import { createModuleLogger } from "../../core/logger";
 import { nowISO } from "../../core/time";
 import { buildDiscardedCandidateSummary } from "./matching";
-import { scoredLeadToCandidate } from "./source-adapters";
+import { scoredLeadToCandidate, isUnwantedTitle } from "./source-adapters";
 import type {
   ExternalLeadCandidate,
   ExternalLeadDiscardReason,
@@ -150,6 +150,7 @@ function inspectScoredLead(
   const reasons: ExternalLeadDiscardReason[] = [];
   if (!scored.sourceUrl.trim()) reasons.push("missing_source_url");
   if (!scored.evidenceText.trim()) reasons.push("missing_evidence", "evidence");
+  if (isUnwantedTitle(scored.title)) reasons.push("missing_evidence");
   if (scored.matchedKeywords.length === 0) reasons.push("keyword");
   if (isOlderThanLookback(scored.sourcePublishedAt, options.lookbackDays)) {
     reasons.push("date");

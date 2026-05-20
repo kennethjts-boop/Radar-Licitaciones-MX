@@ -4,7 +4,7 @@ import {
   type CommercialProfile,
 } from "../commercial-profiles";
 import { detectCommercialTerritory } from "../commercial-profiles/territories";
-import { findMatchingTerms, normalizeText } from "../../core/text";
+import { findMatchingTerms, normalizeText, textContainsTerm } from "../../core/text";
 import type {
   CommercialDiscardReason,
   CommercialMatchOptions,
@@ -236,6 +236,53 @@ function buildProfileMatch(
   if (territory.isNationalPossible) {
     score -= 8;
     reasons.push("penalizacion: territorio nacional sin sede clara");
+  }
+
+  // Programmatic custom rules for GRUPO CONSTRUCTOR NAG (preventing vehicular maintenance matches)
+  if (profile.id === "grupo_constructor_nag_construction") {
+    const textNorm = normalizeText(text);
+    const hasMantenimiento = textContainsTerm(textNorm, "mantenimiento");
+    const hasVehicularContext = [
+      "vehicular",
+      "vehiculo",
+      "vehiculos",
+      "parque vehicular",
+      "flotilla",
+      "automotriz",
+      "unidades",
+    ].some((term) => textContainsTerm(textNorm, term));
+
+    if (hasMantenimiento && hasVehicularContext) {
+      if (!negativeMatches.includes("mantenimiento vehicular")) {
+        negativeMatches.push("mantenimiento vehicular");
+      }
+    }
+  }
+
+  // Programmatic custom rules for HM HIGHMIL (requiring strong lubricant/fluid keywords to match)
+  if (profile.id === "hm_highmil_lubricants") {
+    const strongHMKeywords = [
+      "aceite",
+      "aceites",
+      "lubricante",
+      "lubricantes",
+      "grasa",
+      "grasas",
+      "aditivo",
+      "aditivos",
+      "anticongelante",
+      "anticongelantes",
+      "refrigerante",
+      "refrigerantes",
+      "liquido refrigerante",
+      "líquido refrigerante",
+    ];
+    const hasStrongHMKeyword = primary.some((p) =>
+      strongHMKeywords.some((s) => normalizeText(p).includes(normalizeText(s))),
+    );
+    if (!hasStrongHMKeyword) {
+      primary.splice(0, primary.length);
+    }
   }
 
   let discardReason: CommercialDiscardReason | null = null;

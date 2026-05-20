@@ -77,7 +77,123 @@ function sourceUrlFromHref(href: string, baseUrl: string, hostSuffix?: string): 
   }
 }
 
-function parseHtmlLinks(
+export function isUnwantedTitle(title: string): boolean {
+  const norm = title
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/g, "")
+    .trim();
+  const unwanted = [
+    "continuarleyendo",
+    "leermas",
+    "vermas",
+    "masinformacion",
+    "seguirleyendo",
+  ];
+  return unwanted.includes(norm);
+}
+
+function extractBetterTitle(
+  $: any,
+  element: any,
+  container: any,
+  href: string,
+): string | null {
+  // 1. Try other links in the container with the same href but valid text
+  let bestLinkText: string | null = null;
+  container.find("a[href]").each((_: any, el: any): any => {
+    const elHref = $(el).attr("href") ?? "";
+    if (elHref && elHref.includes(href)) {
+      const text = ($(el).text() || "").trim();
+      if (text && !isUnwantedTitle(text) && text.length >= 4) {
+        bestLinkText = text;
+        return false; // break
+      }
+    }
+    return true;
+  });
+  if (bestLinkText) return bestLinkText;
+
+  // 2. Try h1, h2, h3, h4, h5, h6 in the card container
+  for (const h of ["h1", "h2", "h3", "h4", "h5", "h6", ".title", ".heading", ".card-title"]) {
+    const heading = container.find(h).first();
+    if (heading.length > 0) {
+      const text = heading.text().trim();
+      if (text && !isUnwantedTitle(text) && text.length >= 4) {
+        return text;
+      }
+    }
+  }
+
+  // 3. Try to get title or aria-label of the element itself
+  const ariaLabel = $(element).attr("aria-label");
+  if (ariaLabel && !isUnwantedTitle(ariaLabel) && ariaLabel.trim().length >= 4) {
+    return ariaLabel.trim();
+  }
+
+  const titleAttr = $(element).attr("title");
+  if (titleAttr && !isUnwantedTitle(titleAttr) && titleAttr.trim().length >= 4) {
+    return titleAttr.trim();
+  }
+
+  // 4. Try og:title in meta tags of the page
+  const ogTitle = $('meta[property="og:title"]').attr("content");
+  if (ogTitle && !isUnwantedTitle(ogTitle) && ogTitle.trim().length >= 4) {
+    return ogTitle.trim();
+  }
+
+  // 5. Try twitter:title in meta tags of the page
+  const twitterTitle = $('meta[name="twitter:title"]').attr("content");
+  if (twitterTitle && !isUnwantedTitle(twitterTitle) && twitterTitle.trim().length >= 4) {
+    return twitterTitle.trim();
+  }
+
+  // 6. Try h1 on the page (if it's a detail page)
+  const mainH1 = $("h1").first().text().trim();
+  if (mainH1 && !isUnwantedTitle(mainH1) && mainH1.length >= 4) {
+    return mainH1;
+  }
+
+  // 7. Try title of the page
+  const pageTitle = $("title").first().text().trim();
+  if (pageTitle && !isUnwantedTitle(pageTitle) && pageTitle.length >= 4) {
+    return pageTitle;
+  }
+
+  // 8. Try JSON-LD headline
+  let jsonLdHeadline: string | null = null;
+  $('script[type="application/ld+json"]').each((_: any, el: any): any => {
+    try {
+      const data = JSON.parse($(el).text() || "{}");
+      const headline = data.headline || data.name;
+      if (headline && typeof headline === "string" && !isUnwantedTitle(headline) && headline.trim().length >= 4) {
+        jsonLdHeadline = headline.trim();
+        return false; // break
+      }
+    } catch {
+      // ignore JSON parse error
+    }
+    return true;
+  });
+  if (jsonLdHeadline) return jsonLdHeadline;
+
+  // 9. Try main text of the card
+  const containerText = container.text().trim();
+  if (containerText) {
+    const lines = containerText
+      .split("\n")
+      .map((l: string) => l.trim())
+      .filter((l: string) => l && !isUnwantedTitle(l) && l.length >= 4);
+    if (lines.length > 0) {
+      return lines[0];
+    }
+  }
+
+  return null;
+}
+
+export function parseHtmlLinks(
   html: string,
   baseUrl: string,
   hostSuffix?: string,
@@ -92,12 +208,20 @@ function parseHtmlLinks(
     const sourceUrl = sourceUrlFromHref(href, baseUrl, hostSuffix);
     if (!sourceUrl || seen.has(sourceUrl) || !urlPredicate(sourceUrl)) return;
 
-    const title = compactText($(element).text());
-    if (!title || title.length < 4) return;
-
+    let title = compactText($(element).text());
     const container = $(element).closest(
       ".dataset-item, .module-content, .media, article, li, div, tr",
     );
+
+    if (isUnwantedTitle(title)) {
+      const better = extractBetterTitle($, element, container, href);
+      if (better) {
+        title = compactText(better);
+      }
+    }
+
+    if (!title || title.length < 4 || isUnwantedTitle(title)) return;
+
     const snippet = compactText(container.text());
     seen.add(sourceUrl);
     items.push({
@@ -270,9 +394,13 @@ function itemEvidence(item: Pick<HtmlLinkItem, "title" | "snippet">): string {
   return truncateForTelegram([item.title ?? "", item.snippet ?? ""].join(" "), 900);
 }
 
-function normalizeRawItem(raw: RawExternalItem, profile: CommercialProfile): NormalizedExternalLead | null {
+export function normalizeRawItem(raw: RawExternalItem, profile: CommercialProfile): NormalizedExternalLead | null {
   const sourceUrl = sanitizePublicUrl(raw.sourceUrl);
   if (!sourceUrl) return null;
+
+  if (raw.title && isUnwantedTitle(raw.title)) {
+    return null;
+  }
 
   const evidence = itemEvidence({
     title: raw.title ?? profile.displayName,
