@@ -246,10 +246,19 @@ function buildProfileMatch(
       "vehicular",
       "vehiculo",
       "vehiculos",
+      "vehículo",
+      "vehículos",
       "parque vehicular",
       "flotilla",
       "automotriz",
+      "mecanico",
+      "mecánico",
+      "mecanicos",
+      "mecánicos",
+      "refacciones",
       "unidades",
+      "taller",
+      "talleres",
     ].some((term) => textContainsTerm(textNorm, term));
 
     if (hasMantenimiento && hasVehicularContext) {
@@ -277,11 +286,96 @@ function buildProfileMatch(
       "liquido refrigerante",
       "líquido refrigerante",
     ];
-    const hasStrongHMKeyword = primary.some((p) =>
-      strongHMKeywords.some((s) => normalizeText(p).includes(normalizeText(s))),
-    );
+    const textNorm = normalizeText(text);
+    const hasStrongHMKeyword = strongHMKeywords.some((term) => textContainsTerm(textNorm, term));
     if (!hasStrongHMKeyword) {
       primary.splice(0, primary.length);
+    }
+  }
+
+  // Programmatic custom rules for PRIMASA & COFORMEX (preventing medical/hardware only)
+  if (profile.id === "primasa_printing" || profile.id === "coformex_printing") {
+    const textNorm = normalizeText(text);
+    
+    // Check medical printing context
+    const hasMedicalContext = [
+      "diagnostica",
+      "diagnóstica",
+      "medica",
+      "médica",
+      "imagenologia",
+      "imagenología",
+      "tomografia",
+      "tomografía",
+      "rayos x",
+    ].some((term) => textContainsTerm(textNorm, term));
+    
+    if (hasMedicalContext) {
+      if (!negativeMatches.includes("impresión médica")) {
+        negativeMatches.push("impresión médica");
+      }
+    }
+
+    // Check printer/toner/cartridge only
+    const hasOnlyHardwareOrConsumibles = [
+      "impresora",
+      "impresoras",
+      "toner",
+      "tóner",
+      "cartucho",
+      "cartuchos",
+      "consumibles",
+    ].some((term) => textContainsTerm(textNorm, term));
+
+    const hasServiceOrProducts = [
+      "servicio de impresion",
+      "servicio de impresión",
+      "servicios de impresion",
+      "servicios de impresión",
+      "material impreso",
+      "formatos impresos",
+      "folletos",
+      "tripticos",
+      "trípticos",
+      "carteles",
+      "lonas",
+      "gafetes",
+      "credenciales",
+      "papeleria",
+      "papelería",
+      "papeleria institucional",
+      "papelería institucional",
+      "material grafico",
+      "material gráfico",
+    ].some((term) => textContainsTerm(textNorm, term));
+
+    if (hasOnlyHardwareOrConsumibles && !hasServiceOrProducts) {
+      if (!negativeMatches.includes("impresora o consumibles solamente")) {
+        negativeMatches.push("impresora o consumibles solamente");
+      }
+    }
+  }
+
+  // Programmatic custom rules for UNIFORCE (preventing cybersecurity/IT)
+  if (profile.id === "uniforce_security_risk") {
+    const textNorm = normalizeText(text);
+    const hasItSecurity = [
+      "seguridad informatica",
+      "seguridad informática",
+      "ciberseguridad",
+      "firewall",
+      "antivirus",
+      "software de seguridad",
+      "proteccion de datos",
+      "protección de datos",
+      "seguridad de la informacion",
+      "seguridad de la información",
+    ].some((term) => textContainsTerm(textNorm, term));
+
+    if (hasItSecurity) {
+      if (!negativeMatches.includes("seguridad informatica")) {
+        negativeMatches.push("seguridad informatica");
+      }
     }
   }
 

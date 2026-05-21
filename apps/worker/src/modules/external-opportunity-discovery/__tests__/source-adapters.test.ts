@@ -120,5 +120,85 @@ describe("gob.mx / External OSINT Parser and Source Adapters", () => {
       expect(result).not.toBeNull();
       expect(result?.title).toBe("Licitación para Mantenimiento de Edificio");
     });
+
+    it("should classify source as press_release if URL contains /prensa/", () => {
+      const raw: RawExternalItem = {
+        sourceId: "test-source",
+        sourceName: "gob.mx test",
+        sourceType: "official_website",
+        sourceUrl: "https://www.morelos.gob.mx/prensa/nota-informativa-123",
+        title: "Mantenimiento general en oficinas del Estado",
+        snippet: "Se realizaron trabajos de pintura en oficinas",
+        fetchedAt: new Date().toISOString(),
+        publishedAt: null,
+        raw: {},
+      };
+
+      const result = normalizeRawItem(raw, nagProfile);
+      expect(result).not.toBeNull();
+      expect(result?.sourceType).toBe("press_release");
+    });
+
+    it("should classify source as press_release if text contains press release signals", () => {
+      const raw: RawExternalItem = {
+        sourceId: "test-source",
+        sourceName: "gob.mx test",
+        sourceType: "official_website",
+        sourceUrl: "https://www.morelos.gob.mx/noticias/123",
+        title: "Comunicado oficial sobre mantenimiento general",
+        snippet: "Se realizaron trabajos de pintura",
+        fetchedAt: new Date().toISOString(),
+        publishedAt: null,
+        raw: {},
+      };
+
+      const result = normalizeRawItem(raw, nagProfile);
+      expect(result).not.toBeNull();
+      expect(result?.sourceType).toBe("press_release");
+    });
+  });
+
+  describe("adjustPressReleaseScore", () => {
+    const { adjustPressReleaseScore } = require("../source-adapters");
+
+    it("should cap score at 35 for press release without strong tender signals", () => {
+      const adjusted = adjustPressReleaseScore(
+        80,
+        ["some_reason"],
+        "Nota de prensa sobre mantenimiento",
+        "Se pinto la barda de la escuela",
+        "press_release",
+      );
+
+      expect(adjusted.score).toBeLessThanOrEqual(35);
+      expect(adjusted.reasons).toContain("press_release_weak_signal");
+    });
+
+    it("should cap score at 65 for press release with strong tender signals", () => {
+      const adjusted = adjustPressReleaseScore(
+        80,
+        ["some_reason"],
+        "Comunicado sobre licitación de obra pública",
+        "Se abre la convocatoria para la licitación del mantenimiento",
+        "press_release",
+      );
+
+      expect(adjusted.score).toBeLessThanOrEqual(65);
+      expect(adjusted.reasons).toContain("official_procurement_signal");
+      expect(adjusted.reasons).toContain("public_tender_evidence");
+    });
+
+    it("should not modify score if sourceType is not press_release", () => {
+      const adjusted = adjustPressReleaseScore(
+        80,
+        ["some_reason"],
+        "Licitación de obra pública",
+        "Se abre la convocatoria",
+        "official_website",
+      );
+
+      expect(adjusted.score).toBe(80);
+      expect(adjusted.reasons).not.toContain("press_release_weak_signal");
+    });
   });
 });

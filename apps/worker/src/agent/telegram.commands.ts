@@ -5,6 +5,7 @@
  * /prueba        → Estado real del sistema
  * /buscar        → Búsqueda en expedientes
  * /debug_resumen → Telemetría detallada Fase 2A
+ * /noticias_comerciales → Señales y noticias comerciales
  */
 import TelegramBot from "node-telegram-bot-api";
 import { getConfig } from "../config/env";
@@ -686,6 +687,128 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     }
   });
 
+  // ── /noticias_comerciales ──────────────────────────────────────────────────
+  bot.onText(/\/noticias_comerciales(?:\s+(\d+))?/, async (msg, match) => {
+    const chatIdPartial = String(msg.chat.id).slice(-4);
+    log.info({ command: msg.text, chatIdPartial, from: msg.from?.username }, "command_received");
+
+    if (String(msg.chat.id) !== chatId) return;
+
+    let limit = 5;
+    if (match?.[1]) {
+      const parsed = parseInt(match[1], 10);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        limit = Math.min(parsed, 10);
+      }
+    }
+
+    try {
+      const { getSupabaseClient } = await import("../storage/client");
+      const { isUnwantedTitle } = await import("../modules/external-opportunity-discovery/source-adapters");
+      const { redactSensitivePublicData } = await import("../modules/external-opportunity-discovery/matching");
+
+      const db = getSupabaseClient();
+      const { data: results, error } = await db
+        .from("external_leads")
+        .select("*")
+        .order("estimated_interest_score", { ascending: false })
+        .limit(50);
+
+      if (error) throw error;
+
+      if (!results || results.length === 0) {
+        await bot.sendMessage(
+          chatId,
+          "No hay noticias comerciales útiles por ahora. External OSINT está activo y revisando fuentes.",
+          { parse_mode: "HTML" }
+        );
+        return;
+      }
+
+      const validLeads = results
+        .map((r) => {
+          if (!r.title || isUnwantedTitle(r.title)) return null;
+
+          const cleanTitle = redactSensitivePublicData(r.title);
+          const territory = r.state || "Nacional / posible";
+
+          const isPressRelease = r.raw_json?.sourceType === "press_release";
+          const score = r.estimated_interest_score ?? 0;
+          let classification = "posible oportunidad";
+          if (isPressRelease) {
+            classification = score <= 35 ? "noticia débil" : "señal comercial";
+          } else {
+            classification = score >= 75 ? "convocatoria/procedimiento" : "posible oportunidad";
+          }
+
+          const companyName = r.raw_json?.referenceCompany ?? "General";
+          const profileName = r.raw_json?.commercialProfileId ?? "General";
+
+          const reasonsList = Array.isArray(r.raw_json?.scoreReasons)
+            ? r.raw_json.scoreReasons
+            : (r.score_reasons ? (Array.isArray(r.score_reasons) ? r.score_reasons : [r.score_reasons]) : []);
+
+          return {
+            title: cleanTitle,
+            source: r.source_name ?? "OSINT",
+            profile: `${companyName} (${profileName})`,
+            territory,
+            score,
+            reasons: reasonsList.join(", ") || "Fuerza de coincidencia básica",
+            url: r.source_url,
+            classification,
+            isOfficial: r.is_official_source === true,
+            publishedAt: r.source_published_at || r.detected_at,
+          };
+        })
+        .filter((item): item is NonNullable<typeof item> => item !== null);
+
+      const targetTerritories = ["morelos", "jalisco", "guadalajara", "cdmx", "ciudad de mexico", "mexico", "edomex"];
+      validLeads.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        if (b.isOfficial !== a.isOfficial) return (b.isOfficial ? 1 : 0) - (a.isOfficial ? 1 : 0);
+        
+        const aTarget = targetTerritories.some(t => a.territory.toLowerCase().includes(t));
+        const bTarget = targetTerritories.some(t => b.territory.toLowerCase().includes(t));
+        if (aTarget !== bTarget) return (bTarget ? 1 : 0) - (aTarget ? 1 : 0);
+
+        return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime();
+      });
+
+      const slice = validLeads.slice(0, limit);
+      if (slice.length === 0) {
+        await bot.sendMessage(
+          chatId,
+          "No hay noticias comerciales útiles por ahora. External OSINT está activo y revisando fuentes.",
+          { parse_mode: "HTML" }
+        );
+        return;
+      }
+
+      const lines = [`📰 <b>SEÑALES Y NOTICIAS COMERCIALES RECIENTES (${slice.length})</b>\n`];
+      for (const item of slice) {
+        lines.push(`📋 <b>${escapeHtml(item.title)}</b>`);
+        lines.push(`   🏢 Perfil: ${escapeHtml(item.profile)}`);
+        lines.push(`   📍 Territorio: ${escapeHtml(item.territory)}`);
+        lines.push(`   📊 Score: <b>${item.score}</b> | Razón: <code>${escapeHtml(item.reasons)}</code>`);
+        lines.push(`   🏷 Clasificación: <b>${escapeHtml(item.classification)}</b>`);
+        lines.push(`   🏛 Fuente: ${escapeHtml(item.source)}`);
+        if (item.url) {
+          lines.push(`   🔗 <a href="${escapeHtml(item.url)}">Ver noticia pública</a>`);
+        }
+        lines.push("");
+      }
+
+      await bot.sendMessage(chatId, lines.join("\n"), {
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+      });
+    } catch (err) {
+      log.error({ err }, "❌ Error en /noticias_comerciales");
+      await bot.sendMessage(chatId, "❌ Error al consultar las noticias comerciales.").catch(() => {});
+    }
+  });
+
   log.info("telegram_handlers_registered");
-  log.info("✅ Comandos registrados: /prueba, /estado, /radares, /buscar, /monto, /debug_resumen, /scan, /recuperar, /techo");
+  log.info("✅ Comandos registrados: /prueba, /estado, /radares, /buscar, /monto, /debug_resumen, /scan, /recuperar, /techo, /noticias_comerciales");
 }

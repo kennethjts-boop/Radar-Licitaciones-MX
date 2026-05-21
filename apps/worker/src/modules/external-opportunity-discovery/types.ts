@@ -32,7 +32,8 @@ export type ExternalSourceType =
   | "official_website"
   | "rss"
   | "pdf"
-  | "pnt_sipot";
+  | "pnt_sipot"
+  | "press_release";
 
 export interface ExternalLeadEvidence {
   title: string;

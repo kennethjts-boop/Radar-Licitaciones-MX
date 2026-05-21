@@ -287,7 +287,13 @@ class HealthTracker {
     if (this.lastCycleStatus === "error") degradationReasons.push("último ciclo con error");
     for (const [name, value] of Object.entries(services)) {
       if (value === "degraded") degradationReasons.push(`${name} degradado`);
-      if (value === "unknown") degradationReasons.push(`${name} sin verificación`);
+      if (value === "unknown") {
+        if (name === "playwright") {
+          degradationReasons.push("Playwright pendiente de verificación, próximo ciclo");
+        } else {
+          degradationReasons.push(`${name} sin verificación`);
+        }
+      }
     }
 
     // Overall: down si DB no conectada o schema inválido o telegram caído
@@ -301,7 +307,8 @@ class HealthTracker {
       this.schedulerStatus === "stopped" ||
       this.lastCycleStatus === "error" ||
       Object.values(services).some((s) => s === "degraded") ||
-      Object.values(services).some((s) => s === "unknown");
+      services.database === "unknown" ||
+      services.telegram === "unknown";
 
     const overall: ServiceHealth = criticalDown
       ? "down"

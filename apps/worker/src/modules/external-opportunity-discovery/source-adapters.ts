@@ -394,6 +394,68 @@ function itemEvidence(item: Pick<HtmlLinkItem, "title" | "snippet">): string {
   return truncateForTelegram([item.title ?? "", item.snippet ?? ""].join(" "), 900);
 }
 
+export function isPressReleaseText(text: string): boolean {
+  const norm = text.toLowerCase();
+  const pressReleaseSignals = [
+    "comunicado de prensa",
+    "comunicado oficial",
+    "boletin de prensa",
+    "boletín de prensa",
+    "nota de prensa",
+    "comunicado n",
+    "comunicado num",
+    "comunicado núm",
+    "sala de prensa",
+    "boletin informativo",
+    "boletín informativo",
+  ];
+  return pressReleaseSignals.some((signal) => norm.includes(signal));
+}
+
+export function adjustPressReleaseScore(
+  commercialScore: number,
+  reasons: string[],
+  title: string,
+  text: string,
+  sourceType: string,
+): { score: number; reasons: string[] } {
+  if (sourceType !== "press_release") {
+    return { score: commercialScore, reasons };
+  }
+  const textNorm = (title + " " + text).toLowerCase();
+  const strongTenderSignals = [
+    "licitacion",
+    "licitación",
+    "convocatoria",
+    "contratacion",
+    "contratación",
+    "adquisicion",
+    "adquisición",
+    "adjudicacion",
+    "adjudicación",
+    "bases",
+    "fallo",
+    "proveedor",
+    "invitacion",
+    "invitación",
+    "concurso",
+    "servicio requerido",
+    "procedimiento",
+  ];
+  const hasStrongSignal = strongTenderSignals.some((signal) => textNorm.includes(signal));
+  const newReasons = [...reasons];
+  let finalScore = commercialScore;
+  if (hasStrongSignal) {
+    finalScore = Math.min(finalScore, 65);
+    if (!newReasons.includes("official_procurement_signal")) newReasons.push("official_procurement_signal");
+    if (!newReasons.includes("public_tender_evidence")) newReasons.push("public_tender_evidence");
+  } else {
+    finalScore = Math.min(finalScore, 35);
+    if (!newReasons.includes("press_release_weak_signal")) newReasons.push("press_release_weak_signal");
+  }
+  return { score: finalScore, reasons: newReasons };
+}
+
 export function normalizeRawItem(raw: RawExternalItem, profile: CommercialProfile): NormalizedExternalLead | null {
   const sourceUrl = sanitizePublicUrl(raw.sourceUrl);
   if (!sourceUrl) return null;
@@ -418,10 +480,14 @@ export function normalizeRawItem(raw: RawExternalItem, profile: CommercialProfil
     dependencyFromEvidence(evidence, raw.raw.dependency as string | null) ??
     raw.sourceName;
 
+  const isPress = (sourceUrl && sourceUrl.includes("/prensa/")) ||
+    isPressReleaseText(title + " " + evidence);
+  const finalSourceType = isPress ? "press_release" : raw.sourceType;
+
   return {
     sourceId: raw.sourceId,
     sourceName: raw.sourceName,
-    sourceType: raw.sourceType,
+    sourceType: finalSourceType,
     sourceUrl,
     canonicalUrl: canonicalizeExternalUrl(sourceUrl),
     detectedAt: nowISO(),
@@ -449,7 +515,7 @@ export function normalizeRawItem(raw: RawExternalItem, profile: CommercialProfil
     raw: {
       ...raw.raw,
       fetchedAt: raw.fetchedAt,
-      sourceType: raw.sourceType,
+      sourceType: finalSourceType,
       referenceCompany: profile.companyName,
       commercialProfileId: profile.id,
     },
@@ -583,14 +649,21 @@ class HtmlSearchAdapter implements SourceAdapter {
       },
     );
     const profileMatch = commercial.matchedProfiles[0] ?? commercial.topDiscardedProfiles[0];
+    const adjusted = adjustPressReleaseScore(
+      commercial.score,
+      commercial.scoreReasons,
+      sanitized.title,
+      sanitized.evidenceText,
+      sanitized.sourceType,
+    );
     const scored: ScoredExternalLead = {
       ...sanitized,
-      estimatedInterestScore: commercial.score,
-      confidence: commercial.score >= 75 ? "HIGH" : commercial.score >= 45 ? "MEDIUM" : "LOW",
-      nextAction: commercial.shouldAlert
+      estimatedInterestScore: adjusted.score,
+      confidence: adjusted.score >= 75 ? "HIGH" : adjusted.score >= 45 ? "MEDIUM" : "LOW",
+      nextAction: (adjusted.score >= 45 && commercial.shouldAlert)
         ? "revisar oportunidad publica y validar convocatoria"
         : "monitorear candidato comercial",
-      scoreReasons: commercial.scoreReasons,
+      scoreReasons: adjusted.reasons,
       scoreBreakdown: {
         keywordScore: profileMatch?.keywordMatches.primary.length ? 30 : 0,
         freshnessScore: sanitized.sourcePublishedAt ? 8 : 2,
@@ -599,7 +672,7 @@ class HtmlSearchAdapter implements SourceAdapter {
         opportunityScore: profileMatch?.keywordMatches.strongContext.length ? 16 : 5,
         evidenceScore: sanitized.sourceUrl ? 10 : 0,
         urgencyScore: 0,
-        finalScore: commercial.score,
+        finalScore: adjusted.score,
       },
       fingerprintHash: "",
     };
@@ -677,12 +750,19 @@ class DisabledScaffoldAdapter implements SourceAdapter {
       },
       { profiles: [this.profile], minScore: options.minScore, requireTerritory: true },
     );
+    const adjusted = adjustPressReleaseScore(
+      commercial.score,
+      commercial.scoreReasons,
+      sanitized.title,
+      sanitized.evidenceText,
+      sanitized.sourceType,
+    );
     const scored: ScoredExternalLead = {
       ...sanitized,
-      estimatedInterestScore: commercial.score,
-      confidence: commercial.score >= 75 ? "HIGH" : commercial.score >= 45 ? "MEDIUM" : "LOW",
+      estimatedInterestScore: adjusted.score,
+      confidence: adjusted.score >= 75 ? "HIGH" : adjusted.score >= 45 ? "MEDIUM" : "LOW",
       nextAction: "monitorear candidato comercial",
-      scoreReasons: commercial.scoreReasons,
+      scoreReasons: adjusted.reasons,
       scoreBreakdown: {
         keywordScore: 0,
         freshnessScore: sanitized.sourcePublishedAt ? 8 : 2,
@@ -691,7 +771,7 @@ class DisabledScaffoldAdapter implements SourceAdapter {
         opportunityScore: 0,
         evidenceScore: sanitized.sourceUrl ? 10 : 0,
         urgencyScore: 0,
-        finalScore: commercial.score,
+        finalScore: adjusted.score,
       },
       fingerprintHash: "",
     };
@@ -801,14 +881,21 @@ class RssSourceAdapter implements SourceAdapter {
       },
       { profiles: [this.profile], minScore: options.minScore, requireTerritory: true },
     );
+    const adjusted = adjustPressReleaseScore(
+      commercial.score,
+      commercial.scoreReasons,
+      sanitized.title,
+      sanitized.evidenceText,
+      sanitized.sourceType,
+    );
     const scored: ScoredExternalLead = {
       ...sanitized,
-      estimatedInterestScore: commercial.score,
-      confidence: commercial.score >= 75 ? "HIGH" : commercial.score >= 45 ? "MEDIUM" : "LOW",
-      nextAction: commercial.shouldAlert
+      estimatedInterestScore: adjusted.score,
+      confidence: adjusted.score >= 75 ? "HIGH" : adjusted.score >= 45 ? "MEDIUM" : "LOW",
+      nextAction: (adjusted.score >= 45 && commercial.shouldAlert)
         ? "revisar oportunidad publica y validar convocatoria"
         : "monitorear candidato comercial",
-      scoreReasons: commercial.scoreReasons,
+      scoreReasons: adjusted.reasons,
       scoreBreakdown: {
         keywordScore: commercial.keywordMatches.length ? 30 : 0,
         freshnessScore: sanitized.sourcePublishedAt ? 8 : 2,
@@ -817,7 +904,7 @@ class RssSourceAdapter implements SourceAdapter {
         opportunityScore: commercial.scoreReasons.some((reason) => reason.includes("contratacion")) ? 16 : 5,
         evidenceScore: sanitized.sourceUrl ? 10 : 0,
         urgencyScore: 0,
-        finalScore: commercial.score,
+        finalScore: adjusted.score,
       },
       fingerprintHash: "",
     };
