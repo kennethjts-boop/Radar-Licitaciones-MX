@@ -8,6 +8,7 @@ import { createModuleLogger } from "../../core/logger";
 import { getConfig } from "../../config/env";
 
 const log = createModuleLogger("browser-manager");
+const BROWSER_LAUNCH_TIMEOUT_MS = 60_000;
 const DEFAULT_BROWSER_OPERATION_TIMEOUT_MS = 5 * 60 * 1000;
 
 // Chrome 124 real — sincronizado con releases.chromium.org/2024
@@ -32,6 +33,7 @@ export class BrowserManager {
 
     this.browser = await chromium.launch({
       headless: config.PLAYWRIGHT_HEADLESS,
+      timeout: BROWSER_LAUNCH_TIMEOUT_MS,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -161,44 +163,46 @@ export class BrowserManager {
     options: { timeoutMs?: number } = {},
   ): Promise<T> {
     const manager = new BrowserManager();
-    await manager.launch();
     let forcedClosePromise: Promise<void> | null = null;
-    try {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_BROWSER_OPERATION_TIMEOUT_MS;
+    let timeoutHandle: NodeJS.Timeout | null = null;
+
+    const timeoutPromise = timeoutMs > 0
+      ? new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            log.error(
+              { timeoutMs },
+              "⏱ Browser operation timeout — cerrando browser para abortar operaciones pendientes",
+            );
+            forcedClosePromise = manager.close().catch((err) => {
+              log.error({ err }, "❌ Error cerrando browser tras timeout");
+            });
+            reject(
+              new Error(
+                `Browser operation timed out after ${timeoutMs}ms`,
+              ),
+            );
+          }, timeoutMs);
+        })
+      : null;
+
+    const runBrowserOperation = async (): Promise<T> => {
+      await manager.launch();
       const context = await manager.createContext();
       const page = await context.newPage();
-      const operationPromise = operation(page, context);
-      const timeoutMs = options.timeoutMs ?? DEFAULT_BROWSER_OPERATION_TIMEOUT_MS;
+      return operation(page, context);
+    };
 
+    try {
       if (timeoutMs <= 0) {
-        return await operationPromise;
+        return await runBrowserOperation();
       }
 
-      let timeoutHandle: NodeJS.Timeout | null = null;
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(() => {
-          log.error(
-            { timeoutMs },
-            "⏱ Browser operation timeout — cerrando browser para abortar operaciones pendientes",
-          );
-          forcedClosePromise = manager.close().catch((err) => {
-            log.error({ err }, "❌ Error cerrando browser tras timeout");
-          });
-          reject(
-            new Error(
-              `Browser operation timed out after ${timeoutMs}ms`,
-            ),
-          );
-        }, timeoutMs);
-      });
-
-      try {
-        return await Promise.race([operationPromise, timeoutPromise]);
-      } finally {
-        if (timeoutHandle) {
-          clearTimeout(timeoutHandle);
-        }
-      }
+      return await Promise.race([runBrowserOperation(), timeoutPromise!]);
     } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
       if (forcedClosePromise) {
         await forcedClosePromise;
       } else {
