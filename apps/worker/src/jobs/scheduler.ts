@@ -19,7 +19,7 @@ import cron from "node-cron";
 import { createModuleLogger } from "../core/logger";
 import { getConfig } from "../config/env";
 import { recordSchedulerStarted } from "../core/system-state";
-import { runCollectJob, runRecheckJob } from "./collect.job";
+import { runCollectJob, runRecheckJob, type CollectJobResult } from "./collect.job";
 import { runDailySummaryJob } from "./daily-summary.job";
 import { comprasMxCB } from "../core/circuit-breaker";
 import { sendTelegramMessage } from "../alerts/telegram.alerts";
@@ -32,6 +32,50 @@ const JITTER_MS = 3 * 60 * 1000; // ±3 min
 
 function jitter(): number {
   return (Math.random() * 2 - 1) * JITTER_MS;
+}
+
+const CRITICAL_COLLECT_FAILURE_PATTERNS = [
+  /timeout/i,
+  /critical/i,
+  /BrowserManager/i,
+  /listing_unavailable/i,
+  /no rows extracted/i,
+  /No source_id/i,
+  /comprasmx-collection/i,
+];
+
+export function isCriticalCollectFailure(result: CollectJobResult): boolean {
+  if (result.status !== "error") return false;
+  if (result.itemsSeen === 0 && result.pagesScanned === 0) return true;
+
+  const failureText = `${result.errorMessage ?? ""} ${result.stopReason ?? ""}`;
+  return CRITICAL_COLLECT_FAILURE_PATTERNS.some((pattern) =>
+    pattern.test(failureText),
+  );
+}
+
+function recordCollectResultForCircuitBreaker(result: CollectJobResult): string | null {
+  if (result.status === "skipped") return null;
+
+  if (isCriticalCollectFailure(result)) {
+    return comprasMxCB.recordFailure();
+  }
+
+  if (result.status === "error") {
+    log.warn(
+      {
+        status: result.status,
+        errorMessage: result.errorMessage,
+        stopReason: result.stopReason,
+        itemsSeen: result.itemsSeen,
+        pagesScanned: result.pagesScanned,
+      },
+      "Ciclo de colección terminó con error parcial; no se activa circuit breaker",
+    );
+  }
+
+  comprasMxCB.recordSuccess();
+  return null;
 }
 
 export async function runExternalLeadsIfEnabled(
@@ -73,8 +117,13 @@ async function scheduledCollect(baseIntervalMs: number): Promise<void> {
   }
 
   try {
-    await runCollectJob();
-    comprasMxCB.recordSuccess();
+    const result = await runCollectJob();
+    const alertMsg = recordCollectResultForCircuitBreaker(result);
+    if (alertMsg) {
+      sendTelegramMessage(alertMsg, "HTML").catch((e) =>
+        log.warn({ err: e }, "No se pudo enviar alerta circuit breaker"),
+      );
+    }
   } catch (err) {
     log.error({ err, mode: "listing_scan" }, "❌ Error no manejado en MODO 1 (Listing Scan)");
     const alertMsg = comprasMxCB.recordFailure();
@@ -126,7 +175,7 @@ export function startScheduler(): void {
     { timezone: "America/Mexico_City" },
   );
 
-  // ── RESUMEN DIARIO ────────────────────────────────────────────────────────
+  // ── RESUMEN DIARIO ──────────────────────────────────────────────────────
   const summaryCron = `0 ${summaryHour} * * 1-5`;
 
   cron.schedule(
@@ -151,8 +200,11 @@ export function startScheduler(): void {
   setTimeout(async () => {
     log.info("🚀 Ejecutando primer ciclo inmediato post-deploy...");
     try {
-      await runCollectJob();
-      comprasMxCB.recordSuccess();
+      const result = await runCollectJob();
+      const alertMsg = recordCollectResultForCircuitBreaker(result);
+      if (alertMsg) {
+        sendTelegramMessage(alertMsg, "HTML").catch(() => {});
+      }
     } catch (err) {
       log.error({ err }, "❌ Error en primer ciclo inmediato");
       const alertMsg = comprasMxCB.recordFailure();
