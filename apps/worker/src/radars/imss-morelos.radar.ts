@@ -1,124 +1,52 @@
 /**
  * RADAR: imss_morelos
- * Detecta licitaciones del IMSS en el estado de Morelos (OOAD Morelos).
+ * Prioridad institucional total para cualquier licitacion del IMSS en Morelos.
  */
 import type { RadarConfig } from "../types/procurement";
+import {
+  IMSS_BIENESTAR_EXCLUSION_TERMS,
+  MORELOS_TERRITORY_TERMS,
+} from "./imss-morelos-priority.matcher";
 
 export const imssMorelosRadar: RadarConfig = {
   key: "imss_morelos",
-  name: "IMSS — Delegación Morelos (OOAD)",
+  name: "IMSS Morelos — Prioridad total",
   description:
-    "Detecta licitaciones del IMSS específicas para la delegación o OOAD Morelos: hospitales, UMF, mantenimiento y suministros.",
+    "Detecta cualquier licitacion de ComprasMX donde aparezcan IMSS y Morelos, sin depender de keywords comerciales o rubros.",
   isActive: true,
   priority: 1,
   scheduleMinutes: 30,
-  minScore: 0.35,
+  minScore: 1,
 
   includeTerms: [
-    // Institucional IMSS
     "imss",
+    "i.m.s.s.",
+    "instituto mexicano del seguro social",
+    "seguro social",
+    "ooad morelos",
+    "organo de operacion administrativa desconcentrada estatal morelos",
+    "organo de operacion administrativa desconcentrada del imss en morelos",
+    "organo de operacion administrativa desconcentrada regional morelos",
+    "delegacion morelos imss",
+    "representacion morelos imss",
+    "imss morelos",
+    "hospital general de zona del imss",
+    "unidad de medicina familiar del imss",
+    "umf imss",
+    "hgz imss",
+    "hgr imss",
+  ],
+
+  excludeTerms: IMSS_BIENESTAR_EXCLUSION_TERMS,
+
+  geoTerms: MORELOS_TERRITORY_TERMS,
+
+  entityTerms: [
+    "imss",
+    "i.m.s.s.",
     "instituto mexicano del seguro social",
     "ooad morelos",
-    "delegacion morelos",
-    "delegación morelos",
-    "morelos",
-
-    // Unidades médicas
-    "hospital general zona",
-    "unidad medica familiar",
-    "unidad médica familiar",
-    "umf",
-    "hgz",
-    "hospital de zona",
-
-    // Servicios hospitalarios
-    "mantenimiento",
-    "mantenimiento preventivo",
-    "mantenimiento correctivo",
-    "medicamentos",
-    "medicamento",
-    "material de curación",
-    "material de curacion",
-    "equipo médico",
-    "equipo medico",
-    "instrumental médico",
-    "reactivos",
-
-    // Servicios generales hospitalarios
-    "limpieza hospitalaria",
-    "servicios de limpieza",
-    "vigilancia",
-    "trabajo social",
-    "archivo clínico",
-    "archivo clinico",
-    "impresos",
-    "mobiliario hospitalario",
-    "mobiliario",
-
-    // Servicios de soporte
-    "lavanderia",
-    "lavandería",
-    "servicios de lavanderia",
-    "alimentos",
-    "servicio de alimentacion",
-    "gases medicinales",
-    "oxígeno",
-    "oxigeno",
-    "ambulancias",
-    "transporte",
-
-    // Infraestructura
-    "obra",
-    "construccion",
-    "remodelacion",
-    "laboratorio clinico",
-    "laboratorio clínico",
   ],
 
-  excludeTerms: [],
-
-  geoTerms: [
-    "morelos",
-    "cuernavaca",
-    "cuautla",
-    "jiutepec",
-    "temixco",
-    "jojutla",
-    "zacatepec",
-    "yautepec",
-    "puente de ixtla",
-  ],
-
-  entityTerms: ["imss", "instituto mexicano del seguro social", "ooad morelos"],
-
-  rules: [
-    {
-      ruleType: "entity",
-      fieldName: "dependency_name",
-      operator: "contains",
-      value: "imss",
-      weight: 0.4,
-      isRequired: true,
-    },
-    {
-      ruleType: "geo",
-      fieldName: "canonical_text",
-      operator: "any_of",
-      value: [
-        "morelos",
-        "ooad morelos",
-        "delegacion morelos",
-        "cuernavaca",
-        "cuautla",
-        "jiutepec",
-        "temixco",
-        "jojutla",
-        "zacatepec",
-        "yautepec",
-        "puente de ixtla",
-      ],
-      weight: 0.6,
-      isRequired: true,
-    },
-  ],
+  rules: [],
 };

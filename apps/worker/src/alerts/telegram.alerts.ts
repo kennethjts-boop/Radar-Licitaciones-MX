@@ -256,10 +256,51 @@ function matchLevelEmoji(level: MatchLevel): string {
   return level === "high" ? "🔴" : level === "medium" ? "🟡" : "🟢";
 }
 
+function formatImssMorelosPriorityAlert(alert: EnrichedAlert): string {
+  const p = alert.procurement;
+  const raw = p.rawJson as Record<string, unknown>;
+  const fechaPublicacion =
+    (raw.fecha_publicacion as string | null | undefined) ??
+    p.publicationDate ??
+    null;
+  const fechaLimite =
+    (raw.fecha_limite as string | null | undefined) ??
+    (raw.fecha_apertura as string | null | undefined) ??
+    p.openingDate ??
+    null;
+  const comprador = [p.dependencyName, p.buyingUnit].filter(Boolean).join(" / ");
+  const procedimiento = p.procedureNumber ?? p.licitationNumber ?? p.expedienteId;
+  const territorio = alert.territoryMatched ?? p.municipality ?? p.state ?? "Morelos";
+  const motivos = (alert.scoreReasons ?? ["buyer_imss", "territory_morelos"]).join(" + ");
+
+  const lines = [
+    "🚨 PRIORIDAD IMSS MORELOS",
+    "",
+    "Se detectó licitación del IMSS en Morelos.",
+    "",
+    `Objeto: ${escapeHtml(p.title ?? "N/D")}`,
+    `Comprador: ${escapeHtml(comprador || "N/D")}`,
+    p.buyingUnit ? `Unidad compradora: ${escapeHtml(p.buyingUnit)}` : "",
+    `Territorio: ${escapeHtml(territorio)}`,
+    procedimiento ? `Procedimiento: ${escapeHtml(procedimiento)}` : "",
+    fechaPublicacion ? `Fecha de publicación: ${formatDateSafe(fechaPublicacion)}` : "",
+    fechaLimite ? `Fecha límite: ${formatDateSafe(fechaLimite)}` : "",
+    `Motivo: ${escapeHtml(motivos)}`,
+    "Razón del match: IMSS + Morelos",
+    `URL: ${escapeHtml(p.sourceUrl)}`,
+  ];
+
+  return truncateForTelegram(lines.filter(Boolean).join("\n"));
+}
+
 /**
  * Construye el mensaje HTML para alerta de nuevo match.
  */
 export function formatMatchAlert(alert: EnrichedAlert): string {
+  if (alert.radarKey === "imss_morelos") {
+    return formatImssMorelosPriorityAlert(alert);
+  }
+
   const p = alert.procurement;
   const emoji = matchLevelEmoji(alert.matchLevel);
   const score = (alert.matchScore * 100).toFixed(0);

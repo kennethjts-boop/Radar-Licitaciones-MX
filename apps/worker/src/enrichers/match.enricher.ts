@@ -62,6 +62,8 @@ export async function enrichMatch(
     procurement,
     matchedTerms: match.matchedTerms,
     explanation: match.explanation,
+    scoreReasons: match.scoreReasons,
+    territoryMatched: match.territoryMatched,
     commercialProfileId: match.commercialProfileId,
     commercialProfileName: match.commercialProfileName,
     commercialCompanyName: match.commercialCompanyName,

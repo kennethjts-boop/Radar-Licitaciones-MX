@@ -315,3 +315,111 @@ describe("business line radars", () => {
     expect(result).not.toBeNull();
   });
 });
+
+describe("IMSS Morelos priority radar", () => {
+  function makeImssCase(title: string, overrides: Partial<NormalizedProcurement> = {}) {
+    return makeProcurement({
+      source: "comprasmx",
+      title,
+      description: null,
+      dependencyName: null,
+      buyingUnit: null,
+      state: null,
+      municipality: null,
+      canonicalText: title,
+      rawJson: {},
+      ...overrides,
+    });
+  }
+
+  function evaluateImssCase(title: string, overrides: Partial<NormalizedProcurement> = {}) {
+    const radar = getRadarByKey("imss_morelos");
+    expect(radar).toBeDefined();
+    return evaluateProcurementAgainstRadar(makeImssCase(title, overrides), radar!, true);
+  }
+
+  it.each([
+    "Adquisición de material de curación para el Instituto Mexicano del Seguro Social en Morelos",
+    "Servicio de mantenimiento para OOAD Morelos del IMSS",
+    "Contratación de limpieza para unidades médicas del IMSS en Cuernavaca",
+    "Instituto Mexicano del Seguro Social — Delegación Morelos — adquisición de papelería",
+    "Unidad de Medicina Familiar del IMSS en Jiutepec solicita servicio de fumigación",
+    "Instituto Mexicano del Seguro Social OOAD Morelos adquisición de material de curación",
+    "IMSS Delegación Morelos contratación de servicio de mantenimiento",
+    "Unidad de Medicina Familiar del IMSS en Cuernavaca adquisición de papelería",
+  ])("alerta para IMSS ordinario en Morelos: %s", (title) => {
+    const result = evaluateImssCase(title);
+
+    expect(result).not.toBeNull();
+    expect(result!.radarKey).toBe("imss_morelos");
+    expect(result!.matchScore).toBe(1);
+    expect(result!.matchLevel).toBe("high");
+    expect(result!.scoreReasons).toEqual([
+      "buyer_imss",
+      "territory_morelos",
+      "priority_institutional_radar",
+    ]);
+  });
+
+  it.each([
+    "IMSS Jalisco adquisición de medicamentos",
+    "Gobierno de Morelos adquisición de equipo de cómputo",
+    "Servicio de seguridad social para trabajadores del municipio de Cuernavaca",
+    "Instituto Mexicano del Seguro Social en Estado de México adquisición de material",
+    "IMSS-Bienestar Morelos adquisición de medicamentos",
+    "Servicios de Salud IMSS-Bienestar en Morelos contratación de limpieza",
+    "OPD IMSS-Bienestar Morelos mantenimiento de unidades médicas",
+    "Organismo Público Descentralizado IMSS-Bienestar en Cuernavaca solicita insumos",
+  ])("no alerta para falsos positivos o IMSS-Bienestar: %s", (title) => {
+    const result = evaluateImssCase(title);
+    expect(result).toBeNull();
+  });
+
+  it("revisa campos extraidos y anexos sin depender del titulo", () => {
+    const result = evaluateImssCase("Servicio integral sin tema comercial", {
+      dependencyName: "Instituto Mexicano del Seguro Social",
+      buyingUnit: "OOAD Morelos",
+      state: "Morelos",
+      attachments: [{
+        fileName: "anexo tecnico.pdf",
+        fileType: "pdf",
+        fileUrl: "https://example.com/anexo.pdf",
+        fileHash: null,
+        detectedText: "Unidad de Medicina Familiar del IMSS en Cuernavaca",
+      }],
+      rawJson: {
+        comprador: "IMSS",
+        lugar_de_ejecucion: "Cuernavaca, Morelos",
+        objeto_contratacion: "Servicio integral sin keywords comerciales",
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.territoryMatched).toBe("Morelos");
+  });
+
+  it("tiene prioridad mayor que un radar comercial normal", () => {
+    const proc = makeImssCase(
+      "IMSS Morelos adquisición de lubricantes y aceites para parque vehicular",
+      {
+        dependencyName: "IMSS",
+        state: "Morelos",
+      },
+    );
+    const imssRadar = getRadarByKey("imss_morelos");
+    const commercialRadar = getRadarByKey("hm_highmil_lubricantes_morelos");
+    expect(imssRadar).toBeDefined();
+    expect(commercialRadar).toBeDefined();
+
+    const imssResult = evaluateProcurementAgainstRadar(proc, imssRadar!, true);
+    const commercialResult = evaluateProcurementAgainstRadar(proc, commercialRadar!, true);
+
+    expect(imssResult).not.toBeNull();
+    expect(imssResult!.matchScore).toBe(1);
+    expect(imssResult!.matchLevel).toBe("high");
+    if (commercialResult) {
+      expect(imssResult!.matchScore).toBeGreaterThan(commercialResult.matchScore);
+    }
+    expect(imssRadar!.priority).toBeLessThanOrEqual(commercialRadar!.priority);
+  });
+});

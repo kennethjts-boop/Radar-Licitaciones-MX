@@ -9,6 +9,11 @@ import {
   type CommercialProfileId,
 } from "../modules/commercial-profiles";
 import { matchCommercialOpportunity } from "../modules/commercial-matching";
+import {
+  detectImssMorelosPriority,
+  IMSS_MORELOS_RADAR_KEY,
+  IMSS_MORELOS_SCORE_REASONS,
+} from "../radars/imss-morelos-priority.matcher";
 import type {
   NormalizedProcurement,
   MatchResult,
@@ -99,6 +104,14 @@ export function evaluateProcurementAgainstRadar(
   isNew: boolean,
   previousStatus: NormalizedProcurement["status"] | null = null,
 ): MatchResult | null {
+  if (radar.key === IMSS_MORELOS_RADAR_KEY) {
+    return evaluateImssMorelosPriorityRadar(
+      procurement,
+      isNew,
+      previousStatus,
+    );
+  }
+
   if (radar.commercialProfileId) {
     return evaluateProcurementAgainstCommercialRadar(
       procurement,
@@ -302,6 +315,47 @@ function evaluateProcurementAgainstCommercialRadar(
     commercialShouldSave: profileMatch.shouldSave,
     commercialShouldAlert: profileMatch.shouldAlert,
     commercialDiscardReason: profileMatch.discardReason,
+    isNew,
+    isStatusChange:
+      previousStatus !== null && previousStatus !== procurement.status,
+    previousStatus,
+  };
+}
+
+function evaluateImssMorelosPriorityRadar(
+  procurement: NormalizedProcurement,
+  isNew: boolean,
+  previousStatus: NormalizedProcurement["status"] | null,
+): MatchResult | null {
+  const detection = detectImssMorelosPriority(procurement);
+  if (!detection) return null;
+
+  const matchedTerms = [
+    ...detection.imssTerms,
+    ...detection.territoryTerms,
+  ];
+  const explanation = [
+    "PRIORIDAD INSTITUCIONAL IMSS MORELOS.",
+    "Motivo: buyer_imss + territory_morelos + priority_institutional_radar.",
+    `Territorio detectado: ${detection.territoryMatched}.`,
+    isNew ? "Expediente nuevo — primera vez detectado." : "",
+    previousStatus !== null && previousStatus !== procurement.status
+      ? "Cambio de estatus detectado."
+      : "",
+  ].filter(Boolean).join(" ");
+
+  return {
+    radarKey: IMSS_MORELOS_RADAR_KEY,
+    procurementId: procurement.externalId,
+    matchScore: 1,
+    opportunityScore: calculateOpportunityScore(procurement),
+    documentScore: calculateDocumentScore(procurement),
+    matchLevel: "high",
+    matchedTerms: [...new Set(matchedTerms)],
+    excludedTerms: [],
+    explanation,
+    scoreReasons: IMSS_MORELOS_SCORE_REASONS,
+    territoryMatched: detection.territoryMatched,
     isNew,
     isStatusChange:
       previousStatus !== null && previousStatus !== procurement.status,

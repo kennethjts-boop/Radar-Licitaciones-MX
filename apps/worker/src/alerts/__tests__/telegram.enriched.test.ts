@@ -1,7 +1,8 @@
-import { formatEnrichedAlert } from "../telegram.alerts";
+import { formatEnrichedAlert, formatMatchAlert } from "../telegram.alerts";
 import type { EnrichedAlertData } from "../telegram.alerts";
 import type { DocumentLink } from "../../collectors/comprasmx-detail/index";
 import type { DownloadResult } from "../../services/document-downloader";
+import type { EnrichedAlert, NormalizedProcurement } from "../../types/procurement";
 
 function makeDocLink(title: string): DocumentLink {
   return {
@@ -211,5 +212,63 @@ describe("formatEnrichedAlert", () => {
     const msg = formatEnrichedAlert({ ...baseData });
     expect(msg).not.toContain("Estimación presupuestal");
     expect(msg).not.toContain("Contratos similares");
+  });
+});
+
+describe("formatMatchAlert IMSS Morelos", () => {
+  it("inicia con prioridad IMSS Morelos e incluye motivo institucional", () => {
+    const procurement: NormalizedProcurement = {
+      source: "comprasmx",
+      sourceUrl: "https://comprasmx.example/proc/1",
+      externalId: "PROC-IMSS-MOR-001",
+      expedienteId: "EXP-IMSS-MOR-001",
+      licitationNumber: "LIC-IMSS-MOR-001",
+      procedureNumber: "PROC-IMSS-MOR-001",
+      title: "Unidad de Medicina Familiar del IMSS en Cuernavaca adquisición de papelería",
+      description: null,
+      dependencyName: "Instituto Mexicano del Seguro Social",
+      buyingUnit: "OOAD Morelos",
+      procedureType: "licitacion_publica",
+      status: "activa",
+      publicationDate: "2026-05-01T10:00:00Z",
+      openingDate: "2026-06-01T10:00:00Z",
+      awardDate: null,
+      state: "Morelos",
+      municipality: "Cuernavaca",
+      amount: null,
+      currency: "MXN",
+      attachments: [],
+      canonicalText: "Unidad de Medicina Familiar del IMSS en Cuernavaca adquisición de papelería",
+      canonicalFingerprint: "fp",
+      lightweightFingerprint: null,
+      canonicalHash: null,
+      rawJson: {},
+      fetchedAt: "2026-05-01T10:00:00Z",
+    };
+    const alert: EnrichedAlert = {
+      alertType: "new_match",
+      radarKey: "imss_morelos",
+      radarName: "IMSS Morelos — Prioridad total",
+      matchLevel: "high",
+      matchScore: 1,
+      opportunityScore: 1,
+      documentScore: 1,
+      procurement,
+      matchedTerms: ["IMSS", "Cuernavaca"],
+      explanation: "Motivo: buyer_imss + territory_morelos.",
+      scoreReasons: ["buyer_imss", "territory_morelos", "priority_institutional_radar"],
+      territoryMatched: "Cuernavaca",
+      hasHistory: false,
+      historyCount: 0,
+      detectedAt: "2026-05-01T10:00:00Z",
+      telegramMessage: "",
+    };
+
+    const msg = formatMatchAlert(alert);
+
+    expect(msg.startsWith("🚨 PRIORIDAD IMSS MORELOS")).toBe(true);
+    expect(msg).toContain("Se detectó licitación del IMSS en Morelos.");
+    expect(msg).toContain("Motivo: buyer_imss + territory_morelos + priority_institutional_radar");
+    expect(msg).toContain("Razón del match: IMSS + Morelos");
   });
 });

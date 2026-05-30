@@ -66,6 +66,7 @@ import {
   recordCommercialMatchTelemetry,
   type CommercialMatchingTelemetry,
 } from "../modules/commercial-matching/telemetry";
+import { IMSS_MORELOS_RADAR_KEY } from "../radars/imss-morelos-priority.matcher";
 
 const log = createModuleLogger("collect-job");
 
@@ -598,7 +599,12 @@ export async function runCollectJob(): Promise<CollectJobResult> {
               // verificar que al menos un geoTerm aparezca en state.
               // Excepción: licitaciones DESIERTA siempre pasan (para auditoría).
               const radarCfg = radars.find((r) => r.key === match.radarKey);
-              if (radarCfg && radarCfg.geoTerms.length > 0 && item.state !== null) {
+              if (
+                radarCfg &&
+                radarCfg.key !== IMSS_MORELOS_RADAR_KEY &&
+                radarCfg.geoTerms.length > 0 &&
+                item.state !== null
+              ) {
                 const stateLower = item.state.toLowerCase();
                 const isDesierta = item.status.toLowerCase().includes("desierta");
                 const geoMatch = radarCfg.geoTerms.some((t) =>

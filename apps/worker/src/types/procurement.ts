@@ -112,6 +112,8 @@ export interface MatchResult {
   matchedTerms: string[];
   excludedTerms: string[];
   explanation: string;
+  scoreReasons?: string[];
+  territoryMatched?: string | null;
   commercialProfileId?: string;
   commercialProfileName?: string;
   commercialCompanyName?: string;
@@ -153,6 +155,8 @@ export interface EnrichedAlert {
   procurement: NormalizedProcurement;
   matchedTerms: string[];
   explanation: string;
+  scoreReasons?: string[];
+  territoryMatched?: string | null;
   commercialProfileId?: string;
   commercialProfileName?: string;
   commercialCompanyName?: string;
