@@ -278,6 +278,7 @@ describe("business line radars", () => {
   it("mantiene activos radares existentes y agrega nuevas verticales", () => {
     const keys = getActiveRadars().map((radar) => radar.key);
     expect(keys).toContain("capufe_oportunidades");
+    expect(keys).toContain("capufe_direct_awards");
     expect(keys).toContain("imss_morelos");
     expect(keys).toContain("hm_highmil_lubricantes_morelos");
     expect(keys).toContain("primasa_impresos_morelos");
@@ -313,6 +314,118 @@ describe("business line radars", () => {
     expect(radar).toBeDefined();
     const result = evaluateProcurementAgainstRadar(proc, radar!, true);
     expect(result).not.toBeNull();
+  });
+});
+
+describe("CAPUFE direct awards priority radar", () => {
+  function makeCapufeDirectAwardCase(title: string, overrides: Partial<NormalizedProcurement> = {}) {
+    return makeProcurement({
+      source: "comprasmx",
+      title,
+      description: null,
+      dependencyName: null,
+      buyingUnit: null,
+      state: null,
+      municipality: null,
+      procedureType: "unknown",
+      canonicalText: title,
+      rawJson: {},
+      ...overrides,
+    });
+  }
+
+  function evaluateCapufeDirectAwardCase(
+    title: string,
+    overrides: Partial<NormalizedProcurement> = {},
+  ) {
+    const radar = getRadarByKey("capufe_direct_awards");
+    expect(radar).toBeDefined();
+    return evaluateProcurementAgainstRadar(
+      makeCapufeDirectAwardCase(title, overrides),
+      radar!,
+      true,
+    );
+  }
+
+  it.each([
+    "CAPUFE adjudicación directa para mantenimiento de plaza de cobro",
+    "Caminos y Puentes Federales de Ingresos y Servicios Conexos — adjudicación directa de servicio",
+    "Contratación por adjudicación directa para caseta de cobro CAPUFE",
+    "Plaza de Cobro CAPUFE — procedimiento de adjudicación directa para suministro de refacciones",
+    "Caminos y Puentes Federales — excepción a licitación pública para servicio de mantenimiento",
+  ])("alerta para CAPUFE + adjudicacion directa: %s", (title) => {
+    const result = evaluateCapufeDirectAwardCase(title);
+
+    expect(result).not.toBeNull();
+    expect(result!.radarKey).toBe("capufe_direct_awards");
+    expect(result!.matchScore).toBe(1);
+    expect(result!.matchLevel).toBe("high");
+    expect(result!.scoreReasons).toEqual([
+      "buyer_capufe",
+      "procedure_direct_award",
+      "priority_capufe_direct_award",
+    ]);
+  });
+
+  it.each([
+    "CAPUFE licitación pública nacional para mantenimiento de casetas",
+    "Adjudicación directa de material de oficina para Gobierno de Morelos",
+    "Servicio directo de mantenimiento a autopista estatal",
+    "Contratación directa de seguridad privada en municipio",
+    "CAPUFE invitación a cuando menos tres personas",
+  ])("no alerta falsos positivos: %s", (title) => {
+    const result = evaluateCapufeDirectAwardCase(title);
+    expect(result).toBeNull();
+  });
+
+  it("revisa campos estructurados y anexos sin depender del titulo", () => {
+    const result = evaluateCapufeDirectAwardCase("Servicio integral sin keywords", {
+      dependencyName: "Caminos y Puentes Federales de Ingresos y Servicios Conexos",
+      buyingUnit: "Gerencia de Tramo CAPUFE",
+      procedureType: "adjudicacion_directa",
+      attachments: [{
+        fileName: "anexo tecnico.pdf",
+        fileType: "pdf",
+        fileUrl: "https://example.com/anexo.pdf",
+        fileHash: null,
+        detectedText: "Mantenimiento de plaza de cobro y sistema de cobro",
+      }],
+      rawJson: {
+        comprador: "CAPUFE",
+        unidad_compradora: "Delegacion Regional CAPUFE",
+        objeto_contratacion: "Servicio integral sin keywords comerciales",
+        lugar_de_ejecucion: "Plaza de Cobro",
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.matchedTerms).toEqual(expect.arrayContaining([
+      "CAPUFE",
+      "adjudicacion_directa",
+    ]));
+  });
+
+  it("acepta directa solo si aparece en campo de tipo de procedimiento", () => {
+    const directInProcedureField = evaluateCapufeDirectAwardCase("CAPUFE servicio de mantenimiento", {
+      rawJson: {
+        tipo_procedimiento: "Directa",
+      },
+    });
+    const directInGenericText = evaluateCapufeDirectAwardCase(
+      "CAPUFE servicio directo de mantenimiento en plaza de cobro",
+    );
+
+    expect(directInProcedureField).not.toBeNull();
+    expect(directInGenericText).toBeNull();
+  });
+
+  it("no usa noticias OSINT ni fuentes externas", () => {
+    const result = evaluateCapufeDirectAwardCase(
+      "CAPUFE adjudicación directa para mantenimiento de plaza de cobro",
+      { source: "external_osint" },
+    );
+
+    expect(result).toBeNull();
   });
 });
 

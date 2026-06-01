@@ -27,7 +27,8 @@
     "financial:sample": "ts-node-dev --transpile-only src/scripts/financial-sample.ts",
     "alert-filter:sample": "ts-node-dev --transpile-only src/modules/alert-filter/sample-runner.ts",
     "external-leads:dry-run": "ts-node --transpile-only src/scripts/external-leads-dry-run.ts",
-    "commercial-radars:dry-run": "ts-node --transpile-only src/scripts/commercial-radars-dry-run.ts"
+    "commercial-radars:dry-run": "ts-node --transpile-only src/scripts/commercial-radars-dry-run.ts",
+    "capufe-direct-awards:dry-run": "ts-node --transpile-only src/scripts/capufe-direct-awards-dry-run.ts"
   },
   "engines": {
     "node": ">=20.0.0"

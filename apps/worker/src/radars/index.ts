@@ -5,6 +5,7 @@
 import type { RadarConfig } from "../types/procurement";
 
 import { capufeEmergenciaRadar } from "./capufe-emergencia.radar";
+import { capufeDirectAwardsRadar } from "./capufe-direct-awards.radar";
 import { capufeMantenimientoEquiposRadar } from "./capufe-mantenimiento-equipos.radar";
 import { capufePeajeRadar } from "./capufe-peaje.radar";
 import { capufeOportunidadesRadar } from "./capufe-oportunidades.radar";
@@ -21,6 +22,7 @@ import { BUSINESS_LINE_RADARS } from "./business-lines.radar";
  * El matcher itera sobre esta lista en cada ciclo.
  */
 export const RADARS: RadarConfig[] = [
+  capufeDirectAwardsRadar,
   capufeEmergenciaRadar,
   capufeMantenimientoEquiposRadar,
   capufePeajeRadar,

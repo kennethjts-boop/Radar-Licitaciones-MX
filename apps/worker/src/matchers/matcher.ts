@@ -14,6 +14,11 @@ import {
   IMSS_MORELOS_RADAR_KEY,
   IMSS_MORELOS_SCORE_REASONS,
 } from "../radars/imss-morelos-priority.matcher";
+import {
+  CAPUFE_DIRECT_AWARDS_RADAR_KEY,
+  CAPUFE_DIRECT_AWARDS_SCORE_REASONS,
+  detectCapufeDirectAward,
+} from "../radars/capufe-direct-awards.matcher";
 import type {
   NormalizedProcurement,
   MatchResult,
@@ -106,6 +111,14 @@ export function evaluateProcurementAgainstRadar(
 ): MatchResult | null {
   if (radar.key === IMSS_MORELOS_RADAR_KEY) {
     return evaluateImssMorelosPriorityRadar(
+      procurement,
+      isNew,
+      previousStatus,
+    );
+  }
+
+  if (radar.key === CAPUFE_DIRECT_AWARDS_RADAR_KEY) {
+    return evaluateCapufeDirectAwardsRadar(
       procurement,
       isNew,
       previousStatus,
@@ -356,6 +369,45 @@ function evaluateImssMorelosPriorityRadar(
     explanation,
     scoreReasons: IMSS_MORELOS_SCORE_REASONS,
     territoryMatched: detection.territoryMatched,
+    isNew,
+    isStatusChange:
+      previousStatus !== null && previousStatus !== procurement.status,
+    previousStatus,
+  };
+}
+
+function evaluateCapufeDirectAwardsRadar(
+  procurement: NormalizedProcurement,
+  isNew: boolean,
+  previousStatus: NormalizedProcurement["status"] | null,
+): MatchResult | null {
+  const detection = detectCapufeDirectAward(procurement);
+  if (!detection) return null;
+
+  const matchedTerms = [
+    ...detection.capufeTerms,
+    ...detection.directAwardTerms,
+  ];
+  const explanation = [
+    "PRIORIDAD CAPUFE ADJUDICACION DIRECTA.",
+    "Motivo: buyer_capufe + procedure_direct_award + priority_capufe_direct_award.",
+    isNew ? "Expediente nuevo — primera vez detectado." : "",
+    previousStatus !== null && previousStatus !== procurement.status
+      ? "Cambio de estatus detectado."
+      : "",
+  ].filter(Boolean).join(" ");
+
+  return {
+    radarKey: CAPUFE_DIRECT_AWARDS_RADAR_KEY,
+    procurementId: procurement.externalId,
+    matchScore: 1,
+    opportunityScore: calculateOpportunityScore(procurement),
+    documentScore: calculateDocumentScore(procurement),
+    matchLevel: "high",
+    matchedTerms: [...new Set(matchedTerms)],
+    excludedTerms: [],
+    explanation,
+    scoreReasons: CAPUFE_DIRECT_AWARDS_SCORE_REASONS,
     isNew,
     isStatusChange:
       previousStatus !== null && previousStatus !== procurement.status,

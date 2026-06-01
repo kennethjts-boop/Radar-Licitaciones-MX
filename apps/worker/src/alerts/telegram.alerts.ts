@@ -465,12 +465,62 @@ function formatImssMorelosPriorityAlert(alert: EnrichedAlert): string {
   return truncateForTelegram(lines.filter(Boolean).join("\n"));
 }
 
+function formatCapufeDirectAwardAlert(alert: EnrichedAlert): string {
+  const p = alert.procurement;
+  const raw = p.rawJson as Record<string, unknown>;
+  const fechaPublicacion =
+    (raw.fecha_publicacion as string | null | undefined) ??
+    (raw.visibleDate as string | null | undefined) ??
+    p.publicationDate ??
+    null;
+  const fechaLimite =
+    (raw.fecha_limite as string | null | undefined) ??
+    (raw.fecha_apertura as string | null | undefined) ??
+    p.openingDate ??
+    null;
+  const comprador = [p.dependencyName, p.buyingUnit].filter(Boolean).join(" / ");
+  const procedimiento = p.procedureNumber ?? p.licitationNumber ?? p.expedienteId;
+  const rawProcedureType =
+    (raw.tipo_procedimiento as string | null | undefined) ??
+    (raw.tipoProcedimiento as string | null | undefined) ??
+    (raw.tipo as string | null | undefined) ??
+    null;
+  const tipo = rawProcedureType ?? p.procedureType;
+  const motivos = (alert.scoreReasons ?? [
+    "buyer_capufe",
+    "procedure_direct_award",
+  ]).join(" + ");
+
+  const lines = [
+    "🚨 CAPUFE — ADJUDICACIÓN DIRECTA",
+    "",
+    "Se detectó procedimiento de adjudicación directa relacionado con CAPUFE.",
+    "",
+    `Objeto: ${escapeHtml(p.title ?? "N/D")}`,
+    `Comprador: ${escapeHtml(comprador || "N/D")}`,
+    p.buyingUnit ? `Unidad compradora: ${escapeHtml(p.buyingUnit)}` : "",
+    `Tipo: ${escapeHtml(tipo)}`,
+    procedimiento ? `Procedimiento: ${escapeHtml(procedimiento)}` : "",
+    fechaPublicacion ? `Fecha de publicación: ${formatDateSafe(fechaPublicacion)}` : "",
+    fechaLimite ? `Fecha límite: ${formatDateSafe(fechaLimite)}` : "",
+    `Motivo: ${escapeHtml(motivos)}`,
+    "Razón del match: CAPUFE + adjudicación directa",
+    `URL: ${escapeHtml(p.sourceUrl)}`,
+  ];
+
+  return truncateForTelegram(lines.filter(Boolean).join("\n"));
+}
+
 /**
  * Construye el mensaje HTML para alerta de nuevo match.
  */
 export function formatMatchAlert(alert: EnrichedAlert): string {
   if (alert.radarKey === "imss_morelos") {
     return formatImssMorelosPriorityAlert(alert);
+  }
+
+  if (alert.radarKey === "capufe_direct_awards") {
+    return formatCapufeDirectAwardAlert(alert);
   }
 
   const p = alert.procurement;
