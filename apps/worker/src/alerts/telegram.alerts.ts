@@ -8,7 +8,7 @@ import { getCommandBot } from "../agent/telegram.commands";
 import { createModuleLogger } from "../core/logger";
 import { truncateForTelegram, formatCurrency } from "../core/text";
 import { formatMexicoDate, formatDateSafe } from "../core/time";
-import { TelegramError } from "../core/errors";
+import { TelegramError, withTimeout } from "../core/errors";
 import { withRetries, isRetryableNetworkError } from "../utils/retry.util";
 import type {
   EnrichedAlert,
@@ -24,6 +24,151 @@ import type { SimilarProcedure } from "../services/procurement-similarity-engine
 const log = createModuleLogger("telegram-alerts");
 
 let _bot: TelegramBot | null = null;
+
+export type TelegramSendErrorKind = "timeout" | "network" | "api" | "unknown";
+
+export interface TelegramSendErrorDetails {
+  kind: TelegramSendErrorKind;
+  retryable: boolean;
+  code?: string;
+  statusCode?: number;
+  apiErrorCode?: number;
+  apiDescription?: string;
+  summary: string;
+}
+
+function toErrorSummary(err: unknown): string {
+  if (err instanceof AggregateError) {
+    const parts = err.errors
+      .map((item) => (item instanceof Error ? item.message : String(item)))
+      .filter(Boolean);
+    return parts.length > 0 ? parts.join(" | ") : err.message;
+  }
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+function getErrorCandidates(err: unknown): unknown[] {
+  if (err instanceof AggregateError) {
+    return [err, ...err.errors];
+  }
+  if (typeof err === "object" && err !== null && Array.isArray((err as { errors?: unknown[] }).errors)) {
+    return [err, ...(err as { errors: unknown[] }).errors];
+  }
+  return [err];
+}
+
+function hasTimeoutSignal(text: string): boolean {
+  return [
+    "timeout",
+    "timed out",
+    "etimedout",
+    "aborterror",
+    "aborted",
+  ].some((token) => text.includes(token));
+}
+
+function isRetryableTelegramApiStatus(statusCode: number | undefined, apiErrorCode: number | undefined): boolean {
+  if (statusCode === undefined && apiErrorCode === undefined) return false;
+  if (statusCode === 429 || apiErrorCode === 429) return true;
+  if (statusCode !== undefined && statusCode >= 500) return true;
+  return false;
+}
+
+export function describeTelegramSendError(err: unknown): TelegramSendErrorDetails {
+  const candidates = getErrorCandidates(err);
+  const summary = toErrorSummary(err);
+
+  let code: string | undefined;
+  let statusCode: number | undefined;
+  let apiErrorCode: number | undefined;
+  let apiDescription: string | undefined;
+
+  for (const item of candidates) {
+    if (typeof item !== "object" || item === null) continue;
+
+    const maybeError = item as {
+      code?: unknown;
+      response?: { statusCode?: unknown; body?: { error_code?: unknown; description?: unknown } };
+    };
+    if (!code && typeof maybeError.code === "string") {
+      code = maybeError.code;
+    }
+    const response = maybeError.response;
+    if (response && typeof response.statusCode === "number" && statusCode === undefined) {
+      statusCode = response.statusCode;
+    }
+    const body = response?.body;
+    if (body && typeof body.error_code === "number" && apiErrorCode === undefined) {
+      apiErrorCode = body.error_code;
+    }
+    if (body && typeof body.description === "string" && !apiDescription) {
+      apiDescription = body.description;
+    }
+  }
+
+  const combinedText = candidates
+    .map((item) => (item instanceof Error ? `${item.name} ${item.message} ${item.stack ?? ""}` : String(item)))
+    .join(" ")
+    .toLowerCase();
+
+  if (hasTimeoutSignal(combinedText)) {
+    return {
+      kind: "timeout",
+      retryable: true,
+      code,
+      statusCode,
+      apiErrorCode,
+      apiDescription,
+      summary,
+    };
+  }
+
+  const hasTelegramApiMetadata = statusCode !== undefined || apiErrorCode !== undefined || code === "ETELEGRAM";
+  if (hasTelegramApiMetadata) {
+    return {
+      kind: "api",
+      retryable: isRetryableTelegramApiStatus(statusCode, apiErrorCode),
+      code,
+      statusCode,
+      apiErrorCode,
+      apiDescription,
+      summary,
+    };
+  }
+
+  if (isRetryableNetworkError(err)) {
+    return {
+      kind: "network",
+      retryable: true,
+      code,
+      statusCode,
+      apiErrorCode,
+      apiDescription,
+      summary,
+    };
+  }
+
+  return {
+    kind: "unknown",
+    retryable: false,
+    code,
+    statusCode,
+    apiErrorCode,
+    apiDescription,
+    summary,
+  };
+}
+
+function formatTelegramFailureMessage(details: TelegramSendErrorDetails): string {
+  const parts = [`Error enviando a Telegram (${details.kind})`];
+  if (details.statusCode !== undefined) parts.push(`status=${details.statusCode}`);
+  if (details.apiErrorCode !== undefined) parts.push(`api_error_code=${details.apiErrorCode}`);
+  if (details.code) parts.push(`code=${details.code}`);
+  if (details.apiDescription) parts.push(`description=${details.apiDescription}`);
+  parts.push(`reason=${details.summary}`);
+  return parts.join(" | ");
+}
 
 function getBot(): TelegramBot {
   // Reusar el bot de comandos (polling) si ya fue inicializado, para evitar
@@ -171,25 +316,52 @@ export async function sendTelegramMessage(
   try {
     const msg = await withRetries(
       () =>
-        bot.sendMessage(config.TELEGRAM_CHAT_ID, text, {
-          parse_mode: parseMode,
-          disable_web_page_preview: true,
-        } as TelegramBot.SendMessageOptions),
+        withTimeout(
+          bot.sendMessage(config.TELEGRAM_CHAT_ID, text, {
+            parse_mode: parseMode,
+            disable_web_page_preview: true,
+          } as TelegramBot.SendMessageOptions),
+          config.TELEGRAM_SEND_TIMEOUT_MS,
+          "telegram.sendMessage",
+        ),
       {
-        maxAttempts: 3,
-        initialDelayMs: 1_000,
-        backoffMultiplier: 2,
-        maxDelayMs: 4_000,
-        shouldRetry: isRetryableNetworkError,
-        onRetry: (_err, attempt, delay) =>
-          log.warn({ attempt, delayMs: delay }, "⏳ Reintentando envío Telegram..."),
+        maxAttempts: config.TELEGRAM_MAX_RETRIES,
+        initialDelayMs: config.TELEGRAM_INITIAL_RETRY_DELAY_MS,
+        backoffMultiplier: config.TELEGRAM_RETRY_BACKOFF_MULTIPLIER,
+        maxDelayMs: config.TELEGRAM_MAX_RETRY_DELAY_MS,
+        shouldRetry: (error) => describeTelegramSendError(error).retryable,
+        onRetry: (error, attempt, delay) => {
+          const details = describeTelegramSendError(error);
+          log.warn(
+            {
+              attempt,
+              delayMs: delay,
+              kind: details.kind,
+              statusCode: details.statusCode,
+              apiErrorCode: details.apiErrorCode,
+              code: details.code,
+              summary: details.summary,
+            },
+            "⏳ Reintentando envío Telegram",
+          );
+        },
       },
     );
     return msg.message_id;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.error({ error: msg }, "❌ Error enviando mensaje Telegram (agotados reintentos)");
-    throw new TelegramError(`Error enviando a Telegram: ${msg}`);
+    const details = describeTelegramSendError(err);
+    log.error(
+      {
+        kind: details.kind,
+        statusCode: details.statusCode,
+        apiErrorCode: details.apiErrorCode,
+        code: details.code,
+        retryable: details.retryable,
+        summary: details.summary,
+      },
+      "❌ Error enviando mensaje Telegram (agotados reintentos)",
+    );
+    throw new TelegramError(formatTelegramFailureMessage(details), { ...details });
   }
 }
 

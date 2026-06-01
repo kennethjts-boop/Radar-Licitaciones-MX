@@ -6,13 +6,51 @@ import { v4 as uuidv4 } from 'uuid';
 import { createModuleLogger } from '../core/logger';
 import { formatMexicoDate, mexicoDateAtHourISO, todayMexicoStr, nowISO } from '../core/time';
 import { getSupabaseClient } from '../storage/client';
-import { sendEnhancedDailySummary } from '../alerts/telegram.alerts';
+import { describeTelegramSendError, sendEnhancedDailySummary } from '../alerts/telegram.alerts';
 import { buildSummaryData } from '../modules/alert-filter';
 import { healthTracker } from '../core/healthcheck';
 import { getConfig } from '../config/env';
 import { setState, STATE_KEYS } from '../core/system-state';
 
 const log = createModuleLogger('daily-summary-job');
+
+function buildFailureReason(err: unknown): {
+  message: string;
+  telegramRespondedError: boolean;
+  telegramTimeout: boolean;
+  telegramNetworkError: boolean;
+  telegramApiError: boolean;
+} {
+  const baseMessage = err instanceof Error ? err.message : String(err);
+  const details = describeTelegramSendError(err);
+
+  if (details.kind === 'unknown') {
+    return {
+      message: baseMessage,
+      telegramRespondedError: /telegram/i.test(baseMessage),
+      telegramTimeout: false,
+      telegramNetworkError: false,
+      telegramApiError: false,
+    };
+  }
+
+  const fragments = [
+    `telegram_${details.kind}`,
+    details.statusCode !== undefined ? `status=${details.statusCode}` : null,
+    details.apiErrorCode !== undefined ? `api_error_code=${details.apiErrorCode}` : null,
+    details.code ? `code=${details.code}` : null,
+    details.apiDescription ? `description=${details.apiDescription}` : null,
+    `reason=${details.summary}`,
+  ].filter(Boolean);
+
+  return {
+    message: fragments.join(' | '),
+    telegramRespondedError: details.kind === 'api',
+    telegramTimeout: details.kind === 'timeout',
+    telegramNetworkError: details.kind === 'network',
+    telegramApiError: details.kind === 'api',
+  };
+}
 
 export async function runDailySummaryJob(): Promise<void> {
   log.info('Generando resumen diario mejorado');
@@ -106,7 +144,7 @@ export async function runDailySummaryJob(): Promise<void> {
       'Resumen diario enviado',
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const failure = buildFailureReason(err);
     const finishedAt = nowISO();
     await setState(STATE_KEYS.LAST_DAILY_SUMMARY, {
       status: 'error',
@@ -119,9 +157,12 @@ export async function runDailySummaryJob(): Promise<void> {
       telegramMessageId: null,
       chatConfigured: Boolean(config.TELEGRAM_CHAT_ID),
       skippedByDedup: false,
-      failureReason: message,
-      telegramRespondedError: /telegram/i.test(message),
+      failureReason: failure.message,
+      telegramRespondedError: failure.telegramRespondedError,
+      telegramTimeout: failure.telegramTimeout,
+      telegramNetworkError: failure.telegramNetworkError,
+      telegramApiError: failure.telegramApiError,
     });
-    log.error({ err, expectedAt, actualAt: finishedAt }, 'Error generando resumen diario');
+    log.error({ err, expectedAt, actualAt: finishedAt, failureReason: failure.message }, 'Error generando resumen diario');
   }
 }

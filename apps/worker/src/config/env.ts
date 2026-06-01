@@ -33,23 +33,28 @@ const envSchema = z.object({
   TELEGRAM_SEND_TIMEOUT_MS: z
     .string()
     .default("15000")
-    .transform(Number),
+    .transform(Number)
+    .pipe(z.number().int().min(1000)),
   TELEGRAM_MAX_RETRIES: z
     .string()
     .default("5")
-    .transform(Number),
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(10)),
   TELEGRAM_INITIAL_RETRY_DELAY_MS: z
     .string()
     .default("1500")
-    .transform(Number),
+    .transform(Number)
+    .pipe(z.number().int().min(100)),
   TELEGRAM_RETRY_BACKOFF_MULTIPLIER: z
     .string()
     .default("2")
-    .transform(Number),
+    .transform(Number)
+    .pipe(z.number().min(1)),
   TELEGRAM_MAX_RETRY_DELAY_MS: z
     .string()
     .default("10000")
-    .transform(Number),
+    .transform(Number)
+    .pipe(z.number().int().min(500)),
 
   // Playwright & Escudo
   PLAYWRIGHT_HEADLESS: z
@@ -177,7 +182,7 @@ const envSchema = z.object({
     .string()
     .default('false')
     .transform((v) => v === 'true'),
-  ALERT_MAX_PER_CYCLE: z.string().default('10').transform(Number),
+  ALERT_MAX_PER_CYCLE: z.string().default('25').transform(Number),
   DAILY_SUMMARY_MAX_ITEMS: z.string().default('40').transform(Number),
   DAILY_SUMMARY_EXCLUDE_OLD_CLOSED: z
     .string()
