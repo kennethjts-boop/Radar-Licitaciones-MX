@@ -11,6 +11,7 @@ import { buildSummaryData } from '../modules/alert-filter';
 import { healthTracker } from '../core/healthcheck';
 import { getConfig } from '../config/env';
 import { setState, STATE_KEYS } from '../core/system-state';
+import { TelegramError } from '../core/errors';
 
 const log = createModuleLogger('daily-summary-job');
 
@@ -25,9 +26,12 @@ function buildFailureReason(err: unknown): {
   const details = describeTelegramSendError(err);
 
   if (details.kind === 'unknown') {
+    // Fallback defensivo: algunos errores pueden venir serializados sin prototipo,
+    // por eso conservamos también la comparación por name.
+    const isTelegramError = err instanceof TelegramError || (err instanceof Error && err.name === 'TelegramError');
     return {
       message: baseMessage,
-      telegramRespondedError: /telegram/i.test(baseMessage),
+      telegramRespondedError: isTelegramError,
       telegramTimeout: false,
       telegramNetworkError: false,
       telegramApiError: false,

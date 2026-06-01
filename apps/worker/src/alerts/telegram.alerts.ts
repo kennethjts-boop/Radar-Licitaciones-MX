@@ -49,13 +49,19 @@ function toErrorSummary(err: unknown): string {
 }
 
 function getErrorCandidates(err: unknown): unknown[] {
+  let nestedErrors: unknown[] = [];
+
   if (err instanceof AggregateError) {
-    return [err, ...err.errors];
+    nestedErrors = err.errors;
+  } else if (
+    typeof err === "object" &&
+    err !== null &&
+    Array.isArray((err as { errors?: unknown[] }).errors)
+  ) {
+    nestedErrors = (err as { errors: unknown[] }).errors;
   }
-  if (typeof err === "object" && err !== null && Array.isArray((err as { errors?: unknown[] }).errors)) {
-    return [err, ...(err as { errors: unknown[] }).errors];
-  }
-  return [err];
+
+  return [err, ...nestedErrors];
 }
 
 function hasTimeoutSignal(text: string): boolean {
@@ -112,10 +118,11 @@ export function describeTelegramSendError(err: unknown): TelegramSendErrorDetail
     .join(" ")
     .toLowerCase();
 
-  if (hasTimeoutSignal(combinedText)) {
+  const hasTelegramApiMetadata = statusCode !== undefined || apiErrorCode !== undefined || code === "ETELEGRAM";
+  if (hasTelegramApiMetadata) {
     return {
-      kind: "timeout",
-      retryable: true,
+      kind: "api",
+      retryable: isRetryableTelegramApiStatus(statusCode, apiErrorCode),
       code,
       statusCode,
       apiErrorCode,
@@ -124,11 +131,10 @@ export function describeTelegramSendError(err: unknown): TelegramSendErrorDetail
     };
   }
 
-  const hasTelegramApiMetadata = statusCode !== undefined || apiErrorCode !== undefined || code === "ETELEGRAM";
-  if (hasTelegramApiMetadata) {
+  if (hasTimeoutSignal(combinedText)) {
     return {
-      kind: "api",
-      retryable: isRetryableTelegramApiStatus(statusCode, apiErrorCode),
+      kind: "timeout",
+      retryable: true,
       code,
       statusCode,
       apiErrorCode,
