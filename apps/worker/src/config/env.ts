@@ -1,7 +1,3 @@
-/**
- * CONFIG — Variables de entorno validadas con Zod.
- * Si falta alguna variable crítica, el proceso falla al arrancar.
- */
 import "dotenv/config";
 import { z } from "zod";
 import pino from "pino";
@@ -34,6 +30,26 @@ const envSchema = z.object({
   TELEGRAM_CHAT_ID: z
     .string()
     .min(1, { message: "TELEGRAM_CHAT_ID requerido" }),
+  TELEGRAM_SEND_TIMEOUT_MS: z
+    .string()
+    .default("15000")
+    .transform(Number),
+  TELEGRAM_MAX_RETRIES: z
+    .string()
+    .default("5")
+    .transform(Number),
+  TELEGRAM_INITIAL_RETRY_DELAY_MS: z
+    .string()
+    .default("1500")
+    .transform(Number),
+  TELEGRAM_RETRY_BACKOFF_MULTIPLIER: z
+    .string()
+    .default("2")
+    .transform(Number),
+  TELEGRAM_MAX_RETRY_DELAY_MS: z
+    .string()
+    .default("10000")
+    .transform(Number),
 
   // Playwright & Escudo
   PLAYWRIGHT_HEADLESS: z
@@ -161,7 +177,7 @@ const envSchema = z.object({
     .string()
     .default('false')
     .transform((v) => v === 'true'),
-  ALERT_MAX_PER_CYCLE: z.string().default('25').transform(Number),
+  ALERT_MAX_PER_CYCLE: z.string().default('10').transform(Number),
   DAILY_SUMMARY_MAX_ITEMS: z.string().default('40').transform(Number),
   DAILY_SUMMARY_EXCLUDE_OLD_CLOSED: z
     .string()
@@ -186,14 +202,15 @@ export function getConfig(): AppConfig {
   }
 
   _config = result.data;
-  // Log crítico usando pino directamente — sin pasar por getLogger() para evitar
-  // dependencia circular durante la inicialización.
   pino({ base: null, timestamp: pino.stdTimeFunctions.isoTime }).info(
     {
       COMPRASMX_SEED_URL: result.data.COMPRASMX_SEED_URL,
       ENABLE_EXTERNAL_LEADS_OSINT: result.data.ENABLE_EXTERNAL_LEADS_OSINT,
       NODE_ENV: result.data.NODE_ENV,
       RAILWAY_ENVIRONMENT: result.data.RAILWAY_ENVIRONMENT ?? "local",
+      TELEGRAM_SEND_TIMEOUT_MS: result.data.TELEGRAM_SEND_TIMEOUT_MS,
+      TELEGRAM_MAX_RETRIES: result.data.TELEGRAM_MAX_RETRIES,
+      ALERT_MAX_PER_CYCLE: result.data.ALERT_MAX_PER_CYCLE,
     },
     "[CONFIG] variables de entorno cargadas",
   );
