@@ -6,9 +6,10 @@
  * 2. Cargar y validar config (Zod → crash si falta variable)
  * 3. Registrar signal handlers
  * 4. Bootstrap: verificar Supabase + Telegram + system_state
- * 5. Inicializar bot de comandos Telegram (polling)
- * 6. Iniciar scheduler (30 min + daily summary)
- * 7. Worker en espera activa
+ * 5. Registrar notificador de errores a Telegram
+ * 6. Inicializar bot de comandos Telegram (polling)
+ * 7. Iniciar scheduler (30 min + daily summary)
+ * 8. Worker en espera activa
  */
 import { getConfig } from "./config/env";
 import { getLogger } from "./core/logger";
@@ -19,6 +20,8 @@ import { initCommandBot } from "./agent/telegram.commands";
 import { setComprasMxSourceId } from "./jobs/collect.job";
 import { runMaestrosScraper } from "./scripts/maestros-morelos";
 import { startHttpServer } from "./core/http-server";
+import { registerErrorNotifier } from "./core/error-notifier";
+import { sendTelegramMessage } from "./alerts/telegram.alerts";
 
 async function main(): Promise<void> {
   // ── 1. Configuración y logger ─────────────────────────────────────────────
@@ -68,16 +71,42 @@ async function main(): Promise<void> {
 
   process.on("uncaughtException", (err) => {
     log.fatal({ err }, "💥 uncaughtException — el proceso se cerrará");
-    process.exit(1);
+    // Intentar notificar a Telegram antes de salir; withTimeout en sendTelegramMessage
+    // garantiza que no se cuelgue — el proceso sale de todas formas al finalizar.
+    const msg = [
+      "💥 <b>[FATAL] uncaughtException</b>",
+      "",
+      `📌 ${escapeHtml(err.message)}`,
+      err.stack ? `<pre>${escapeHtml(err.stack.split("\n").slice(0, 4).join("\n"))}</pre>` : "",
+    ].join("\n");
+    sendTelegramMessage(msg, "HTML")
+      .catch(() => {})
+      .finally(() => process.exit(1));
   });
 
   process.on("unhandledRejection", (reason) => {
     log.error({ reason }, "⚠️ unhandledRejection — revisar promesas");
+    // log.error dispara el stream → el error-notifier lo enviará a Telegram
+    // automáticamente si el notificador ya está registrado (post-bootstrap).
   });
 
   // ── 3. Bootstrap: DB + Telegram + system_state ────────────────────────────
   log.info("🔧 Iniciando bootstrap de servicios...");
   const bootResult = await bootstrap();
+
+  // ── 4. Registrar notificador de errores a Telegram ────────────────────────
+  // A partir de aquí, cualquier log.error() o log.fatal() en cualquier módulo
+  // enviará automáticamente un mensaje a Telegram con el error exacto.
+  if (bootResult.telegramOk) {
+    registerErrorNotifier((text) => {
+      sendTelegramMessage(text, "HTML").catch(() => {
+        // silencioso: no queremos un bucle de errores si Telegram falla
+      });
+    });
+    log.info("🔔 Notificador de errores Telegram registrado");
+  } else {
+    log.warn("⚠️ Notificador de errores no registrado — Telegram no disponible");
+  }
 
   // Propagar sourceId al heartbeat job para evitar queries repetidas
   if (bootResult.sourceId) {
@@ -92,7 +121,7 @@ async function main(): Promise<void> {
     );
   }
 
-  // ── 4. Bot de comandos Telegram ───────────────────────────────────────────
+  // ── 5. Bot de comandos Telegram ───────────────────────────────────────────
   if (bootResult.telegramOk) {
     try {
       await initCommandBot();
@@ -104,7 +133,7 @@ async function main(): Promise<void> {
     log.warn("⚠️ Bot Telegram desactivado — Telegram no disponible");
   }
 
-  // ── 5. FORCE_COLLECT: ciclo inmediato pre-scheduler ──────────────────────
+  // ── 6. FORCE_COLLECT: ciclo inmediato pre-scheduler ──────────────────────
   if (process.env.FORCE_COLLECT === "true") {
     log.info("⚡ FORCE_COLLECT=true — ejecutando ciclo de colección inmediato...");
     try {
@@ -116,23 +145,31 @@ async function main(): Promise<void> {
     }
   }
 
-  // ── 6. HTTP Server ────────────────────────────────────────────────────────
+  // ── 7. HTTP Server ────────────────────────────────────────────────────────
   startHttpServer();
 
-  // ── 7. Scheduler ──────────────────────────────────────────────────────────
+  // ── 8. Scheduler ──────────────────────────────────────────────────────────
   startScheduler();
   log.info("✅ Scheduler iniciado");
 
-  // ── 8. Resumen de arranque ────────────────────────────────────────────────
+  // ── 9. Resumen de arranque ────────────────────────────────────────────────
   log.info(
     {
       supabase: bootResult.supabaseOk ? "ok" : "down",
       telegram: bootResult.telegramOk ? "ok" : "down",
       bot: bootResult.botUsername ?? "N/A",
       sourceId: bootResult.sourceId ?? "pendiente",
+      errorNotifier: bootResult.telegramOk ? "active" : "disabled",
     },
     "✅ Worker activo — esperando ciclos",
   );
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 main().catch((err) => {
