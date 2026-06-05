@@ -144,7 +144,11 @@ INSTRUCCIONES:
 - Calcula score_oportunidad y probabilidad_ganar de forma coherente con los datos.
 - Si el monto no está especificado, no inventes una cifra.`;
 
-    // Llamar a OpenAI
+    // Llamar a OpenRouter
+    const openAiResponse = await fetch(OPENROUTER_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
         "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
         "HTTP-Referer": "https://radar-licitaciones.mx",
         "X-Title": "Radar Licitaciones MX",
