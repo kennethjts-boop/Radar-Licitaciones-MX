@@ -14,17 +14,22 @@
  * RESUMEN DIARIO
  *   Corre una vez al día a DAILY_SUMMARY_HOUR.
  *   Genera y envía el resumen operativo por Telegram.
+ *
+ * CATCH-UP DE RESUMEN
+ *   Si el worker reinicia después de DAILY_SUMMARY_HOUR en un día hábil y el
+ *   resumen no fue enviado ese día, lo dispara automáticamente al arrancar.
  */
 import cron from "node-cron";
 import { createModuleLogger } from "../core/logger";
 import { getConfig } from "../config/env";
-import { recordSchedulerStarted } from "../core/system-state";
+import { recordSchedulerStarted, getState, STATE_KEYS } from "../core/system-state";
 import { runCollectJob, runRecheckJob, type CollectJobResult } from "./collect.job";
 import { runDailySummaryJob } from "./daily-summary.job";
 import { comprasMxCB } from "../core/circuit-breaker";
 import { sendTelegramMessage } from "../alerts/telegram.alerts";
 import { healthTracker } from "../core/healthcheck";
 import { runExternalLeadsOsintJob } from "../modules/external-opportunity-discovery";
+import { nowInMexico, todayMexicoStr } from "../core/time";
 
 const log = createModuleLogger("scheduler");
 
@@ -144,6 +149,49 @@ async function scheduledCollect(baseIntervalMs: number): Promise<void> {
   setTimeout(() => scheduledCollect(baseIntervalMs), nextDelay);
 }
 
+/**
+ * Catch-up del resumen diario.
+ *
+ * Si el worker reinicia después de DAILY_SUMMARY_HOUR en un día hábil
+ * (lunes–viernes) y el resumen no fue enviado exitosamente hoy, lo dispara
+ * de inmediato en lugar de esperar hasta mañana.
+ */
+async function catchUpDailySummaryIfMissed(summaryHour: number): Promise<void> {
+  try {
+    const now = nowInMexico();
+    const dayOfWeek = now.getDay(); // 0=Dom, 1=Lun … 5=Vie, 6=Sáb
+    const currentHour = now.getHours();
+
+    // Solo en días hábiles y una vez que ya pasó la hora del resumen
+    if (dayOfWeek < 1 || dayOfWeek > 5 || currentHour < summaryHour) return;
+
+    const today = todayMexicoStr();
+    const last = await getState<{ summaryDate?: string; status?: string }>(
+      STATE_KEYS.LAST_DAILY_SUMMARY,
+    );
+
+    if (last?.summaryDate === today && last?.status === "success") {
+      log.info({ today }, "✅ Catch-up: resumen diario ya enviado hoy — omitiendo");
+      return;
+    }
+
+    log.info(
+      {
+        today,
+        lastSummaryDate: last?.summaryDate ?? "nunca",
+        lastStatus: last?.status ?? "unknown",
+        currentHour,
+        summaryHour,
+      },
+      "⚡ Catch-up: resumen diario no enviado hoy — disparando ahora...",
+    );
+
+    await runDailySummaryJob();
+  } catch (err) {
+    log.error({ err }, "❌ Error en catch-up de resumen diario");
+  }
+}
+
 export function startScheduler(): void {
   healthTracker.setSchedulerStatus("active");
 
@@ -196,6 +244,10 @@ export function startScheduler(): void {
     log.warn({ err }, "No se pudo registrar scheduler en system_state"),
   );
 
+  // ── CATCH-UP: Resumen diario perdido por restart ───────────────────────────
+  // Espera 15s para asegurar que bootstrap haya terminado y la DB esté lista.
+  setTimeout(() => catchUpDailySummaryIfMissed(summaryHour), 15_000);
+
   // Primer ciclo inmediato post-deploy — 10 s para que bootstrap termine
   setTimeout(async () => {
     log.info("🚀 Ejecutando primer ciclo inmediato post-deploy...");
@@ -234,6 +286,7 @@ export function startScheduler(): void {
         hour: recheckHour,
       },
       summary: { cron: summaryCron, hour: summaryHour },
+      catchUp: "Resumen diario: catch-up automático al arrancar si fue omitido",
     },
     `✅ Scheduler iniciado — Modo 1 ~${intervalMinutes} min ±3 min, Modo 2 a las ${recheckHour}:00, Resumen a las ${summaryHour}:00`,
   );
