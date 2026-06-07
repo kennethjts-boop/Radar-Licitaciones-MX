@@ -55,11 +55,19 @@ const envSchema = z.object({
     .default("10000")
     .transform(Number)
     .pipe(z.number().int().min(500)),
+  TELEGRAM_COMMAND_BOT_ENABLED: z
+    .string()
+    .default("true")
+    .transform((v) => v === "true"),
 
   // Playwright & Escudo
   PLAYWRIGHT_HEADLESS: z
     .string()
     .default("true")
+    .transform((v) => v === "true"),
+  PLAYWRIGHT_IGNORE_HTTPS_ERRORS: z
+    .string()
+    .default("false")
     .transform((v) => v === "true"),
   // PROXY_ENABLED: si es false, el browser corre sin proxy aunque HTTP_PROXY/HTTPS_PROXY existan.
   PROXY_ENABLED: z
@@ -215,6 +223,8 @@ export function getConfig(): AppConfig {
       RAILWAY_ENVIRONMENT: result.data.RAILWAY_ENVIRONMENT ?? "local",
       TELEGRAM_SEND_TIMEOUT_MS: result.data.TELEGRAM_SEND_TIMEOUT_MS,
       TELEGRAM_MAX_RETRIES: result.data.TELEGRAM_MAX_RETRIES,
+      TELEGRAM_COMMAND_BOT_ENABLED: result.data.TELEGRAM_COMMAND_BOT_ENABLED,
+      PLAYWRIGHT_IGNORE_HTTPS_ERRORS: result.data.PLAYWRIGHT_IGNORE_HTTPS_ERRORS,
       ALERT_MAX_PER_CYCLE: result.data.ALERT_MAX_PER_CYCLE,
     },
     "[CONFIG] variables de entorno cargadas",

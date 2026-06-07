@@ -41,6 +41,7 @@ export interface BootstrapResult {
   schemaValid: boolean;
   tablesFound: number;
   tablesMissing: string[];
+  columnsMissing: Record<string, string[]>;
   telegramOk: boolean;
   botUsername: string | null;
   sourceId: string | null;
@@ -104,6 +105,7 @@ async function validateSchema(): Promise<{
   valid: boolean;
   tablesFound: number;
   tablesMissing: string[];
+  columnsMissing: Record<string, string[]>;
 }> {
   log.info("Validating database schema...");
 
@@ -113,14 +115,16 @@ async function validateSchema(): Promise<{
       valid: true,
       tablesFound: result.tablesFound.length,
       tablesMissing: [],
+      columnsMissing: {},
     };
   } catch (err) {
     if (err instanceof SchemaValidationError) {
       // El error ya tiene el log de error dentro de verifyDatabaseSchema()
       return {
         valid: false,
-        tablesFound: REQUIRED_TABLES.length - err.missing.length,
+        tablesFound: err.found,
         tablesMissing: err.missing,
+        columnsMissing: err.columnsMissing,
       };
     }
     // Error inesperado durante validación
@@ -130,6 +134,7 @@ async function validateSchema(): Promise<{
       valid: false,
       tablesFound: 0,
       tablesMissing: [...REQUIRED_TABLES],
+      columnsMissing: {},
     };
   }
 }
@@ -171,7 +176,12 @@ async function sendBootMessage(
 
     const schemaLine = result.schemaValid
       ? `🧱 Schema: ✅ Validado (${result.tablesFound} / ${REQUIRED_TABLES.length} tablas)`
-      : `🧱 Schema: ❌ INCOMPLETO — faltan: [${result.tablesMissing.join(", ")}]`;
+      : `🧱 Schema: ❌ INCOMPLETO — faltan: [${[
+          ...result.tablesMissing,
+          ...Object.entries(result.columnsMissing).map(
+            ([table, columns]) => `${table}.${columns.join("|")}`,
+          ),
+        ].join(", ")}]`;
 
     const tgLine = result.telegramOk
       ? `📨 Bot: ✅ @${result.botUsername}`
@@ -240,6 +250,7 @@ export async function bootstrap(): Promise<BootstrapResult> {
     valid: schemaValid,
     tablesFound,
     tablesMissing,
+    columnsMissing,
   } = await validateSchema();
 
   if (!schemaValid) {
@@ -255,12 +266,14 @@ export async function bootstrap(): Promise<BootstrapResult> {
       {
         tablesFound,
         tablesMissing,
+        columnsMissing,
         totalRequired: REQUIRED_TABLES.length,
       },
       [
         "FATAL: DATABASE SCHEMA NOT INITIALIZED",
         `Tables found: ${tablesFound} / ${REQUIRED_TABLES.length}`,
         `Missing: [${tablesMissing.join(", ")}]`,
+        `Missing columns: ${JSON.stringify(columnsMissing)}`,
         "Fix: Run docs/supabase-schema.sql in Supabase SQL Editor",
         "URL: https://supabase.com → Your project → SQL Editor → New query → paste file → Run",
       ].join("\n"),
@@ -270,6 +283,7 @@ export async function bootstrap(): Promise<BootstrapResult> {
       tablesMissing,
       tablesFound,
       REQUIRED_TABLES.length,
+      columnsMissing,
     );
   }
 
@@ -290,6 +304,7 @@ export async function bootstrap(): Promise<BootstrapResult> {
     schemaValid,
     tablesFound,
     tablesMissing,
+    columnsMissing,
     telegramOk,
     botUsername,
     sourceId,

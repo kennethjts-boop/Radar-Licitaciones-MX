@@ -27,7 +27,10 @@ export class BrowserManager {
 
     const config = getConfig();
     log.info(
-      { headless: config.PLAYWRIGHT_HEADLESS },
+      {
+        headless: config.PLAYWRIGHT_HEADLESS,
+        ignoreHTTPSErrors: config.PLAYWRIGHT_IGNORE_HTTPS_ERRORS,
+      },
       "🚀 Launching Chromium browser...",
     );
 
@@ -94,6 +97,7 @@ export class BrowserManager {
       timezoneId: "America/Mexico_City",
       javaScriptEnabled: true,
       bypassCSP: true,
+      ignoreHTTPSErrors: config.PLAYWRIGHT_IGNORE_HTTPS_ERRORS,
       extraHTTPHeaders: {
         "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
         "Cache-Control": "no-cache",
