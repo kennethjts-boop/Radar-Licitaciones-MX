@@ -820,6 +820,27 @@ export async function runCollectJob(): Promise<CollectJobResult> {
       await recordCurrentHealthcheck();
 
       log.info(cycleMetrics, '[alert-filter] métricas del ciclo');
+      if (config.RADAR_DEBUG_CANDIDATES) {
+        log.info(
+          {
+            commercialMatching: {
+              totalReviewed: commercialTelemetry.totalReviewed,
+              rawResultsReceived: commercialTelemetry.rawResultsReceived,
+              recordsWithSufficientText: commercialTelemetry.recordsWithSufficientText,
+              discardedByMissingText: commercialTelemetry.discardedByMissingText,
+              commercialCandidates: commercialTelemetry.commercialCandidates,
+              matchedProfiles: commercialTelemetry.matchedProfiles,
+              discardedByNoTerritory: commercialTelemetry.discardedByNoTerritory,
+              discardedByKeyword: commercialTelemetry.discardedByKeyword,
+              discardedByNegativeKeyword: commercialTelemetry.discardedByNegativeKeyword,
+              discardedByLowScore: commercialTelemetry.discardedByLowScore,
+              topMatchedCandidates: commercialTelemetry.topMatchedCandidates,
+              topDiscardedCandidates: commercialTelemetry.topDiscardedCandidates,
+            },
+          },
+          "RADAR_DEBUG_CANDIDATES commercial matching diagnostics",
+        );
+      }
       log.info(
         {
           mode: "listing_scan",

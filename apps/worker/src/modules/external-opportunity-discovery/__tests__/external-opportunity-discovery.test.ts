@@ -298,6 +298,51 @@ describe("external-opportunity-discovery scoring and contacts", () => {
     expect(result.confidence).toBe("LOW");
   });
 
+  it("sube score para licitación de construcción/mantenimiento con evidencia oficial", () => {
+    const result = scoreExternalLead(
+      makeCandidate({
+        title: "Municipio licita mantenimiento y rehabilitación de edificios públicos",
+        vertical: "construccion_mantenimiento",
+        matchedKeywords: ["mantenimiento", "rehabilitación", "edificios públicos"],
+        evidenceText:
+          "Convocatoria pública para licitación de obra pública, mantenimiento, rehabilitación y construcción de infraestructura municipal en Morelos.",
+        opportunityType: "licitacion",
+        organizationName: "Ayuntamiento de Cuernavaca",
+        state: "Morelos",
+        municipality: "Cuernavaca",
+        isOfficialSource: true,
+        buyerAreaIdentified: true,
+      }),
+      180,
+    );
+
+    expect(result.score).toBeGreaterThanOrEqual(60);
+    expect(result.confidence).not.toBe("LOW");
+    expect(result.scoreBreakdown.procurementIntentScore).toBeGreaterThan(0);
+  });
+
+  it("descarta nota social o médica institucional sin oportunidad comercial", () => {
+    const result = scoreExternalLead(
+      makeCandidate({
+        title: "IMSS informa bebé nacido y jornada médica para pacientes",
+        matchedKeywords: ["mantenimiento"],
+        evidenceText:
+          "Comunicado social del IMSS sobre bebé nacido, cirugía, jornada médica, pacientes y salud preventiva.",
+        opportunityType: "senal_comercial_publica",
+        amountVisible: false,
+        buyerAreaIdentified: false,
+        contactArea: null,
+        isOfficialSource: true,
+      }),
+      180,
+    );
+
+    expect(result.score).toBeLessThan(45);
+    expect(result.confidence).toBe("LOW");
+    expect(result.scoreBreakdown.negativePenalty).toBeGreaterThan(0);
+    expect(result.scoreReasons.join(" ")).toContain("institutional noise");
+  });
+
   it("redacta correos y teléfonos antes de persistir evidencia", () => {
     expect(
       redactSensitivePublicData(
@@ -336,6 +381,7 @@ describe("external-opportunity-discovery job hardening", () => {
     saveLowScoreCandidates: false,
     maxRawResultsPerSource: 50,
     sourceTimeoutMs: 15000,
+    debugCandidates: false,
   };
 
   it("dry-run no guarda ni alerta", async () => {
@@ -471,7 +517,84 @@ describe("external-opportunity-discovery job hardening", () => {
     );
 
     expect(result.skippedLowScore).toBe(1);
+    expect(result.topDiscardedCandidates[0]?.scoreBreakdown).toBeDefined();
+    expect(result.topDiscardedCandidates[0]?.minScore).toBe(baseOptions.minScore);
     expect(upsertLead).not.toHaveBeenCalled();
+  });
+
+  it("RADAR_DEBUG_CANDIDATES no envía alertas extra para descartados", async () => {
+    const sendAlert = jest.fn();
+    const lowCandidate = makeCandidate({
+      opportunityType: "senal_comercial_publica",
+      matchedKeywords: ["aceite"],
+      evidenceText: "bebé nacido y jornada médica sin contrato vigente",
+      amountVisible: false,
+      buyerAreaIdentified: false,
+      contactArea: null,
+      isOfficialSource: true,
+    });
+
+    const result = await runExternalLeadsOsintJob(
+      { ...baseOptions, dryRun: false, debugCandidates: true },
+      {
+        discoverCandidates: async () => ({
+          candidates: [lowCandidate],
+          errors: [],
+          errorsBySource: {},
+          sourcesReviewed: 1,
+        }),
+        sendAlert,
+        recordState: async () => {},
+      },
+    );
+
+    expect(result.skippedLowScore).toBe(1);
+    expect(result.alerted).toBe(0);
+    expect(sendAlert).not.toHaveBeenCalled();
+  });
+
+  it("EXTERNAL_LEADS_SAVE_LOW_SCORE_CANDIDATES guarda diagnóstico sin mandar Telegram", async () => {
+    const upsertLead = jest.fn(async () => ({ id: "lead-low", isNew: true }));
+    const sendAlert = jest.fn();
+    const lowCandidate = makeCandidate({
+      opportunityType: "senal_comercial_publica",
+      state: null,
+      municipality: null,
+      matchedKeywords: ["aceite"],
+      evidenceText: "Mención pública genérica de aceite sin licitación ni contrato",
+      amountVisible: false,
+      buyerAreaIdentified: false,
+      contactArea: null,
+      isOfficialSource: false,
+    });
+
+    const result = await runExternalLeadsOsintJob(
+      {
+        ...baseOptions,
+        dryRun: false,
+        saveLowScoreCandidates: true,
+        telegramEnabled: true,
+      },
+      {
+        discoverCandidates: async () => ({
+          candidates: [lowCandidate],
+          errors: [],
+          errorsBySource: {},
+          sourcesReviewed: 1,
+        }),
+        upsertLead,
+        sendAlert,
+        recordState: async () => {},
+      },
+    );
+
+    expect(result.skippedLowScore).toBe(1);
+    expect(result.saved).toBe(1);
+    expect(upsertLead).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "diagnostic_low_score" }),
+    );
+    expect(result.alerted).toBe(0);
+    expect(sendAlert).not.toHaveBeenCalled();
   });
 
   it("lead sin source_url se descarta", async () => {

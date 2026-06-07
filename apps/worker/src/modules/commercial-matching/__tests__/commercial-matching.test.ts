@@ -1,4 +1,8 @@
 import { matchCommercialOpportunity } from "..";
+import {
+  createCommercialMatchingTelemetry,
+  recordCommercialMatchTelemetry,
+} from "../telemetry";
 
 function match(title: string, overrides = {}) {
   return matchCommercialOpportunity({
@@ -210,5 +214,34 @@ describe("commercial opportunity matching", () => {
     const hmMatch = result.matchedProfiles.find(p => p.profileId === "hm_highmil_lubricants");
     expect(hmMatch).toBeDefined();
     expect(hmMatch?.score).toBeGreaterThanOrEqual(60);
+  });
+
+  it("telemetría registra candidato descartado por territorio sin ocultarlo como cero candidatos", () => {
+    const input = {
+      title: "Suministro de anticongelantes para parque vehicular federal",
+      description: "Convocatoria para suministro de anticongelantes y lubricantes",
+      buyerName: "Dependencia federal",
+      dependency: "Dependencia federal",
+      unit: "Adquisiciones",
+      source: "comprasmx",
+      sourceUrl: "https://comprasmx.buengobierno.gob.mx/sitiopublico/#/",
+      publicationDate: new Date().toISOString(),
+      state: "Puebla",
+      municipality: null,
+      fullText: "Suministro de anticongelantes para parque vehicular federal en Puebla",
+    };
+    const result = matchCommercialOpportunity(input, {
+      minScore: 60,
+      requireTerritory: true,
+    });
+    const telemetry = createCommercialMatchingTelemetry(1);
+
+    recordCommercialMatchTelemetry(telemetry, input, result);
+
+    expect(result.shouldAlert).toBe(false);
+    expect(telemetry.recordsWithSufficientText).toBe(1);
+    expect(telemetry.commercialCandidates).toBe(1);
+    expect(telemetry.discardedByNoTerritory).toBe(1);
+    expect(telemetry.topDiscardedCandidates[0]?.matchedKeywords).toContain("anticongelantes");
   });
 });

@@ -10,6 +10,10 @@ const envSchema = z.object({
   LOG_LEVEL: z
     .enum(["trace", "debug", "info", "warn", "error", "fatal"])
     .default("info"),
+  RADAR_DEBUG_CANDIDATES: z
+    .string()
+    .default("false")
+    .transform((v) => v === "true"),
 
   // Supabase
   SUPABASE_URL: z
@@ -219,6 +223,7 @@ export function getConfig(): AppConfig {
     {
       COMPRASMX_SEED_URL: result.data.COMPRASMX_SEED_URL,
       ENABLE_EXTERNAL_LEADS_OSINT: result.data.ENABLE_EXTERNAL_LEADS_OSINT,
+      RADAR_DEBUG_CANDIDATES: result.data.RADAR_DEBUG_CANDIDATES,
       NODE_ENV: result.data.NODE_ENV,
       RAILWAY_ENVIRONMENT: result.data.RAILWAY_ENVIRONMENT ?? "local",
       TELEGRAM_SEND_TIMEOUT_MS: result.data.TELEGRAM_SEND_TIMEOUT_MS,

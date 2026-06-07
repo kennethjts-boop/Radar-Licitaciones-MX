@@ -14,6 +14,7 @@ import type {
   ExternalLeadCandidate,
   ExternalLeadDiscardReason,
   ExternalLeadDiscardedCandidate,
+  ExternalLeadScoreBreakdown,
   ExternalOpportunityType,
   PublicContactFields,
 } from "./types";
@@ -383,7 +384,11 @@ export function buildDiscardedCandidateSummary(
   > & {
     reasons: ExternalLeadDiscardReason[];
     estimatedScore?: number | null;
+    minScore?: number | null;
     confidence?: ExternalLeadDiscardedCandidate["confidence"];
+    scoreBreakdown?: ExternalLeadScoreBreakdown | null;
+    scoreReasons?: string[];
+    exactReason?: string | null;
   },
 ): ExternalLeadDiscardedCandidate {
   return {
@@ -397,7 +402,11 @@ export function buildDiscardedCandidateSummary(
     matchedKeywords: candidate.matchedKeywords.slice(0, 8),
     reasons: candidate.reasons,
     estimatedScore: candidate.estimatedScore ?? null,
+    minScore: candidate.minScore ?? null,
     confidence: candidate.confidence ?? null,
+    scoreBreakdown: candidate.scoreBreakdown ?? null,
+    scoreReasons: candidate.scoreReasons ?? [],
+    exactReason: candidate.exactReason ?? candidate.reasons.join(", "),
     sourcePublishedAt: candidate.sourcePublishedAt,
   };
 }

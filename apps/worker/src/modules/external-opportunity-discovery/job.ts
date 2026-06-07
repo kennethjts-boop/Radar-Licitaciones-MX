@@ -20,6 +20,7 @@ import {
 import type {
   ExternalLeadCandidate,
   ExternalLeadDiscardedCandidate,
+  ExternalLeadErrorSummary,
   ExternalLeadRunOptions,
   ExternalLeadRunResult,
   ExternalLeadSourceQueryResult,
@@ -72,6 +73,7 @@ export function getExternalLeadRunOptions(): ExternalLeadRunOptions {
     saveLowScoreCandidates: config.EXTERNAL_LEADS_SAVE_LOW_SCORE_CANDIDATES,
     maxRawResultsPerSource: config.EXTERNAL_LEADS_MAX_RAW_RESULTS_PER_SOURCE,
     sourceTimeoutMs: config.EXTERNAL_LEADS_SOURCE_TIMEOUT_MS,
+    debugCandidates: config.RADAR_DEBUG_CANDIDATES,
   };
 }
 
@@ -100,6 +102,7 @@ async function recordExternalLeadRunState(
     discardedByMissingSourceUrl: result.discardedByMissingSourceUrl,
     discardedByMissingEvidence: result.discardedByMissingEvidence,
     topDiscardedCandidates: result.topDiscardedCandidates,
+    topErrors: result.topErrors,
     errors: result.errors,
   });
 
@@ -135,6 +138,7 @@ async function recordExternalLeadRunState(
     discardedByMissingSourceUrl: result.discardedByMissingSourceUrl,
     discardedByMissingEvidence: result.discardedByMissingEvidence,
     topDiscardedCandidates: result.topDiscardedCandidates,
+    topErrors: result.topErrors,
     skippedLowScore: result.skippedLowScore,
     skippedMissingSourceUrl: result.skippedMissingSourceUrl,
     skippedMissingEvidence: result.skippedMissingEvidence,
@@ -180,7 +184,51 @@ function emptyResult(
     errors: [],
     errorsBySource: {},
     sourceQueries: [],
+    topErrors: [],
   };
+}
+
+function classifyExternalSourceError(
+  query: ExternalLeadSourceQueryResult,
+): ExternalLeadErrorSummary["errorType"] {
+  const message = (query.error ?? "").toLowerCase();
+  if (message.includes("timeout") || message.includes("timed out") || message.includes("etimedout")) {
+    return "timeout";
+  }
+  if (query.httpStatus && query.httpStatus >= 400) {
+    return "http_status";
+  }
+  if (message.includes("json") || message.includes("parse") || message.includes("xml")) {
+    return "parsing";
+  }
+  if (message.includes("normaliz")) {
+    return "normalization";
+  }
+  if (message.includes("sanitiz") || message.includes("sanitiz")) {
+    return "sanitization";
+  }
+  if (
+    message.includes("econn") ||
+    message.includes("enotfound") ||
+    message.includes("network") ||
+    message.includes("socket")
+  ) {
+    return "network";
+  }
+  return "unknown";
+}
+
+function topExternalErrors(sourceQueries: ExternalLeadSourceQueryResult[]): ExternalLeadErrorSummary[] {
+  return sourceQueries
+    .filter((query) => !query.ok && query.error)
+    .slice(0, 5)
+    .map((query) => ({
+      sourceName: query.sourceName,
+      sourceId: query.sourceId ?? null,
+      errorType: classifyExternalSourceError(query),
+      message: String(query.error ?? "error").replace(/\s+/g, " ").slice(0, 180),
+      httpStatus: query.httpStatus,
+    }));
 }
 
 export async function runExternalLeadsOsintJob(
@@ -260,7 +308,11 @@ export async function runExternalLeadsOsintJob(
             ...candidate,
             reasons: ["missing_source_url"],
             estimatedScore: lead.estimatedInterestScore,
+            minScore: options.minScore,
             confidence: lead.confidence,
+            scoreBreakdown: lead.scoreBreakdown,
+            scoreReasons: lead.scoreReasons,
+            exactReason: "missing_source_url",
           }),
         );
         log.info(
@@ -278,7 +330,11 @@ export async function runExternalLeadsOsintJob(
             ...candidate,
             reasons: ["missing_evidence", "evidence"],
             estimatedScore: lead.estimatedInterestScore,
+            minScore: options.minScore,
             confidence: lead.confidence,
+            scoreBreakdown: lead.scoreBreakdown,
+            scoreReasons: lead.scoreReasons,
+            exactReason: "missing_evidence",
           }),
         );
         log.info(
@@ -296,16 +352,24 @@ export async function runExternalLeadsOsintJob(
             ...candidate,
             reasons: ["score"],
             estimatedScore: lead.estimatedInterestScore,
+            minScore: options.minScore,
             confidence: lead.confidence,
+            scoreBreakdown: lead.scoreBreakdown,
+            scoreReasons: lead.scoreReasons,
+            exactReason: `score ${lead.estimatedInterestScore} below minScore ${options.minScore}; ${lead.scoreReasons?.[0] ?? "no primary reason"}`,
           }),
         );
         log.info(
           {
+            title: lead.title,
+            sourceName: lead.sourceName,
             sourceUrl: lead.sourceUrl,
             vertical: lead.vertical,
             score: lead.estimatedInterestScore,
             confidence: lead.confidence,
             minScore: options.minScore,
+            scoreBreakdown: lead.scoreBreakdown,
+            reason: `score ${lead.estimatedInterestScore} below minScore ${options.minScore}; ${lead.scoreReasons?.[0] ?? "no primary reason"}`,
           },
           "Lead OSINT descartado por score/confidence",
         );
@@ -314,7 +378,7 @@ export async function runExternalLeadsOsintJob(
           try {
             await (dependencies.upsertLead ?? upsertExternalLead)({
               ...lead,
-              status: "monitoring",
+              status: "diagnostic_low_score",
             });
             saved++;
           } catch (leadErr) {
@@ -386,6 +450,7 @@ export async function runExternalLeadsOsintJob(
     }
 
     const hasSuccessfulSource = sourceQueries.some((query) => query.ok);
+    const topErrors = topExternalErrors(sourceQueries);
     const result: ExternalLeadRunResult = {
       status: errors.length > 0 && !hasSuccessfulSource ? "error" : "success",
       dryRun: options.dryRun,
@@ -406,6 +471,7 @@ export async function runExternalLeadsOsintJob(
       discardedByMissingSourceUrl,
       discardedByMissingEvidence,
       topDiscardedCandidates: topDiscardedCandidates(discardedCandidates),
+      topErrors,
       skippedLowScore,
       skippedMissingSourceUrl,
       skippedMissingEvidence,
@@ -415,6 +481,15 @@ export async function runExternalLeadsOsintJob(
       errorsBySource,
       sourceQueries,
     };
+    if (options.debugCandidates) {
+      log.info(
+        {
+          topDiscardedCandidates: result.topDiscardedCandidates,
+          topErrors,
+        },
+        "RADAR_DEBUG_CANDIDATES external OSINT diagnostics",
+      );
+    }
     await recordState(result, options).catch((err) =>
       log.warn({ err }, "No se pudo registrar estado OSINT"),
     );
@@ -443,6 +518,7 @@ export async function runExternalLeadsOsintJob(
       discardedByMissingSourceUrl,
       discardedByMissingEvidence,
       topDiscardedCandidates: topDiscardedCandidates(discardedCandidates),
+      topErrors: topExternalErrors(sourceQueries),
       skippedLowScore,
       skippedMissingSourceUrl,
       skippedMissingEvidence,

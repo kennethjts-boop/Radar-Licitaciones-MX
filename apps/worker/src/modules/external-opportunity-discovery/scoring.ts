@@ -61,6 +61,63 @@ function hasAny(text: string, terms: string[]): boolean {
   return terms.some((term) => textContainsTerm(text, term));
 }
 
+export const PROCUREMENT_INTENT_TERMS = [
+  "convocatoria",
+  "licitacion",
+  "licitación",
+  "adjudicacion",
+  "adjudicación",
+  "contrato",
+  "fallo",
+  "bases",
+  "suministro",
+  "mantenimiento",
+  "obra publica",
+  "obra pública",
+  "servicio de limpieza",
+  "arrendamiento",
+  "construccion",
+  "construcción",
+  "rehabilitacion",
+  "rehabilitación",
+  "pavimentacion",
+  "pavimentación",
+  "equipamiento",
+  "publica bases",
+  "publicó bases",
+  "firma convenio para construccion",
+  "firma convenio para construcción",
+];
+
+export const INSTITUTIONAL_NOISE_TERMS = [
+  "bebe",
+  "bebé",
+  "bebe nacido",
+  "bebé nacido",
+  "cirugia",
+  "cirugía",
+  "jornada medica",
+  "jornada médica",
+  "reconstruccion mamaria",
+  "reconstrucción mamaria",
+  "bienvenida",
+  "pacientes",
+  "consulta medica",
+  "consulta médica",
+  "salud preventiva",
+  "vacunacion",
+  "vacunación",
+  "evento deportivo",
+  "cultura",
+  "ceremonia",
+  "entrega simbolica",
+  "entrega simbólica",
+  "reconocimiento",
+  "capacitacion interna",
+  "capacitación interna",
+  "comunicado social",
+];
+
 export function scoreExternalLead(
   candidate: ExternalLeadCandidate,
   lookbackDays: number,
@@ -75,6 +132,8 @@ export function scoreExternalLead(
     candidate.sourceUrl,
   ].join(" ");
   const normalizedText = text.toLowerCase();
+  const hasProcurementIntent = hasAny(normalizedText, PROCUREMENT_INTENT_TERMS);
+  const institutionalNoiseMatches = findMatchingTerms(normalizedText, INSTITUTIONAL_NOISE_TERMS);
 
   const distinctKeywords = new Set(candidate.matchedKeywords.map((term) => term.toLowerCase()));
   const keywordScore = Math.min(24, distinctKeywords.size * 6);
@@ -144,6 +203,11 @@ export function scoreExternalLead(
     reasons.push("opportunity: low competition or deserted signal");
   }
 
+  if (hasProcurementIntent && candidate.opportunityType === "senal_comercial_publica") {
+    opportunityScore += 8;
+    reasons.push("opportunity: procurement intent in public signal");
+  }
+
   let evidenceScore = 0;
   if (candidate.sourceUrl) evidenceScore += 4;
   if (candidate.evidenceText.trim().length >= 60) evidenceScore += 5;
@@ -179,6 +243,13 @@ export function scoreExternalLead(
     evidenceScore +
     urgencyScore;
 
+  let negativePenalty = 0;
+  if (institutionalNoiseMatches.length > 0) {
+    negativePenalty = hasProcurementIntent ? 12 : 30;
+    score -= negativePenalty;
+    reasons.push(`penalty: institutional noise (${institutionalNoiseMatches.slice(0, 3).join(", ")})`);
+  }
+
   if (!candidate.evidenceText.trim()) {
     score = Math.min(score, 35);
     reasons.push("penalty: missing evidence text");
@@ -205,6 +276,10 @@ export function scoreExternalLead(
     score = Math.min(score, 65);
     reasons.push("penalty: public signal cap");
   }
+  if (institutionalNoiseMatches.length > 0 && !hasProcurementIntent) {
+    score = Math.min(score, 24);
+    reasons.push("cap: institutional/social/medical note without procurement intent");
+  }
   if (candidate.opportunityType === "contrato_historico") {
     const hasStrongHistoricalEvidence =
       distinctKeywords.size >= 4 &&
@@ -223,12 +298,17 @@ export function scoreExternalLead(
   const finalScore = clampScore(score);
   const scoreBreakdown: ExternalLeadScoreBreakdown = {
     keywordScore,
+    recencyScore: freshnessScore,
     freshnessScore,
+    sourceQualityScore: sourceTrustScore,
     sourceTrustScore,
+    territoryScore: geographyScore,
     geographyScore,
+    procurementIntentScore: opportunityScore,
     opportunityScore,
     evidenceScore,
     urgencyScore,
+    negativePenalty,
     finalScore,
   };
 

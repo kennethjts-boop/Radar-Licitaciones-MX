@@ -95,12 +95,17 @@ export interface SanitizedExternalLead extends NormalizedExternalLead {
 
 export interface ExternalLeadScoreBreakdown {
   keywordScore: number;
+  recencyScore: number;
   freshnessScore: number;
+  sourceQualityScore: number;
   sourceTrustScore: number;
+  territoryScore: number;
   geographyScore: number;
+  procurementIntentScore: number;
   opportunityScore: number;
   evidenceScore: number;
   urgencyScore: number;
+  negativePenalty: number;
   finalScore: number;
 }
 
@@ -174,7 +179,7 @@ export interface ExternalLead extends PublicContactFields {
   opportunityType: ExternalOpportunityType;
   confidence: ExternalLeadConfidence;
   nextAction: string;
-  status: "new" | "alert_sent" | "monitoring" | "dismissed";
+  status: "new" | "alert_sent" | "monitoring" | "dismissed" | "diagnostic_low_score";
   fingerprintHash: string;
   amountVisible: boolean;
   amount?: number | null;
@@ -205,8 +210,20 @@ export interface ExternalLeadDiscardedCandidate {
   matchedKeywords: string[];
   reasons: ExternalLeadDiscardReason[];
   estimatedScore: number | null;
+  minScore?: number | null;
   confidence: ExternalLeadConfidence | null;
+  scoreBreakdown?: ExternalLeadScoreBreakdown | null;
+  scoreReasons?: string[];
+  exactReason?: string | null;
   sourcePublishedAt: string | null;
+}
+
+export interface ExternalLeadErrorSummary {
+  sourceName: string;
+  sourceId: string | null;
+  errorType: "timeout" | "http_status" | "parsing" | "normalization" | "sanitization" | "network" | "unknown";
+  message: string;
+  httpStatus: number | null;
 }
 
 export interface ExternalLeadCycleTelemetry {
@@ -226,6 +243,7 @@ export interface ExternalLeadCycleTelemetry {
   discardedByMissingSourceUrl: number;
   discardedByMissingEvidence: number;
   topDiscardedCandidates: ExternalLeadDiscardedCandidate[];
+  topErrors: ExternalLeadErrorSummary[];
   errors: string[];
 }
 
@@ -243,6 +261,7 @@ export interface ExternalLeadRunOptions {
   saveLowScoreCandidates: boolean;
   maxRawResultsPerSource: number;
   sourceTimeoutMs: number;
+  debugCandidates: boolean;
 }
 
 export interface ExternalLeadSourceQueryResult {
@@ -281,6 +300,7 @@ export interface ExternalLeadRunResult {
   discardedByMissingSourceUrl: number;
   discardedByMissingEvidence: number;
   topDiscardedCandidates: ExternalLeadDiscardedCandidate[];
+  topErrors: ExternalLeadErrorSummary[];
   skippedLowScore: number;
   skippedMissingSourceUrl: number;
   skippedMissingEvidence: number;

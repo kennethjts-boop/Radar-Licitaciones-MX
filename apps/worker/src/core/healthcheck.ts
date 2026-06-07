@@ -62,6 +62,7 @@ export interface HealthStatus {
     discardedByMissingSourceUrl: number;
     discardedByMissingEvidence: number;
     topDiscardedCandidates: unknown[];
+    topErrors: unknown[];
     errors: string[];
   };
   uptimeMs: number;
@@ -108,6 +109,7 @@ class HealthTracker {
     discardedByMissingSourceUrl: 0,
     discardedByMissingEvidence: 0,
     topDiscardedCandidates: [] as unknown[],
+    topErrors: [] as unknown[],
     errors: [] as string[],
   };
 
@@ -199,6 +201,7 @@ class HealthTracker {
     discardedByMissingSourceUrl: number;
     discardedByMissingEvidence: number;
     topDiscardedCandidates: unknown[];
+    topErrors?: unknown[];
     errors: string[];
   }): void {
     this.externalLeadsStatus = {
@@ -223,6 +226,7 @@ class HealthTracker {
       discardedByMissingSourceUrl: params.discardedByMissingSourceUrl,
       discardedByMissingEvidence: params.discardedByMissingEvidence,
       topDiscardedCandidates: params.topDiscardedCandidates,
+      topErrors: params.topErrors ?? [],
       errors: params.errors.slice(0, 10),
     };
     log.info(

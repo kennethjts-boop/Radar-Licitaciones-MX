@@ -55,6 +55,7 @@ const EMPTY_TELEMETRY: ExternalRunTelemetry = {
   discardedByMissingSourceUrl: 0,
   discardedByMissingEvidence: 0,
   topDiscardedCandidates: [],
+  topErrors: [],
   errors: [],
 };
 
@@ -62,6 +63,7 @@ export function emptyExternalRunTelemetry(): ExternalRunTelemetry {
   return {
     ...EMPTY_TELEMETRY,
     topDiscardedCandidates: [],
+    topErrors: [],
     errors: [],
   };
 }
@@ -116,6 +118,8 @@ function discardFromLead(
     matchedKeywords: string[];
     sourcePublishedAt: string | null;
     confidence?: ScoredExternalLead["confidence"];
+    scoreBreakdown?: ScoredExternalLead["scoreBreakdown"];
+    scoreReasons?: string[];
   },
   reasons: ExternalLeadDiscardReason[],
   score: number | null = null,
@@ -132,6 +136,9 @@ function discardFromLead(
     reasons,
     estimatedScore: score,
     confidence: lead.confidence ?? null,
+    scoreBreakdown: lead.scoreBreakdown ?? null,
+    scoreReasons: lead.scoreReasons ?? [],
+    exactReason: reasons.join(", "),
   });
 }
 

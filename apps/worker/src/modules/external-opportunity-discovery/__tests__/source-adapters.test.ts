@@ -174,7 +174,7 @@ describe("gob.mx / External OSINT Parser and Source Adapters", () => {
       expect(adjusted.reasons).toContain("press_release_weak_signal");
     });
 
-    it("should cap score at 65 for press release with strong tender signals", () => {
+    it("should keep press release score controlled for strong tender signals", () => {
       const adjusted = adjustPressReleaseScore(
         80,
         ["some_reason"],
@@ -183,7 +183,8 @@ describe("gob.mx / External OSINT Parser and Source Adapters", () => {
         "press_release",
       );
 
-      expect(adjusted.score).toBeLessThanOrEqual(65);
+      expect(adjusted.score).toBeGreaterThanOrEqual(60);
+      expect(adjusted.score).toBeLessThanOrEqual(72);
       expect(adjusted.reasons).toContain("official_procurement_signal");
       expect(adjusted.reasons).toContain("public_tender_evidence");
     });

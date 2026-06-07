@@ -10,6 +10,9 @@ import {
 } from "../commercial-profiles";
 import { matchCommercialOpportunity } from "../commercial-matching";
 import {
+  INSTITUTIONAL_NOISE_TERMS,
+} from "./scoring";
+import {
   buildExternalLeadFingerprint,
   canonicalizeExternalUrl,
   inferOpportunityType,
@@ -418,12 +421,12 @@ export function adjustPressReleaseScore(
   title: string,
   text: string,
   sourceType: string,
-): { score: number; reasons: string[] } {
+): { score: number; reasons: string[]; negativePenalty: number } {
   if (sourceType !== "press_release") {
-    return { score: commercialScore, reasons };
+    return { score: commercialScore, reasons, negativePenalty: 0 };
   }
   const textNorm = (title + " " + text).toLowerCase();
-  const strongTenderSignals = [
+  const strongPressReleaseSignals = [
     "licitacion",
     "licitación",
     "convocatoria",
@@ -433,27 +436,43 @@ export function adjustPressReleaseScore(
     "adquisición",
     "adjudicacion",
     "adjudicación",
-    "bases",
+    "contrato",
     "fallo",
+    "bases",
     "proveedor",
-    "invitacion",
-    "invitación",
-    "concurso",
-    "servicio requerido",
     "procedimiento",
+    "publica bases",
+    "publicó bases",
+    "anuncia obra",
+    "obra carretera",
+    "firma convenio para construccion",
+    "firma convenio para construcción",
+    "suministro",
   ];
-  const hasStrongSignal = strongTenderSignals.some((signal) => textNorm.includes(signal));
+  const hasStrongSignal = strongPressReleaseSignals.some((signal) => textNorm.includes(signal));
+  const noiseMatches = findMatchingTerms(textNorm, INSTITUTIONAL_NOISE_TERMS);
   const newReasons = [...reasons];
   let finalScore = commercialScore;
-  if (hasStrongSignal) {
-    finalScore = Math.min(finalScore, 65);
+  let negativePenalty = 0;
+
+  if (noiseMatches.length > 0 && !hasStrongSignal) {
+    negativePenalty = 30;
+    finalScore = Math.min(finalScore - negativePenalty, 24);
+    newReasons.push(`institutional_noise: ${noiseMatches.slice(0, 3).join(", ")}`);
+    newReasons.push("press_release_noise_without_procurement_intent");
+  } else if (noiseMatches.length > 0) {
+    negativePenalty = 12;
+    finalScore = Math.min(finalScore - negativePenalty, 45);
+    newReasons.push(`institutional_noise: ${noiseMatches.slice(0, 3).join(", ")}`);
+  } else if (hasStrongSignal && commercialScore >= 35) {
+    finalScore = Math.min(Math.max(finalScore + 12, 60), 72);
     if (!newReasons.includes("official_procurement_signal")) newReasons.push("official_procurement_signal");
     if (!newReasons.includes("public_tender_evidence")) newReasons.push("public_tender_evidence");
   } else {
     finalScore = Math.min(finalScore, 35);
     if (!newReasons.includes("press_release_weak_signal")) newReasons.push("press_release_weak_signal");
   }
-  return { score: finalScore, reasons: newReasons };
+  return { score: Math.max(0, finalScore), reasons: newReasons, negativePenalty };
 }
 
 export function normalizeRawItem(raw: RawExternalItem, profile: CommercialProfile): NormalizedExternalLead | null {
@@ -666,12 +685,17 @@ class HtmlSearchAdapter implements SourceAdapter {
       scoreReasons: adjusted.reasons,
       scoreBreakdown: {
         keywordScore: profileMatch?.keywordMatches.primary.length ? 30 : 0,
+        recencyScore: sanitized.sourcePublishedAt ? 8 : 2,
         freshnessScore: sanitized.sourcePublishedAt ? 8 : 2,
+        sourceQualityScore: sanitized.isOfficialSource ? 16 : 5,
         sourceTrustScore: sanitized.isOfficialSource ? 16 : 5,
+        territoryScore: profileMatch?.territoryMatched ? 18 : 0,
         geographyScore: profileMatch?.territoryMatched ? 18 : 0,
+        procurementIntentScore: profileMatch?.keywordMatches.strongContext.length ? 16 : 5,
         opportunityScore: profileMatch?.keywordMatches.strongContext.length ? 16 : 5,
         evidenceScore: sanitized.sourceUrl ? 10 : 0,
         urgencyScore: 0,
+        negativePenalty: adjusted.negativePenalty,
         finalScore: adjusted.score,
       },
       fingerprintHash: "",
@@ -765,12 +789,17 @@ class DisabledScaffoldAdapter implements SourceAdapter {
       scoreReasons: adjusted.reasons,
       scoreBreakdown: {
         keywordScore: 0,
+        recencyScore: sanitized.sourcePublishedAt ? 8 : 2,
         freshnessScore: sanitized.sourcePublishedAt ? 8 : 2,
+        sourceQualityScore: sanitized.isOfficialSource ? 16 : 5,
         sourceTrustScore: sanitized.isOfficialSource ? 16 : 5,
+        territoryScore: commercial.territoryMatched ? 18 : 0,
         geographyScore: commercial.territoryMatched ? 18 : 0,
+        procurementIntentScore: 0,
         opportunityScore: 0,
         evidenceScore: sanitized.sourceUrl ? 10 : 0,
         urgencyScore: 0,
+        negativePenalty: adjusted.negativePenalty,
         finalScore: adjusted.score,
       },
       fingerprintHash: "",
@@ -898,12 +927,17 @@ class RssSourceAdapter implements SourceAdapter {
       scoreReasons: adjusted.reasons,
       scoreBreakdown: {
         keywordScore: commercial.keywordMatches.length ? 30 : 0,
+        recencyScore: sanitized.sourcePublishedAt ? 8 : 2,
         freshnessScore: sanitized.sourcePublishedAt ? 8 : 2,
+        sourceQualityScore: sanitized.isOfficialSource ? 16 : 5,
         sourceTrustScore: sanitized.isOfficialSource ? 16 : 5,
+        territoryScore: commercial.territoryMatched ? 18 : 0,
         geographyScore: commercial.territoryMatched ? 18 : 0,
+        procurementIntentScore: commercial.scoreReasons.some((reason) => reason.includes("contratacion")) ? 16 : 5,
         opportunityScore: commercial.scoreReasons.some((reason) => reason.includes("contratacion")) ? 16 : 5,
         evidenceScore: sanitized.sourceUrl ? 10 : 0,
         urgencyScore: 0,
+        negativePenalty: adjusted.negativePenalty,
         finalScore: adjusted.score,
       },
       fingerprintHash: "",

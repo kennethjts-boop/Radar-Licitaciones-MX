@@ -19,6 +19,10 @@ LOG_LEVEL=info
 # Valores: trace | debug | info | warn | error | fatal
 # Usar 'debug' en desarrollo, 'info' en producción
 
+RADAR_DEBUG_CANDIDATES=false
+# Diagnóstico controlado. Si es true, agrega detalle de candidatos descartados
+# en logs y /debug_resumen. No envía alertas extra ni guarda basura como lead real.
+
 # ── Supabase ─────────────────────────────────────────────────────────────────
 SUPABASE_URL=https://XXXXXXXXXXXXXXXX.supabase.co
 # Obtener de: Supabase Dashboard → Project Settings → API → Project URL
@@ -117,7 +121,8 @@ EXTERNAL_LEADS_DEBUG_DISCARDS=true
 # Incluye topDiscardedCandidates sanitizados en system_state y healthcheck.
 
 EXTERNAL_LEADS_SAVE_LOW_SCORE_CANDIDATES=false
-# Si es false, los candidatos debajo del score mínimo no se guardan.
+# Si es true, guarda candidatos debajo del score mínimo como diagnostic_low_score.
+# No envía Telegram ni los cuenta como alertas reales.
 
 EXTERNAL_LEADS_MAX_RAW_RESULTS_PER_SOURCE=50
 # Límite de resultados crudos por adapter/fuente por ciclo.
@@ -153,6 +158,7 @@ RAILWAY_ENVIRONMENT=production
 ```env
 NODE_ENV=development
 LOG_LEVEL=info
+RADAR_DEBUG_CANDIDATES=false
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 TELEGRAM_BOT_TOKEN=

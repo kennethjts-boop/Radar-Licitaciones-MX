@@ -12,11 +12,14 @@ export interface CommercialTelemetryCandidate {
   publicUrl: string | null;
   profile: string | null;
   territory: string | null;
+  matchedKeywords: string[];
 }
 
 export interface CommercialMatchingTelemetry {
   totalReviewed: number;
   rawResultsReceived: number;
+  recordsWithSufficientText: number;
+  discardedByMissingText: number;
   commercialCandidates: number;
   matchedProfiles: number;
   discardedByNoTerritory: number;
@@ -43,6 +46,8 @@ export function createCommercialMatchingTelemetry(
   return {
     totalReviewed: 0,
     rawResultsReceived,
+    recordsWithSufficientText: 0,
+    discardedByMissingText: 0,
     commercialCandidates: 0,
     matchedProfiles: 0,
     discardedByNoTerritory: 0,
@@ -98,6 +103,11 @@ function candidateFromProfile(
     publicUrl: publicUrl(input.sourceUrl),
     profile: match.displayName,
     territory: match.territoryMatched,
+    matchedKeywords: [
+      ...match.keywordMatches.primary,
+      ...match.keywordMatches.secondary,
+      ...match.keywordMatches.strongContext,
+    ].slice(0, 8),
   };
 }
 
@@ -110,6 +120,36 @@ function pushTop(
   items.splice(5);
 }
 
+function commercialTextLength(input: CommercialOpportunityInput): number {
+  return [
+    input.title,
+    input.description ?? "",
+    input.buyerName ?? "",
+    input.dependency ?? "",
+    input.unit ?? "",
+    input.procedureId ?? "",
+    input.fullText ?? "",
+    ...(input.attachmentsText ?? []),
+  ].join(" ").replace(/\s+/g, " ").trim().length;
+}
+
+function hasBusinessSignal(match: CommercialProfileMatch): boolean {
+  return (
+    match.keywordMatches.primary.length > 0 ||
+    match.keywordMatches.secondary.length > 0 ||
+    match.negativeMatches.length > 0
+  );
+}
+
+function bestCandidateProfile(
+  result: CommercialOpportunityMatchResult,
+): CommercialProfileMatch | null {
+  const profiles = [...result.matchedProfiles, ...result.topDiscardedProfiles]
+    .filter(hasBusinessSignal)
+    .sort((left, right) => right.score - left.score);
+  return profiles[0] ?? null;
+}
+
 export function recordCommercialMatchTelemetry(
   telemetry: CommercialMatchingTelemetry,
   input: CommercialOpportunityInput,
@@ -117,8 +157,55 @@ export function recordCommercialMatchTelemetry(
 ): void {
   telemetry.totalReviewed++;
 
-  if (result.keywordMatches.length > 0 || result.negativeMatches.length > 0) {
+  if (commercialTextLength(input) >= 30) {
+    telemetry.recordsWithSufficientText++;
+  } else {
+    telemetry.discardedByMissingText++;
+  }
+
+  const bestCandidate = bestCandidateProfile(result);
+  if (bestCandidate) {
     telemetry.commercialCandidates++;
+    if (bestCandidate.discardReason && result.matchedProfiles.length === 0) {
+      switch (bestCandidate.discardReason) {
+        case "no_territory":
+          telemetry.discardedByNoTerritory++;
+          break;
+        case "no_keyword":
+        case "generic_keyword_without_context":
+          telemetry.discardedByKeyword++;
+          break;
+        case "negative_keyword":
+          telemetry.discardedByNegativeKeyword++;
+          break;
+        case "missing_evidence":
+          telemetry.discardedByMissingEvidence++;
+          break;
+        case "date":
+          telemetry.discardedByDate++;
+          break;
+        case "source_error":
+          telemetry.discardedBySourceError++;
+          break;
+        case "deduplication":
+          telemetry.discardedByDeduplication++;
+          break;
+        case "low_score":
+        default:
+          telemetry.discardedByLowScore++;
+          break;
+      }
+    }
+    if (result.matchedProfiles.length === 0) {
+      pushTop(telemetry.topDiscardedCandidates, candidateFromProfile(input, bestCandidate));
+    }
+  } else if (result.matchedProfiles.length === 0) {
+    const fallback = result.topDiscardedProfiles[0];
+    if (fallback) {
+      if (fallback.discardReason === "no_territory") telemetry.discardedByNoTerritory++;
+      else telemetry.discardedByKeyword++;
+      pushTop(telemetry.topDiscardedCandidates, candidateFromProfile(input, fallback));
+    }
   }
 
   for (const match of result.matchedProfiles) {
@@ -130,37 +217,5 @@ export function recordCommercialMatchTelemetry(
         (telemetry.matchesByTerritory[match.territoryMatched] ?? 0) + 1;
     }
     pushTop(telemetry.topMatchedCandidates, candidateFromProfile(input, match));
-  }
-
-  for (const discarded of result.topDiscardedProfiles) {
-    switch (discarded.discardReason) {
-      case "no_territory":
-        telemetry.discardedByNoTerritory++;
-        break;
-      case "no_keyword":
-      case "generic_keyword_without_context":
-        telemetry.discardedByKeyword++;
-        break;
-      case "negative_keyword":
-        telemetry.discardedByNegativeKeyword++;
-        break;
-      case "missing_evidence":
-        telemetry.discardedByMissingEvidence++;
-        break;
-      case "date":
-        telemetry.discardedByDate++;
-        break;
-      case "source_error":
-        telemetry.discardedBySourceError++;
-        break;
-      case "deduplication":
-        telemetry.discardedByDeduplication++;
-        break;
-      case "low_score":
-      default:
-        telemetry.discardedByLowScore++;
-        break;
-    }
-    pushTop(telemetry.topDiscardedCandidates, candidateFromProfile(input, discarded));
   }
 }

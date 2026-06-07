@@ -220,13 +220,35 @@ function formatTopDiscarded(external: Record<string, unknown> | null | undefined
       const title = String(candidate.title ?? "sin título").slice(0, 80);
       const source = String(candidate.sourceName ?? "fuente").slice(0, 40);
       const score = candidate.estimatedScore ?? "N/D";
+      const minScore = candidate.minScore ? `/${candidate.minScore}` : "";
       const reasons = Array.isArray(candidate.reasons)
         ? candidate.reasons.join(", ")
         : "N/D";
+      const breakdown = candidate.scoreBreakdown as Record<string, unknown> | undefined;
+      const scoreDetail = breakdown
+        ? ` | kw ${breakdown.keywordScore ?? "?"}, terr ${breakdown.territoryScore ?? breakdown.geographyScore ?? "?"}, intent ${breakdown.procurementIntentScore ?? breakdown.opportunityScore ?? "?"}, src ${breakdown.sourceQualityScore ?? breakdown.sourceTrustScore ?? "?"}, rec ${breakdown.recencyScore ?? breakdown.freshnessScore ?? "?"}, neg ${breakdown.negativePenalty ?? 0}`
+        : "";
       const publicUrl = candidate.publicUrl || candidate.sourceUrl
         ? ` | ${String(candidate.publicUrl ?? candidate.sourceUrl).slice(0, 90)}`
         : "";
-      return `  - <b>${escapeHtml(title)}</b> | ${escapeHtml(source)} | score ${escapeHtml(score)} | ${escapeHtml(reasons)}${escapeHtml(publicUrl)}`;
+      return `  - <b>${escapeHtml(title)}</b> | ${escapeHtml(source)} | score ${escapeHtml(score)}${escapeHtml(minScore)} | ${escapeHtml(reasons)}${escapeHtml(scoreDetail)}${escapeHtml(publicUrl)}`;
+    }),
+  ];
+}
+
+function formatTopErrors(external: Record<string, unknown> | null | undefined): string[] {
+  const rawItems = external?.topErrors;
+  if (!Array.isArray(rawItems) || rawItems.length === 0) return ["  Top errores: <b>ninguno</b>"];
+
+  return [
+    "  Top errores:",
+    ...rawItems.slice(0, 5).map((item) => {
+      const error = item as Record<string, unknown>;
+      const source = String(error.sourceName ?? "fuente").slice(0, 48);
+      const type = String(error.errorType ?? "unknown");
+      const status = error.httpStatus ? ` HTTP ${error.httpStatus}` : "";
+      const message = String(error.message ?? "error").slice(0, 120);
+      return `  - <b>${escapeHtml(source)}</b> | ${escapeHtml(type)}${escapeHtml(status)} | <code>${escapeHtml(message)}</code>`;
     }),
   ];
 }
@@ -253,7 +275,10 @@ function formatCommercialCandidates(
     `  ${key === "topMatchedCandidates" ? "Top comerciales" : "Top descartados comerciales"}:`,
     ...items.slice(0, 5).map((item) => {
       const candidate = item as Record<string, unknown>;
-      return `  - <b>${escapeHtml(String(candidate.title ?? "sin título").slice(0, 80))}</b> | ${escapeHtml(candidate.profile ?? "perfil")} | score ${escapeHtml(candidate.score ?? "N/D")} | ${escapeHtml(candidate.reason ?? "match")}`;
+      const keywords = Array.isArray(candidate.matchedKeywords) && candidate.matchedKeywords.length > 0
+        ? ` | kw: ${candidate.matchedKeywords.slice(0, 4).join(", ")}`
+        : "";
+      return `  - <b>${escapeHtml(String(candidate.title ?? "sin título").slice(0, 80))}</b> | ${escapeHtml(candidate.profile ?? "perfil")} | score ${escapeHtml(candidate.score ?? "N/D")} | ${escapeHtml(candidate.reason ?? "match")}${escapeHtml(keywords)}`;
     }),
   ];
 }
@@ -589,7 +614,10 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `<b>💼 Motor comercial:</b> ${config.COMMERCIAL_MATCHING_ENABLED ? "activo" : "inactivo"}`,
         `  Revisados: <b>${numberField(commercialState, "totalReviewed")}</b>`,
         `  Raw results: <b>${numberField(commercialState, "rawResultsReceived")}</b>`,
+        `  Texto suficiente: <b>${numberField(commercialState, "recordsWithSufficientText")}</b>`,
+        `  Desc. falta texto: <b>${numberField(commercialState, "discardedByMissingText")}</b>`,
         `  Candidatos comerciales: <b>${numberField(commercialState, "commercialCandidates")}</b>`,
+        `  Matches comerciales: <b>${numberField(commercialState, "matchedProfiles")}</b>`,
         `  Matches por perfil: <code>${escapeHtml(formatCommercialMap(commercialState?.matchesByProfile))}</code>`,
         `  Matches por territorio: <code>${escapeHtml(formatCommercialMap(commercialState?.matchesByTerritory))}</code>`,
         `  Desc. sin territorio: <b>${numberField(commercialState, "discardedByNoTerritory")}</b>`,
@@ -619,6 +647,7 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `  Descartados dedupe: <b>${numberField(externalRecord, "discardedByDeduplication")}</b>`,
         `  Errores: <b>${Array.isArray(externalRecord?.errors) ? externalRecord.errors.length : 0}</b>`,
         ...formatTopDiscarded(externalRecord),
+        ...formatTopErrors(externalRecord),
         "",
         lastRunState?.errorMessage ? `⚠️ <b>Error:</b> <code>${String(lastRunState.errorMessage).slice(0, 100)}</code>` : "",
         "",
