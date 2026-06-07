@@ -5,8 +5,11 @@ import { v4 as uuidv4 } from "uuid";
 import { getSupabaseClient } from "./client";
 import { StorageError } from "../core/errors";
 import { nowISO } from "../core/time";
+import { createModuleLogger } from "../core/logger";
 import type { DbMatch, DbAlert } from "../types/database";
 import type { MatchResult, EnrichedAlert } from "../types/procurement";
+
+const log = createModuleLogger("match-alert-repo");
 
 // ─── Matches ─────────────────────────────────────────────────────────────────
 
@@ -16,23 +19,42 @@ export async function upsertMatch(
 ): Promise<{ isNew: boolean; matchId: string }> {
   const db = getSupabaseClient();
 
+  const documentScore = match.documentScore ?? 0;
+  const opportunityScore = match.opportunityScore ?? 0;
+
   // Verificar si ya existe
-  const { data: existing } = await db
+  const { data: existing, error: existingError } = await db
     .from("matches")
     .select("id")
     .eq("radar_id", radarDbId)
     .eq("procurement_id", match.procurementId)
-    .single();
+    .maybeSingle();
+
+  if (existingError) {
+    log.error(
+      {
+        code: existingError.code,
+        msg: existingError.message,
+        radarDbId,
+        procurementId: match.procurementId,
+      },
+      "Error buscando match existente",
+    );
+    throw new StorageError(
+      `Error buscando match existente: ${existingError.message}`,
+      "find_match",
+    );
+  }
 
   const now = nowISO();
 
   if (existing) {
-    await db
+    const { error: updateError } = await db
       .from("matches")
       .update({
         match_score: match.matchScore,
-        opportunity_score: match.opportunityScore,
-        document_score: match.documentScore,
+        opportunity_score: opportunityScore,
+        document_score: documentScore,
         match_level: match.matchLevel,
         matched_terms_json: match.matchedTerms,
         excluded_terms_json: match.excludedTerms,
@@ -40,6 +62,23 @@ export async function upsertMatch(
         updated_at: now,
       })
       .eq("id", existing.id);
+
+    if (updateError) {
+      log.error(
+        {
+          code: updateError.code,
+          msg: updateError.message,
+          matchId: existing.id,
+          radarDbId,
+          procurementId: match.procurementId,
+        },
+        "Error actualizando match existente",
+      );
+      throw new StorageError(
+        `Error actualizando match: ${updateError.message}`,
+        "update_match",
+      );
+    }
 
     return { isNew: false, matchId: existing.id };
   }
@@ -50,8 +89,8 @@ export async function upsertMatch(
     radar_id: radarDbId,
     procurement_id: match.procurementId,
     match_score: match.matchScore,
-    opportunity_score: match.opportunityScore,
-    document_score: match.documentScore,
+    opportunity_score: opportunityScore,
+    document_score: documentScore,
     match_level: match.matchLevel,
     matched_terms_json: match.matchedTerms,
     excluded_terms_json: match.excludedTerms,
@@ -62,6 +101,15 @@ export async function upsertMatch(
 
   const { error } = await db.from("matches").insert(record);
   if (error) {
+    log.error(
+      {
+        code: error.code,
+        msg: error.message,
+        radarDbId,
+        procurementId: match.procurementId,
+      },
+      "Error insertando match",
+    );
     throw new StorageError(
       `Error insertando match: ${error.message}`,
       "insert_match",

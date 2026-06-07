@@ -44,12 +44,30 @@ export const REQUIRED_TABLES = [
 
 export type RequiredTable = (typeof REQUIRED_TABLES)[number];
 
+export const REQUIRED_COLUMNS: Partial<Record<RequiredTable, readonly string[]>> = {
+  matches: [
+    "id",
+    "radar_id",
+    "procurement_id",
+    "match_score",
+    "opportunity_score",
+    "document_score",
+    "match_level",
+    "matched_terms_json",
+    "excluded_terms_json",
+    "explanation",
+    "created_at",
+    "updated_at",
+  ],
+} as const;
+
 // ─── Resultado de validación ──────────────────────────────────────────────────
 
 export interface SchemaValidationResult {
   valid: boolean;
   tablesFound: string[];
   tablesMissing: string[];
+  columnsMissing: Record<string, string[]>;
   tablesChecked: number;
   tablesRequired: number;
   checkedAt: string;
@@ -62,9 +80,18 @@ export class SchemaValidationError extends Error {
     public readonly missing: string[],
     public readonly found: number,
     public readonly total: number,
+    public readonly columnsMissing: Record<string, string[]> = {},
   ) {
+    const missingColumns = Object.entries(columnsMissing)
+      .filter(([, columns]) => columns.length > 0)
+      .map(([table, columns]) => `${table}: [${columns.join(", ")}]`);
+    const details = [
+      missing.length > 0 ? `Faltan ${missing.length} tabla(s): [${missing.join(", ")}]` : null,
+      missingColumns.length > 0 ? `Faltan columnas criticas: ${missingColumns.join("; ")}` : null,
+    ].filter(Boolean).join(" — ");
+
     super(
-      `DATABASE SCHEMA NOT INITIALIZED — Faltan ${missing.length} tabla(s): [${missing.join(", ")}]`,
+      `DATABASE SCHEMA NOT INITIALIZED — ${details}`,
     );
     this.name = "SchemaValidationError";
   }
@@ -113,6 +140,82 @@ async function checkTable(
   }
 }
 
+function isMissingColumnError(error: { code?: string; message?: string }): boolean {
+  const message = error.message?.toLowerCase() ?? "";
+  return (
+    error.code === "42703" ||
+    error.code === "PGRST204" ||
+    message.includes("column") && (
+      message.includes("does not exist") ||
+      message.includes("no existe") ||
+      message.includes("could not find") ||
+      message.includes("schema cache")
+    )
+  );
+}
+
+async function checkColumn(
+  tableName: RequiredTable,
+  columnName: string,
+): Promise<{ exists: boolean; error?: string }> {
+  const db = getSupabaseClient();
+
+  try {
+    const { error } = await db
+      .from(tableName)
+      .select(columnName, { count: "exact", head: true });
+
+    if (!error) {
+      return { exists: true };
+    }
+
+    if (isMissingColumnError(error)) {
+      return { exists: false, error: error.message };
+    }
+
+    log.warn(
+      {
+        table: tableName,
+        column: columnName,
+        code: error.code,
+        msg: error.message,
+      },
+      "Error al verificar columna — asumiendo que existe",
+    );
+    return { exists: true, error: error.message };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(
+      { table: tableName, column: columnName, err: msg },
+      "Error de red verificando columna",
+    );
+    return { exists: true, error: msg };
+  }
+}
+
+async function checkRequiredColumns(
+  tableName: RequiredTable,
+): Promise<{ table: RequiredTable; missing: string[] }> {
+  const requiredColumns: readonly string[] = REQUIRED_COLUMNS[tableName] ?? [];
+  if (requiredColumns.length === 0) {
+    return { table: tableName, missing: [] };
+  }
+
+  const results = await Promise.all(
+    requiredColumns.map(async (column) => {
+      const result = await checkColumn(tableName, column);
+      return { column, ...result };
+    }),
+  );
+
+  return {
+    table: tableName,
+    missing: results
+      .filter((result) => !result.exists)
+      .map((result) => result.column),
+  };
+}
+
 // ─── Validación principal ─────────────────────────────────────────────────────
 
 /**
@@ -130,6 +233,7 @@ export async function verifyDatabaseSchema(): Promise<SchemaValidationResult> {
 
   const tablesFound: string[] = [];
   const tablesMissing: string[] = [];
+  const columnsMissing: Record<string, string[]> = {};
 
   // Verificar todas las tablas en paralelo (más rápido que secuencial)
   const results = await Promise.all(
@@ -147,13 +251,26 @@ export async function verifyDatabaseSchema(): Promise<SchemaValidationResult> {
     }
   }
 
+  const columnResults = await Promise.all(
+    (Object.keys(REQUIRED_COLUMNS) as RequiredTable[])
+      .filter((table) => tablesFound.includes(table))
+      .map((table) => checkRequiredColumns(table)),
+  );
+
+  for (const { table, missing } of columnResults) {
+    if (missing.length > 0) {
+      columnsMissing[table] = missing;
+    }
+  }
+
   const found = tablesFound.length;
   const total = REQUIRED_TABLES.length;
 
   const validationResult: SchemaValidationResult = {
-    valid: tablesMissing.length === 0,
+    valid: tablesMissing.length === 0 && Object.keys(columnsMissing).length === 0,
     tablesFound,
     tablesMissing,
+    columnsMissing,
     tablesChecked: total,
     tablesRequired: total,
     checkedAt: new Date().toISOString(),
@@ -161,20 +278,28 @@ export async function verifyDatabaseSchema(): Promise<SchemaValidationResult> {
 
   // ── Resultado ──────────────────────────────────────────────────────────────
 
-  if (tablesMissing.length > 0) {
+  if (tablesMissing.length > 0 || Object.keys(columnsMissing).length > 0) {
     log.error(
-      { found, total, missing: tablesMissing },
+      { found, total, missing: tablesMissing, columnsMissing },
       `❌ DATABASE SCHEMA NOT INITIALIZED — Tables found: ${found} / ${total}`,
     );
-    log.error(
-      { missing: tablesMissing },
-      `Missing tables: [${tablesMissing.join(", ")}]`,
-    );
+    if (tablesMissing.length > 0) {
+      log.error(
+        { missing: tablesMissing },
+        `Missing tables: [${tablesMissing.join(", ")}]`,
+      );
+    }
+    if (Object.keys(columnsMissing).length > 0) {
+      log.error(
+        { columnsMissing },
+        "Missing critical columns in Supabase schema",
+      );
+    }
     log.error(
       "Run the SQL schema to fix: docs/supabase-schema.sql (copy-paste in Supabase SQL Editor)",
     );
 
-    throw new SchemaValidationError(tablesMissing, found, total);
+    throw new SchemaValidationError(tablesMissing, found, total, columnsMissing);
   }
 
   log.info(
@@ -197,6 +322,7 @@ export async function verifyDatabaseSchemaSafe(): Promise<SchemaValidationResult
         valid: false,
         tablesFound: REQUIRED_TABLES.filter((t) => !err.missing.includes(t)),
         tablesMissing: err.missing,
+        columnsMissing: err.columnsMissing,
         tablesChecked: REQUIRED_TABLES.length,
         tablesRequired: REQUIRED_TABLES.length,
         checkedAt: new Date().toISOString(),
@@ -207,6 +333,7 @@ export async function verifyDatabaseSchemaSafe(): Promise<SchemaValidationResult
       valid: false,
       tablesFound: [],
       tablesMissing: [...REQUIRED_TABLES],
+      columnsMissing: {},
       tablesChecked: 0,
       tablesRequired: REQUIRED_TABLES.length,
       checkedAt: new Date().toISOString(),

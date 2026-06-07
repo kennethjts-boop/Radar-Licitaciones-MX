@@ -274,6 +274,25 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   }
 }
 
+function getErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function getErrorStatus(err: unknown): number | undefined {
+  const match = getErrorMessage(err).match(/\bstatus\s+(\d{3})\b/i);
+  return match ? Number(match[1]) : undefined;
+}
+
+function isTlsCertificateError(err: unknown): boolean {
+  const message = getErrorMessage(err).toLowerCase();
+  return (
+    message.includes("err_cert") ||
+    message.includes("certificate") ||
+    message.includes("cert_date_invalid") ||
+    message.includes("tls")
+  );
+}
+
 async function getComprasMxSecurityDate(): Promise<string> {
   try {
     const response = await fetchWithTimeout(COMPRASMX_CLOCK_URL, { method: "GET" }, COMPRASMX_CLOCK_TIMEOUT_MS);
@@ -445,7 +464,13 @@ export class ComprasMxNavigator {
         "API firmada de ComprasMX no devolvió filas; intentando respaldo con navegador",
       );
     } catch (apiErr) {
-      log.warn({ apiErr }, "Falló API firmada de ComprasMX; intentando respaldo con navegador");
+      log.warn(
+        {
+          status: getErrorStatus(apiErr),
+          message: getErrorMessage(apiErr),
+        },
+        "Falló API firmada de ComprasMX; intentando respaldo con navegador",
+      );
     }
 
     const allRows: ListingRow[] = [];
@@ -606,17 +631,47 @@ export class ComprasMxNavigator {
         );
         log.info("✅ Tabla de procedimientos cargada con resultados");
       } catch (buscarErr) {
+        if (isTlsCertificateError(buscarErr)) {
+          log.error(
+            {
+              message: getErrorMessage(buscarErr),
+              baseUrl,
+            },
+            "ComprasMX browser fallback failed due to TLS/certificate. Set PLAYWRIGHT_IGNORE_HTTPS_ERRORS=true if this is expected.",
+          );
+          page.off("response", captureApiRegistros);
+          return { rows: [], apiRegistros, pagesScanned: 0 };
+        }
+
         const html = await page.content().catch(() => "(no se pudo obtener HTML)");
         log.error(
           { buscarErr, html: html.slice(0, 2000) },
-          "❌ FATAL: No se pudo activar Buscar o capturar respuesta API",
+          "No se pudo activar Buscar o capturar respuesta API en fallback navegador de ComprasMX",
         );
         page.off("response", captureApiRegistros);
+        log.warn(
+          { rows: 0, apiRegistros: apiRegistros.size, pagesScanned: 0 },
+          "Fallback navegador ComprasMX devolvió filas vacías",
+        );
         return { rows: [], apiRegistros, pagesScanned: 0 };
       }
     } catch (err) {
-      log.error({ err, baseUrl }, "❌ Error cargando portal ComprasMX");
+      if (isTlsCertificateError(err)) {
+        log.error(
+          {
+            message: getErrorMessage(err),
+            baseUrl,
+          },
+          "ComprasMX browser fallback failed due to TLS/certificate. Set PLAYWRIGHT_IGNORE_HTTPS_ERRORS=true if this is expected.",
+        );
+      } else {
+        log.error({ err, baseUrl }, "❌ Error cargando portal ComprasMX");
+      }
       page.off("response", captureApiRegistros);
+      log.warn(
+        { rows: 0, apiRegistros: apiRegistros.size, pagesScanned: 0 },
+        "Fallback navegador ComprasMX devolvió filas vacías",
+      );
       return { rows: [], apiRegistros, pagesScanned: 0 };
     }
 

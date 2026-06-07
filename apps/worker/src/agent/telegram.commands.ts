@@ -25,6 +25,58 @@ const MANUAL_SCAN_TIMEOUT_MS = 30 * 60 * 1000;
 
 let _bot: TelegramBot | null = null;
 let manualScanInFlight: Promise<void> | null = null;
+let pollingConflictHandled = false;
+
+function getTelegramErrorDetails(err: Error): { statusCode?: number; code?: string; message: string } {
+  const errorLike = err as Error & {
+    code?: string;
+    response?: {
+      statusCode?: number;
+      body?: {
+        description?: string;
+        error_code?: number;
+      };
+    };
+  };
+
+  return {
+    statusCode: errorLike.response?.statusCode ?? errorLike.response?.body?.error_code,
+    code: errorLike.code,
+    message: errorLike.response?.body?.description ?? err.message,
+  };
+}
+
+function isPollingConflict(err: Error): boolean {
+  const details = getTelegramErrorDetails(err);
+  const message = details.message.toLowerCase();
+  return (
+    details.statusCode === 409 ||
+    message.includes("terminated by other getupdates request") ||
+    message.includes("another bot instance")
+  );
+}
+
+function isTransientPollingError(err: Error): boolean {
+  const details = getTelegramErrorDetails(err);
+  return (
+    details.code === "EFATAL" ||
+    details.code === "ETIMEDOUT" ||
+    details.code === "ECONNRESET" ||
+    details.code === "ECONNREFUSED" ||
+    details.code === "ENOTFOUND" ||
+    details.statusCode === 502 ||
+    details.statusCode === 503 ||
+    details.statusCode === 504
+  );
+}
+
+async function stopPollingAfterConflict(bot: TelegramBot): Promise<void> {
+  try {
+    await bot.stopPolling();
+  } catch (stopErr) {
+    log.warn({ err: stopErr }, "No se pudo detener Telegram polling tras conflicto");
+  }
+}
 
 export async function initCommandBot(): Promise<TelegramBot> {
   if (_bot) return _bot;
@@ -44,7 +96,36 @@ export async function initCommandBot(): Promise<TelegramBot> {
 
   // Registrar handlers de error antes de iniciar polling
   _bot.on("polling_error", (err: Error) => {
-    log.error({ code: (err as NodeJS.ErrnoException).code, msg: err.message }, "❌ Telegram polling_error");
+    const details = getTelegramErrorDetails(err);
+
+    if (isPollingConflict(err)) {
+      if (!pollingConflictHandled) {
+        pollingConflictHandled = true;
+        log.warn(
+          {
+            code: details.code,
+            statusCode: details.statusCode,
+            msg: details.message,
+          },
+          "Telegram polling conflict: another instance is already polling. Disable TELEGRAM_COMMAND_BOT_ENABLED on secondary workers.",
+        );
+      }
+      void stopPollingAfterConflict(_bot!);
+      return;
+    }
+
+    const payload = {
+      code: details.code,
+      statusCode: details.statusCode,
+      msg: details.message,
+    };
+
+    if (isTransientPollingError(err)) {
+      log.warn(payload, "Telegram polling_error transitorio");
+      return;
+    }
+
+    log.error(payload, "❌ Telegram polling_error");
   });
   _bot.on("error", (err: Error) => {
     log.error({ msg: err.message }, "❌ Telegram bot error");

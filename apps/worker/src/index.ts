@@ -93,13 +93,15 @@ async function main(): Promise<void> {
   }
 
   // ── 4. Bot de comandos Telegram ───────────────────────────────────────────
-  if (bootResult.telegramOk) {
+  if (bootResult.telegramOk && config.TELEGRAM_COMMAND_BOT_ENABLED) {
     try {
       await initCommandBot();
       log.info("🤖 Bot Telegram iniciado con polling");
     } catch (err) {
       log.warn({ err }, "⚠️ Error iniciando bot — continuando sin comandos");
     }
+  } else if (bootResult.telegramOk) {
+    log.warn("⚠️ Bot Telegram de comandos desactivado por TELEGRAM_COMMAND_BOT_ENABLED=false");
   } else {
     log.warn("⚠️ Bot Telegram desactivado — Telegram no disponible");
   }
@@ -141,6 +143,7 @@ main().catch((err) => {
     log.fatal(
       {
         missing: err.missing,
+        columnsMissing: err.columnsMissing,
         found: err.found,
         total: err.total,
       },
@@ -148,6 +151,7 @@ main().catch((err) => {
         "💥 FATAL: DATABASE SCHEMA NOT INITIALIZED",
         `  Tables found: ${err.found} / ${err.total}`,
         `  Missing: [${err.missing.join(", ")}]`,
+        `  Missing columns: ${JSON.stringify(err.columnsMissing)}`,
         "  Fix: Execute docs/supabase-schema.sql in Supabase SQL Editor",
       ].join("\n"),
     );
