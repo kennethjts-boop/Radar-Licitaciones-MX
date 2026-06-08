@@ -98,15 +98,6 @@ export class BrowserManager {
       javaScriptEnabled: true,
       bypassCSP: true,
       ignoreHTTPSErrors: config.PLAYWRIGHT_IGNORE_HTTPS_ERRORS,
-      extraHTTPHeaders: {
-        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
-        "Cache-Control": "no-cache",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        DNT: "1",
-      },
       proxy,
     });
 
