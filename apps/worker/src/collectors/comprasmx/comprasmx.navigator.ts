@@ -51,6 +51,25 @@ export interface ListingRow {
   rowText: string;
 }
 
+export interface ListingScanResult {
+  rows: ListingRow[];
+  apiRegistros: Map<string, ApiRegistro>;
+  pagesScanned: number;
+  sourceUnavailable?: boolean;
+  unavailableReason?: string;
+}
+
+interface BrowserFallbackAttemptConfig {
+  attempt: number;
+  gotoTimeoutMs: number;
+  buscarSelectorTimeoutMs: number;
+  hydrationWaitMs: number;
+  clickTimeoutMs: number;
+  apiResponseTimeoutMs: number;
+  domRowsTimeoutMs: number;
+  paginationWaitMs: number;
+}
+
 /**
  * Registro crudo tal como lo devuelve la API /whitney/sitiopublico/expedientes.
  * Estructura: response.data[0].registros[]
@@ -394,7 +413,7 @@ async function fetchComprasMxProcedimientosPage(pageNumber: number): Promise<Com
 export class ComprasMxNavigator {
   private async scanListingViaSignedApi(
     maxPages: number,
-  ): Promise<{ rows: ListingRow[]; apiRegistros: Map<string, ApiRegistro>; pagesScanned: number }> {
+  ): Promise<ListingScanResult> {
     const pageLimit = Math.max(1, maxPages);
     const rowsByExternalId = new Map<string, ListingRow>();
     const apiRegistros = new Map<string, ApiRegistro>();
@@ -451,7 +470,7 @@ export class ComprasMxNavigator {
     page: Page,
     baseUrl: string,
     maxPages: number,
-  ): Promise<{ rows: ListingRow[]; apiRegistros: Map<string, ApiRegistro>; pagesScanned: number }> {
+  ): Promise<ListingScanResult> {
     log.info({ baseUrl, maxPages }, "📋 Iniciando scan de listado ComprasMX");
 
     try {
@@ -473,69 +492,112 @@ export class ComprasMxNavigator {
       );
     }
 
-    const allRows: ListingRow[] = [];
-    let pagesScanned = 0;
+    const attempts: BrowserFallbackAttemptConfig[] = [
+      {
+        attempt: 1,
+        gotoTimeoutMs: 30_000,
+        buscarSelectorTimeoutMs: 20_000,
+        hydrationWaitMs: 5_000,
+        clickTimeoutMs: 8_000,
+        apiResponseTimeoutMs: 60_000,
+        domRowsTimeoutMs: 15_000,
+        paginationWaitMs: 3_000,
+      },
+      {
+        attempt: 2,
+        gotoTimeoutMs: 45_000,
+        buscarSelectorTimeoutMs: 35_000,
+        hydrationWaitMs: 10_000,
+        clickTimeoutMs: 12_000,
+        apiResponseTimeoutMs: 90_000,
+        domRowsTimeoutMs: 30_000,
+        paginationWaitMs: 5_000,
+      },
+    ];
+    let lastUnavailableReason = "ComprasMX browser fallback did not extract rows";
 
-    // ── Interceptar API del listado para capturar datos completos ──────────────
-    // La API devuelve: { success, data: [{ registros: [...], paginacion: {...} }] }
-    // Cada registro contiene todos los campos que necesitamos — no hace falta detail fetch.
-    const apiRegistros = new Map<string, ApiRegistro>();
+    for (const attemptConfig of attempts) {
+      const allRows: ListingRow[] = [];
+      let pagesScanned = 0;
 
-    const captureApiRegistros = (response: { url(): string; text(): Promise<string> }) => {
-      if (!response.url().includes('/whitney/')) return;
+      log.info(
+        {
+          attempt: attemptConfig.attempt,
+          gotoTimeoutMs: attemptConfig.gotoTimeoutMs,
+          buscarSelectorTimeoutMs: attemptConfig.buscarSelectorTimeoutMs,
+          apiResponseTimeoutMs: attemptConfig.apiResponseTimeoutMs,
+        },
+        "Iniciando intento de fallback navegador ComprasMX",
+      );
 
-      response.text().then((raw: string) => {
-        let json: unknown;
-        try { json = JSON.parse(raw); } catch { return; }
+      // ── Interceptar API del listado para capturar datos completos ──────────────
+      // La API devuelve: { success, data: [{ registros: [...], paginacion: {...} }] }
+      // Cada registro contiene todos los campos que necesitamos — no hace falta detail fetch.
+      const apiRegistros = new Map<string, ApiRegistro>();
 
-        const j = json as Record<string, unknown>;
-        const dataArr = j?.data as unknown[] | undefined;
-        const registros = (Array.isArray(dataArr) && dataArr.length > 0)
-          ? ((dataArr[0] as Record<string, unknown>)?.registros as unknown[] | undefined)
-          : undefined;
+      const captureApiRegistros = (response: { url(): string; text(): Promise<string> }) => {
+        if (!response.url().includes('/whitney/')) return;
 
-        if (!Array.isArray(registros) || registros.length === 0) return;
+        response.text().then((raw: string) => {
+          let json: unknown;
+          try { json = JSON.parse(raw); } catch { return; }
 
-        // DIAG: imprimir campos disponibles del primer registro (solo una vez)
-        if (apiRegistros.size === 0 && registros.length > 0) {
-          const first = registros[0] as Record<string, unknown>;
-          log.info(
-            { campos: Object.keys(first), muestra: first },
-            "🔬 DIAG campos del primer ApiRegistro"
-          );
-        }
+          const j = json as Record<string, unknown>;
+          const dataArr = j?.data as unknown[] | undefined;
+          const registros = (Array.isArray(dataArr) && dataArr.length > 0)
+            ? ((dataArr[0] as Record<string, unknown>)?.registros as unknown[] | undefined)
+            : undefined;
 
-        let count = 0;
-        for (const item of registros) {
-          const it = item as ApiRegistro;
-          if (it.numero_procedimiento) {
-            apiRegistros.set(it.numero_procedimiento, it);
-            count++;
+          if (!Array.isArray(registros) || registros.length === 0) return;
+
+          // DIAG: imprimir campos disponibles del primer registro (solo una vez)
+          if (apiRegistros.size === 0 && registros.length > 0) {
+            const first = registros[0] as Record<string, unknown>;
+            log.info(
+              { campos: Object.keys(first), muestra: first },
+              "🔬 DIAG campos del primer ApiRegistro"
+            );
           }
-        }
-        log.info({ count, total: apiRegistros.size, url: response.url() }, "📡 Registros API capturados");
-      }).catch(() => {});
-    };
 
-    page.on('response', captureApiRegistros);
+          let count = 0;
+          for (const item of registros) {
+            const it = item as ApiRegistro;
+            if (it.numero_procedimiento) {
+              apiRegistros.set(it.numero_procedimiento, it);
+              count++;
+            }
+          }
+          log.info(
+            { attempt: attemptConfig.attempt, count, total: apiRegistros.size, url: response.url() },
+            "📡 Registros API capturados",
+          );
+        }).catch(() => {});
+      };
 
-    try {
-      log.info({ baseUrl }, "🌐 Navegando al portal ComprasMX...");
-      await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+      page.on('response', captureApiRegistros);
 
-      // Esperar cualquiera de los selectores candidatos del botón Buscar
-      log.info({ selector: BUSCAR_SELECTOR_ANY }, "⏳ Esperando botón Buscar...");
-      await page.waitForSelector(BUSCAR_SELECTOR_ANY, { timeout: 20000 });
-
-      // 5 s para que Angular hidrate el componente antes del click
-      await page.waitForTimeout(5000);
-
-      log.info("🔍 Activando búsqueda en el portal ComprasMX...");
       try {
+        log.info({ baseUrl, attempt: attemptConfig.attempt }, "🌐 Navegando al portal ComprasMX...");
+        await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: attemptConfig.gotoTimeoutMs });
+        log.info({ attempt: attemptConfig.attempt }, "✅ Página ComprasMX cargada");
+
+        // Esperar cualquiera de los selectores candidatos del botón Buscar
+        log.info(
+          { selector: BUSCAR_SELECTOR_ANY, attempt: attemptConfig.attempt },
+          "⏳ Esperando botón Buscar...",
+        );
+        await page.waitForSelector(BUSCAR_SELECTOR_ANY, { timeout: attemptConfig.buscarSelectorTimeoutMs });
+        log.info({ attempt: attemptConfig.attempt }, "✅ Botón Buscar visible");
+
+        // Esperar a que Angular hidrate el componente antes del click
+        await page.waitForTimeout(attemptConfig.hydrationWaitMs);
+
+        log.info({ attempt: attemptConfig.attempt }, "🔍 Activando búsqueda en el portal ComprasMX...");
+        try {
         // ── Configurar waitForResponse ANTES del click ────────────────────────
         const apiResponsePromise = page.waitForResponse(
           (resp) => resp.url().includes("/whitney/") && resp.status() === 200,
-          { timeout: 60_000 },
+          { timeout: attemptConfig.apiResponseTimeoutMs },
         );
 
         // ── Click con fallback de selectores ──────────────────────────────────
@@ -544,9 +606,9 @@ export class ComprasMxNavigator {
           try {
             const el = await page.$(sel);
             if (el && await el.isVisible()) {
-              await el.click({ timeout: 8000 });
+              await el.click({ timeout: attemptConfig.clickTimeoutMs });
               clickedSelector = sel;
-              log.info({ selector: sel }, "🖱 Click en Buscar ejecutado");
+              log.info({ selector: sel, attempt: attemptConfig.attempt }, "🖱 Click en Buscar ejecutado");
               break;
             }
           } catch { /* probar siguiente selector */ }
@@ -576,7 +638,7 @@ export class ComprasMxNavigator {
           apiOk = true;
         } catch (waitErr) {
           log.warn(
-            { waitErr: String(waitErr) },
+            { waitErr: String(waitErr), attempt: attemptConfig.attempt },
             "⚠️ waitForResponse timeout — intentando fallback fetch directo desde browser...",
           );
         }
@@ -599,7 +661,10 @@ export class ComprasMxNavigator {
           const fallbackRegistros = fallbackResult?.data?.[0]?.registros;
           if (Array.isArray(fallbackRegistros) && fallbackRegistros.length > 0) {
             const registros = fallbackRegistros as ApiRegistro[];
-            log.info({ count: registros.length }, "✅ Fallback API directo exitoso — sintetizando filas");
+            log.info(
+              { attempt: attemptConfig.attempt, count: registros.length },
+              "✅ Fallback API directo exitoso — sintetizando filas",
+            );
             for (const it of registros) {
               if (!it.numero_procedimiento) continue;
               apiRegistros.set(it.numero_procedimiento, it);
@@ -620,69 +685,115 @@ export class ComprasMxNavigator {
           }
 
           throw new Error(
-            `⏱ API /whitney/ no respondió en 60 s y el fallback fetch directo también falló`,
+          `⏱ API /whitney/ no respondió en 60 s y el fallback fetch directo también falló`,
           );
         }
 
         // ── Confirmar filas en el DOM ─────────────────────────────────────────
         await page.waitForFunction(
           `document.querySelectorAll(${JSON.stringify(SELECTORS.LISTING_ROW)}).length > 1`,
-          { timeout: 15000 },
+          { timeout: attemptConfig.domRowsTimeoutMs },
         );
-        log.info("✅ Tabla de procedimientos cargada con resultados");
+        log.info({ attempt: attemptConfig.attempt }, "✅ Tabla de procedimientos cargada con resultados");
       } catch (buscarErr) {
+        lastUnavailableReason = getErrorMessage(buscarErr);
         if (isTlsCertificateError(buscarErr)) {
           log.error(
             {
               message: getErrorMessage(buscarErr),
               baseUrl,
+              attempt: attemptConfig.attempt,
             },
             "ComprasMX browser fallback failed due to TLS/certificate. Set PLAYWRIGHT_IGNORE_HTTPS_ERRORS=true if this is expected.",
           );
           page.off("response", captureApiRegistros);
-          return { rows: [], apiRegistros, pagesScanned: 0 };
+          return {
+            rows: [],
+            apiRegistros,
+            pagesScanned: 0,
+            sourceUnavailable: true,
+            unavailableReason: lastUnavailableReason,
+          };
         }
 
         const html = await page.content().catch(() => "(no se pudo obtener HTML)");
         log.error(
-          { buscarErr, html: html.slice(0, 2000) },
+          { buscarErr, html: html.slice(0, 2000), attempt: attemptConfig.attempt },
           "No se pudo activar Buscar o capturar respuesta API en fallback navegador de ComprasMX",
         );
         page.off("response", captureApiRegistros);
         log.warn(
-          { rows: 0, apiRegistros: apiRegistros.size, pagesScanned: 0 },
+          { rows: 0, apiRegistros: apiRegistros.size, pagesScanned: 0, attempt: attemptConfig.attempt },
           "Fallback navegador ComprasMX devolvió filas vacías",
         );
-        return { rows: [], apiRegistros, pagesScanned: 0 };
+        if (attemptConfig.attempt < attempts.length) {
+          log.warn(
+            { attempt: attemptConfig.attempt, nextAttempt: attemptConfig.attempt + 1 },
+            "Reintentando fallback navegador ComprasMX con mayor espera",
+          );
+          continue;
+        }
+        return {
+          rows: [],
+          apiRegistros,
+          pagesScanned: 0,
+          sourceUnavailable: true,
+          unavailableReason: lastUnavailableReason,
+        };
       }
     } catch (err) {
+      lastUnavailableReason = getErrorMessage(err);
       if (isTlsCertificateError(err)) {
         log.error(
           {
             message: getErrorMessage(err),
             baseUrl,
+            attempt: attemptConfig.attempt,
           },
           "ComprasMX browser fallback failed due to TLS/certificate. Set PLAYWRIGHT_IGNORE_HTTPS_ERRORS=true if this is expected.",
         );
       } else {
-        log.error({ err, baseUrl }, "❌ Error cargando portal ComprasMX");
+        log.error(
+          { err, baseUrl, attempt: attemptConfig.attempt },
+          "❌ Error cargando portal ComprasMX",
+        );
       }
       page.off("response", captureApiRegistros);
       log.warn(
-        { rows: 0, apiRegistros: apiRegistros.size, pagesScanned: 0 },
+        { rows: 0, apiRegistros: apiRegistros.size, pagesScanned: 0, attempt: attemptConfig.attempt },
         "Fallback navegador ComprasMX devolvió filas vacías",
       );
-      return { rows: [], apiRegistros, pagesScanned: 0 };
+      if (attemptConfig.attempt < attempts.length && !isTlsCertificateError(err)) {
+        log.warn(
+          { attempt: attemptConfig.attempt, nextAttempt: attemptConfig.attempt + 1 },
+          "Reintentando fallback navegador ComprasMX después de error de carga",
+        );
+        continue;
+      }
+      return {
+        rows: [],
+        apiRegistros,
+        pagesScanned: 0,
+        sourceUnavailable: true,
+        unavailableReason: lastUnavailableReason,
+      };
     }
 
     while (pagesScanned < maxPages) {
       pagesScanned++;
-      log.info({ page: pagesScanned }, `📄 Escaneando página ${pagesScanned}`);
+      log.info(
+        { page: pagesScanned, attempt: attemptConfig.attempt },
+        `📄 Escaneando página ${pagesScanned}`,
+      );
 
       try {
-        await page.waitForSelector(SELECTORS.LISTING_ROW, { timeout: 10000 });
-      } catch {
-        log.warn("No se encontraron filas en la página.");
+        await page.waitForSelector(SELECTORS.LISTING_ROW, { timeout: attemptConfig.domRowsTimeoutMs });
+      } catch (rowErr) {
+        lastUnavailableReason = getErrorMessage(rowErr);
+        log.warn(
+          { attempt: attemptConfig.attempt, page: pagesScanned, err: rowErr },
+          "No se encontraron filas en la página durante extracción HTML",
+        );
         break;
       }
 
@@ -712,7 +823,10 @@ export class ComprasMxNavigator {
 
       const uniqueOnPage = Array.from(new Map(rowsOnPage.map((r: ListingRow) => [r.externalId, r])).values());
       allRows.push(...uniqueOnPage);
-      log.info({ count: uniqueOnPage.length, raw: rowsOnPage.length }, "Filas únicas extraídas en página");
+      log.info(
+        { attempt: attemptConfig.attempt, count: uniqueOnPage.length, raw: rowsOnPage.length },
+        "Filas únicas extraídas en página",
+      );
 
       if (pagesScanned >= maxPages) break;
 
@@ -722,7 +836,7 @@ export class ComprasMxNavigator {
       if (isDisabled) break;
 
       await nextBtn.click();
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(attemptConfig.paginationWaitMs);
     }
 
     // Dar tiempo a que los handlers de response pendientes completen
@@ -733,11 +847,48 @@ export class ComprasMxNavigator {
       ? Math.round((apiRegistros.size / allRows.length) * 100)
       : 0;
     log.info(
-      { domRows: allRows.length, apiRegistros: apiRegistros.size, coverage: `${coverage}%` },
+      {
+        attempt: attemptConfig.attempt,
+        domRows: allRows.length,
+        apiRegistros: apiRegistros.size,
+        coverage: `${coverage}%`,
+      },
       "📊 Scan completado — cobertura API"
     );
 
-    return { rows: allRows, apiRegistros, pagesScanned };
+      if (allRows.length > 0) {
+        return { rows: allRows, apiRegistros, pagesScanned };
+      }
+
+      lastUnavailableReason = "fallback navegador no extrajo filas HTML";
+      log.warn(
+        { attempt: attemptConfig.attempt, apiRegistros: apiRegistros.size, pagesScanned },
+        "Extracción HTML del fallback navegador devolvió cero filas",
+      );
+      if (attemptConfig.attempt < attempts.length) {
+        log.warn(
+          { attempt: attemptConfig.attempt, nextAttempt: attemptConfig.attempt + 1 },
+          "Reintentando fallback navegador por extracción vacía",
+        );
+        continue;
+      }
+
+      return {
+        rows: [],
+        apiRegistros,
+        pagesScanned: 0,
+        sourceUnavailable: true,
+        unavailableReason: lastUnavailableReason,
+      };
+    }
+
+    return {
+      rows: [],
+      apiRegistros: new Map<string, ApiRegistro>(),
+      pagesScanned: 0,
+      sourceUnavailable: true,
+      unavailableReason: lastUnavailableReason,
+    };
   }
 
   /**

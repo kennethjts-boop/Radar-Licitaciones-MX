@@ -101,6 +101,8 @@ export interface ComprasMxCollectResult {
   knownStreak: number;
   /** Razón de parada del scan (streak, maxPages, error, vacío, etc.). */
   stopReason: string | null;
+  /** ComprasMX no entregó listado en este ciclo, sin considerarse falla fatal del worker. */
+  sourceUnavailable?: boolean;
   errors: string[];
   startedAt: string;
   finishedAt: string;
@@ -134,6 +136,7 @@ export async function collectComprasMx(
   let totalAttachmentsChecked = 0;
   let knownStreak = 0;
   let stopReason: string | null = null;
+  let sourceUnavailable = false;
 
   try {
     const db = getSupabaseClient();
@@ -151,19 +154,30 @@ export async function collectComprasMx(
 
 
       // ── A. Listing Scan ────────────────────────────────────────────────────
-      const { rows: listingRows, apiRegistros, pagesScanned: scanned } =
-        await navigator.scanListing(page, baseUrl, maxPages);
+      const listingResult = await navigator.scanListing(page, baseUrl, maxPages);
+      const {
+        rows: listingRows,
+        apiRegistros,
+        pagesScanned: scanned,
+        unavailableReason,
+      } = listingResult;
       pagesScanned = scanned;
       totalListingRowsSeen = listingRows.length;
+      sourceUnavailable = listingResult.sourceUnavailable === true;
 
       if (listingRows.length === 0) {
-        stopReason = pagesScanned === 0
-          ? "listing_unavailable — no rows extracted from ComprasMX"
-          : "listing_empty — no rows returned by ComprasMX";
-        if (pagesScanned === 0) {
+        stopReason = sourceUnavailable
+          ? `source_unavailable — ComprasMX temporalmente no disponible${unavailableReason ? `: ${unavailableReason}` : ""}`
+          : pagesScanned === 0
+            ? "listing_unavailable — no rows extracted from ComprasMX"
+            : "listing_empty — no rows returned by ComprasMX";
+        if (pagesScanned === 0 && !sourceUnavailable) {
           errors.push(stopReason);
         }
-        log.warn({ stopReason }, "No se extrajeron filas del listado.");
+        log.warn(
+          { stopReason, sourceUnavailable, pagesScanned },
+          "No se extrajeron filas del listado ComprasMX",
+        );
         return;
       }
 
@@ -333,6 +347,7 @@ export async function collectComprasMx(
     totalAttachmentsChecked,
     knownStreak,
     stopReason,
+    sourceUnavailable,
     errors,
     startedAt,
     finishedAt: nowISO(),
