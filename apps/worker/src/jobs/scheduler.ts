@@ -34,6 +34,8 @@ import { nowInMexico, todayMexicoStr } from "../core/time";
 const log = createModuleLogger("scheduler");
 
 const JITTER_MS = 3 * 60 * 1000; // ±3 min
+const COMPRASMX_SOURCE_UNAVAILABLE_ALERT =
+  "ComprasMX temporalmente no disponible; sistema vivo; siguiente intento programado";
 
 function jitter(): number {
   return (Math.random() * 2 - 1) * JITTER_MS;
@@ -61,6 +63,20 @@ export function isCriticalCollectFailure(result: CollectJobResult): boolean {
 
 function recordCollectResultForCircuitBreaker(result: CollectJobResult): string | null {
   if (result.status === "skipped") return null;
+
+  if (result.status === "source_unavailable") {
+    log.warn(
+      {
+        status: result.status,
+        stopReason: result.stopReason,
+        itemsSeen: result.itemsSeen,
+        pagesScanned: result.pagesScanned,
+      },
+      "ComprasMX temporalmente no disponible; se mantiene scheduler vivo sin activar circuit breaker",
+    );
+    comprasMxCB.recordSuccess();
+    return COMPRASMX_SOURCE_UNAVAILABLE_ALERT;
+  }
 
   if (isCriticalCollectFailure(result)) {
     return comprasMxCB.recordFailure();
