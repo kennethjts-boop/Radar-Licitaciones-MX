@@ -104,7 +104,13 @@ const MAX_ATTACHMENT_PIPELINES_PER_CYCLE = 5;
 const MAX_CAPUFE_DEEP_REPORTS_PER_CYCLE = 2;
 
 export interface CollectJobResult {
-  status: "success" | "error" | "skipped" | "source_unavailable";
+  status:
+    | "success"
+    | "empty_result"
+    | "site_accessible_extraction_failed"
+    | "source_unavailable"
+    | "error"
+    | "skipped";
   reason?: string;
   errorMessage: string | null;
   durationMs: number;
@@ -753,12 +759,12 @@ export async function runCollectJob(): Promise<CollectJobResult> {
         }
       }
 
-      const sourceUnavailable = collectResult.sourceUnavailable === true;
+      const partialSourceFailure =
+        collectResult.status === "source_unavailable" ||
+        collectResult.status === "site_accessible_extraction_failed";
 
-      // Errores del collector. Si ComprasMX no está disponible temporalmente,
-      // el ciclo queda vivo y se reporta como source_unavailable sin romper DB,
-      // scheduler, healthcheck ni el resumen operativo.
-      if (collectResult.errors.length > 0 && !sourceUnavailable) {
+      // Las fallas parciales de ComprasMX no degradan el worker completo.
+      if (collectResult.errors.length > 0 && !partialSourceFailure) {
         errorMessage = collectResult.errors.join("; ");
       }
     } catch (err) {
@@ -784,7 +790,8 @@ export async function runCollectJob(): Promise<CollectJobResult> {
         metadata: {
           totalMatches,
           pagesScanned: collectResult?.pagesScanned || 0,
-          sourceUnavailable: collectResult?.sourceUnavailable === true,
+          collectionStatus: collectResult?.status ?? "error",
+          sourceUnavailable: collectResult?.status === "source_unavailable",
           commercialMatching: commercialTelemetry,
         },
       });
@@ -797,9 +804,9 @@ export async function runCollectJob(): Promise<CollectJobResult> {
           startedAt,
           startedAtMs: cycleStart,
           finishedAt,
-          status: collectResult?.sourceUnavailable === true
-            ? "source_unavailable"
-            : errorMessage ? "error" : "success",
+          status: errorMessage
+            ? "error"
+            : collectResult?.status ?? "error",
           errorMessage: errorMessage ?? null,
           // Telemetría Fase 2A
           pages_scanned: collectResult?.pagesScanned ?? 0,
@@ -868,9 +875,9 @@ export async function runCollectJob(): Promise<CollectJobResult> {
     }
 
     return {
-      status: collectResult?.sourceUnavailable === true
-        ? "source_unavailable"
-        : errorMessage ? "error" : "success",
+      status: errorMessage
+        ? "error"
+        : collectResult?.status ?? "error",
       errorMessage,
       durationMs,
       itemsSeen,

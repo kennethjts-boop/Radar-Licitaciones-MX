@@ -21,6 +21,7 @@ import {
   buildListingFingerprint,
   apiRegistroToRawInput,
   SELECTORS,
+  type ComprasMxScanStatus,
 } from "./comprasmx.navigator";
 import { normalize } from "../../normalizers/procurement.normalizer";
 import { getConfig } from "../../config/env";
@@ -80,6 +81,7 @@ export interface ComprasMxCollectorOptions {
  */
 export interface ComprasMxCollectResult {
   mode: "listing_scan" | "daily_recheck";
+  status: ComprasMxScanStatus;
   items: NormalizedProcurement[];
   /** Número de páginas de listado escaneadas (solo Modo 1). */
   pagesScanned: number;
@@ -101,7 +103,7 @@ export interface ComprasMxCollectResult {
   knownStreak: number;
   /** Razón de parada del scan (streak, maxPages, error, vacío, etc.). */
   stopReason: string | null;
-  /** ComprasMX no entregó listado en este ciclo, sin considerarse falla fatal del worker. */
+  /** Compatibilidad para consumidores existentes; derivado de status. */
   sourceUnavailable?: boolean;
   errors: string[];
   startedAt: string;
@@ -137,6 +139,7 @@ export async function collectComprasMx(
   let knownStreak = 0;
   let stopReason: string | null = null;
   let sourceUnavailable = false;
+  let status: ComprasMxScanStatus = "success";
 
   try {
     const db = getSupabaseClient();
@@ -163,19 +166,17 @@ export async function collectComprasMx(
       } = listingResult;
       pagesScanned = scanned;
       totalListingRowsSeen = listingRows.length;
-      sourceUnavailable = listingResult.sourceUnavailable === true;
+      status = listingResult.status;
+      sourceUnavailable = status === "source_unavailable";
 
       if (listingRows.length === 0) {
-        stopReason = sourceUnavailable
-          ? `source_unavailable — ComprasMX temporalmente no disponible${unavailableReason ? `: ${unavailableReason}` : ""}`
-          : pagesScanned === 0
-            ? "listing_unavailable — no rows extracted from ComprasMX"
-            : "listing_empty — no rows returned by ComprasMX";
-        if (pagesScanned === 0 && !sourceUnavailable) {
-          errors.push(stopReason);
-        }
+        stopReason = status === "source_unavailable"
+          ? `source_unavailable${unavailableReason ? ` — ${unavailableReason}` : ""}`
+          : status === "site_accessible_extraction_failed"
+            ? `site_accessible_extraction_failed${unavailableReason ? ` — ${unavailableReason}` : ""}`
+            : "empty_result — búsqueda completada sin filas";
         log.warn(
-          { stopReason, sourceUnavailable, pagesScanned },
+          { stopReason, status, pagesScanned },
           "No se extrajeron filas del listado ComprasMX",
         );
         return;
@@ -314,6 +315,8 @@ export async function collectComprasMx(
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ err }, "💥 Falla crítica en BrowserManager");
     errors.push(`BrowserManager crítico: ${msg}`);
+    status = "source_unavailable";
+    sourceUnavailable = true;
     if (!stopReason) stopReason = "critical_error";
   }
 
@@ -336,6 +339,7 @@ export async function collectComprasMx(
 
   return {
     mode: "listing_scan",
+    status,
     items,
     pagesScanned,
     totalListingRowsSeen,
@@ -435,6 +439,7 @@ export async function recheckComprasMx(
 
   return {
     mode: "daily_recheck",
+    status: "success",
     items,
     pagesScanned: 0,
     totalListingRowsSeen: 0,
