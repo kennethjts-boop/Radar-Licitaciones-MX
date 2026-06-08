@@ -22,11 +22,15 @@ def main() -> None:
             anon_key=settings.SUPABASE_ANON_KEY,
         )
     )
-    telegram_ready = bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_DEFAULT_CHAT_ID)
+    telegram_ready = settings.ENABLE_TELEGRAM_ALERTS and bool(
+        settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_DEFAULT_CHAT_ID
+    )
 
     if not supabase_ready:
         print("RSmx Supabase no configurado; usando modo local sin persistencia remota.")
-    if not telegram_ready:
+    if not settings.ENABLE_TELEGRAM_ALERTS:
+        print("RSmx Telegram desactivado por RSMX_ENABLE_TELEGRAM_ALERTS=false.")
+    elif not telegram_ready:
         print("RSmx Telegram no configurado; omitiendo envio de alertas externas.")
 
     store = InMemoryEventStore()
