@@ -13,6 +13,11 @@ import { Page, BrowserContext, Locator, Response as PlaywrightResponse } from "p
 import { createModuleLogger } from "../../core/logger";
 import { RawProcurementInput } from "../../normalizers/procurement.normalizer";
 import { getConfig } from "../../config/env";
+import {
+  ComprasMxFailureError,
+  classifyComprasMxFailure,
+  type ComprasMxFailureDiagnosis,
+} from "./comprasmx.failure";
 
 const log = createModuleLogger("comprasmx-navigator");
 const COMPRASMX_SITE_ORIGIN = "https://comprasmx.buengobierno.gob.mx";
@@ -56,6 +61,7 @@ export interface ListingScanResult {
   apiRegistros: Map<string, ApiRegistro>;
   pagesScanned: number;
   status: ComprasMxScanStatus;
+  failureDiagnosis?: ComprasMxFailureDiagnosis;
   sourceUnavailable?: boolean;
   unavailableReason?: string;
 }
@@ -63,6 +69,7 @@ export interface ListingScanResult {
 export type ComprasMxScanStatus =
   | "success"
   | "empty_result"
+  | "degraded"
   | "site_accessible_extraction_failed"
   | "source_unavailable";
 
@@ -528,6 +535,7 @@ export class ComprasMxNavigator {
       },
     ];
     let lastFailureReason = "ComprasMX browser fallback did not extract rows";
+    let lastFailureDiagnosis: ComprasMxFailureDiagnosis | undefined;
     let siteWasAccessible = false;
 
     for (const attemptConfig of attempts) {
@@ -718,23 +726,37 @@ export class ComprasMxNavigator {
           "El sitio cargó, pero no se capturó una respuesta válida ni filas del listado";
       } catch (err) {
         lastFailureReason = getErrorMessage(err);
+        const diagnosis = classifyComprasMxFailure(err, {
+          siteAccessible,
+          phase: "browser_fallback",
+        });
+        lastFailureDiagnosis = diagnosis;
+
+        if (diagnosis.category === "TRANSIENT_AUTH_OR_SESSION_401") {
+          throw new ComprasMxFailureError(lastFailureReason, diagnosis, {
+            cause: err,
+          });
+        }
+
         if (!siteAccessible || isTlsCertificateError(err)) {
           return {
             rows: [],
             apiRegistros,
             pagesScanned: 0,
             status: "source_unavailable",
+            failureDiagnosis: diagnosis,
             sourceUnavailable: true,
             unavailableReason: lastFailureReason,
           };
         }
 
-        log.error(
+        log.warn(
           {
-            err,
+            error: lastFailureReason,
             baseUrl,
             attempt: attemptConfig.attempt,
             status: "site_accessible_extraction_failed",
+            diagnosis,
           },
           "No se pudo completar el flujo de extracción en fallback navegador de ComprasMX",
         );
@@ -759,6 +781,7 @@ export class ComprasMxNavigator {
       status: siteWasAccessible
         ? "site_accessible_extraction_failed"
         : "source_unavailable",
+      failureDiagnosis: lastFailureDiagnosis,
       sourceUnavailable: !siteWasAccessible,
       unavailableReason: lastFailureReason,
     };
@@ -773,20 +796,34 @@ export class ComprasMxNavigator {
     page: Page,
     baseUrl: string,
     maxPages: number,
+    options: { forceBrowser?: boolean } = {},
   ): Promise<ListingScanResult> {
     log.info({ baseUrl, maxPages }, "📋 Iniciando scan de listado ComprasMX");
 
-    try {
-      const signedApiResult = await this.scanListingViaSignedApi(maxPages);
-      return signedApiResult;
-    } catch (apiErr) {
-      log.warn(
-        {
-          status: getErrorStatus(apiErr),
-          message: getErrorMessage(apiErr),
-        },
-        "Falló API firmada de ComprasMX; intentando respaldo con navegador",
-      );
+    if (!options.forceBrowser) {
+      try {
+        const signedApiResult = await this.scanListingViaSignedApi(maxPages);
+        return signedApiResult;
+      } catch (apiErr) {
+        const diagnosis = classifyComprasMxFailure(apiErr, {
+          phase: "signed_api",
+        });
+        if (diagnosis.category === "TRANSIENT_AUTH_OR_SESSION_401") {
+          throw new ComprasMxFailureError(getErrorMessage(apiErr), diagnosis, {
+            cause: apiErr,
+          });
+        }
+        log.warn(
+          {
+            status: getErrorStatus(apiErr),
+            message: getErrorMessage(apiErr),
+            diagnosis,
+          },
+          "Falló API firmada de ComprasMX; intentando respaldo con navegador",
+        );
+      }
+    } else {
+      log.info("ComprasMX reintento con sesión limpia usando flujo navegador");
     }
 
     return this.scanListingViaBrowser(page, baseUrl, maxPages);

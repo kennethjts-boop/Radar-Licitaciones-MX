@@ -35,6 +35,7 @@ interface PinoEntry {
   msg: string;
   err?: { message?: string; stack?: string; code?: string };
   reason?: { message?: string; stack?: string };
+  suppressTelegram?: boolean;
   time?: string;
   [key: string]: unknown;
 }
@@ -55,6 +56,7 @@ export function handlePinoEntry(line: string): void {
   }
 
   if (entry.level < 50) return; // info/debug/trace → ignorar
+  if (entry.suppressTelegram === true) return;
 
   const module = entry.module ?? "worker";
 
