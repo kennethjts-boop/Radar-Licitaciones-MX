@@ -80,6 +80,18 @@ describe("scheduler collect failure classification", () => {
     ).toBe(false);
   });
 
+  it("mantiene vivo el scheduler cuando ComprasMX está degradado por 401", () => {
+    const degraded = collectResult({
+      status: "degraded",
+      itemsSeen: 0,
+      pagesScanned: 0,
+      stopReason: "COMPRASMX_TRANSIENT_AUTH_401",
+    });
+
+    expect(isCriticalCollectFailure(degraded)).toBe(false);
+    expect(recordCollectResultForCircuitBreaker(degraded)).toBeNull();
+  });
+
   it("ignora ciclos saltados por lock", () => {
     expect(
       isCriticalCollectFailure(
@@ -100,16 +112,14 @@ describe("scheduler ComprasMX incident alerts", () => {
     resetComprasMxIncidentStateForTests();
   });
 
-  it("manda una sola alerta en el primer fallo consecutivo de extracción", () => {
+  it("no manda alertas inmediatas por fallos parciales de extracción", () => {
     const failure = collectResult({
       status: "site_accessible_extraction_failed",
       itemsSeen: 0,
       pagesScanned: 0,
     });
 
-    expect(recordCollectResultForCircuitBreaker(failure)).toContain(
-      "El sitio carga, pero el scraper no logró activar Buscar o capturar la respuesta API",
-    );
+    expect(recordCollectResultForCircuitBreaker(failure)).toBeNull();
     expect(recordCollectResultForCircuitBreaker(failure)).toBeNull();
   });
 
@@ -125,7 +135,7 @@ describe("scheduler ComprasMX incident alerts", () => {
     expect(recordCollectResultForCircuitBreaker(empty)).toBeNull();
   });
 
-  it("manda recuperación una sola vez cuando vuelven las filas", () => {
+  it("delega la recuperación a la telemetría persistente del collect job", () => {
     const failure = collectResult({
       status: "site_accessible_extraction_failed",
       itemsSeen: 0,
@@ -138,13 +148,11 @@ describe("scheduler ComprasMX incident alerts", () => {
     });
 
     recordCollectResultForCircuitBreaker(failure);
-    expect(recordCollectResultForCircuitBreaker(recovered)).toBe(
-      "🟢 ComprasMX volvió a extraer información correctamente.",
-    );
+    expect(recordCollectResultForCircuitBreaker(recovered)).toBeNull();
     expect(recordCollectResultForCircuitBreaker(recovered)).toBeNull();
   });
 
-  it("manda una nueva alerta si vuelve a fallar después de recuperarse", () => {
+  it("no duplica alertas al alternar fallo y recuperación", () => {
     const failure = collectResult({
       status: "site_accessible_extraction_failed",
       itemsSeen: 0,
@@ -152,8 +160,8 @@ describe("scheduler ComprasMX incident alerts", () => {
     });
     const recovered = collectResult({ status: "success" });
 
-    expect(recordCollectResultForCircuitBreaker(failure)).not.toBeNull();
-    expect(recordCollectResultForCircuitBreaker(recovered)).not.toBeNull();
-    expect(recordCollectResultForCircuitBreaker(failure)).not.toBeNull();
+    expect(recordCollectResultForCircuitBreaker(failure)).toBeNull();
+    expect(recordCollectResultForCircuitBreaker(recovered)).toBeNull();
+    expect(recordCollectResultForCircuitBreaker(failure)).toBeNull();
   });
 });

@@ -15,6 +15,7 @@
     "db:verify": "ts-node-dev src/scripts/db-verify.ts",
     "db:migrate:fase2a": "ts-node-dev src/scripts/migrate-fase2a.ts",
     "db:verify:fase2a": "ts-node-dev src/scripts/verify-fase2a.ts",
+    "comprasmx:smoke": "ts-node src/scripts/comprasmx-smoke.ts",
     "report:capufe:peaje": "ts-node-dev src/scripts/capufe-peaje-deep-report.ts",
     "historico:capufe": "ts-node-dev src/scripts/historico-capufe-sipot.ts",
     "buscar:operatividad:2026": "ts-node-dev src/scripts/buscar-operatividad-capufe-2026.ts",

@@ -16,7 +16,12 @@ import { withLock } from "../core/lock";
 import { withTimeout } from "../core/errors";
 import { nowISO, formatDuration, isDateExpired, isPublicationTooOld } from "../core/time";
 import { healthTracker } from "../core/healthcheck";
-import { recordHealthcheck } from "../core/system-state";
+import {
+  getState,
+  recordHealthcheck,
+  setState,
+  STATE_KEYS,
+} from "../core/system-state";
 import { existsSync, unlinkSync } from "fs";
 import { readFile } from "fs/promises";
 import {
@@ -67,6 +72,15 @@ import {
   type CommercialMatchingTelemetry,
 } from "../modules/commercial-matching/telemetry";
 import { IMSS_MORELOS_RADAR_KEY } from "../radars/imss-morelos-priority.matcher";
+import {
+  EMPTY_COMPRASMX_TELEMETRY,
+  transitionComprasMxTelemetry,
+  type ComprasMxTelemetryState,
+} from "../collectors/comprasmx/comprasmx.telemetry";
+import {
+  classifyComprasMxFailure,
+  type ComprasMxFailureDiagnosis,
+} from "../collectors/comprasmx/comprasmx.failure";
 
 const log = createModuleLogger("collect-job");
 
@@ -83,6 +97,50 @@ let _comprasMxSourceId: string | null = null;
 
 export function setComprasMxSourceId(id: string | null): void {
   _comprasMxSourceId = id;
+}
+
+async function recordComprasMxOperationalOutcome(input: {
+  success: boolean;
+  error?: unknown;
+  diagnosis?: ComprasMxFailureDiagnosis;
+  recoveredFromTransient401?: boolean;
+}): Promise<ComprasMxFailureDiagnosis | undefined> {
+  const previous = await getState<ComprasMxTelemetryState>(
+    STATE_KEYS.COMPRASMX_TELEMETRY,
+  );
+  const transition = transitionComprasMxTelemetry(
+    previous ?? EMPTY_COMPRASMX_TELEMETRY,
+    input,
+  );
+
+  await setState(STATE_KEYS.COMPRASMX_TELEMETRY, { ...transition.state });
+
+  if (input.success && previous?.comprasmx_consecutive_failures) {
+    log.info(
+      {
+        recoveredAt: transition.state.last_comprasmx_recovery_at,
+        recoveredFromTransient401: input.recoveredFromTransient401,
+      },
+      "ComprasMX recuperado después de fallo previo",
+    );
+  } else if (!input.success) {
+    log.warn(
+      {
+        diagnosis: transition.diagnosis,
+        consecutiveFailures:
+          transition.state.comprasmx_consecutive_failures,
+      },
+      "ComprasMX collector marcado como degradado",
+    );
+  }
+
+  if (transition.alertMessage) {
+    await sendTelegramMessage(transition.alertMessage, "HTML").catch((err) => {
+      log.warn({ err }, "No se pudo enviar alerta operativa ComprasMX");
+    });
+  }
+
+  return transition.diagnosis;
 }
 
 async function recordCurrentHealthcheck(): Promise<void> {
@@ -107,6 +165,7 @@ export interface CollectJobResult {
   status:
     | "success"
     | "empty_result"
+    | "degraded"
     | "site_accessible_extraction_failed"
     | "source_unavailable"
     | "error"
@@ -356,9 +415,7 @@ async function processAttachmentsForProcurement(
 }
 
 export async function runCollectJob(): Promise<CollectJobResult> {
-  log.info(
-    "Iniciando ciclo de colección — MODO 1: Periodic Incremental Listing Scan",
-  );
+  log.info("Iniciando extracción ComprasMX");
   const startedAt = nowISO();
   const cycleStart = Date.parse(startedAt);
 
@@ -366,7 +423,16 @@ export async function runCollectJob(): Promise<CollectJobResult> {
     if (!_comprasMxSourceId) {
       const errorMessage = "No source_id for comprasmx available. Cannot collect.";
       const durationMs = Date.now() - cycleStart;
-      log.error(errorMessage);
+      const diagnosis = classifyComprasMxFailure(errorMessage, {
+        phase: "collect_job_bootstrap",
+        missingConfig: ["comprasmx source_id"],
+      });
+      log.error({ diagnosis, suppressTelegram: true }, errorMessage);
+      await recordComprasMxOperationalOutcome({
+        success: false,
+        error: errorMessage,
+        diagnosis,
+      });
       healthTracker.recordCycle(durationMs, 0, false);
       await recordCurrentHealthcheck();
       return {
@@ -404,6 +470,7 @@ export async function runCollectJob(): Promise<CollectJobResult> {
     };
     let errorMessage: string | null = null;
     let collectResult: ComprasMxCollectResult | null = null;
+    let comprasMxOutcomeRecorded = false;
     let durationMs = 0;
 
     try {
@@ -414,6 +481,22 @@ export async function runCollectJob(): Promise<CollectJobResult> {
         "comprasmx-collection",
       );
       healthTracker.setPlaywrightHealth("ok");
+
+      const extractionSucceeded =
+        collectResult.status === "success" ||
+        collectResult.status === "empty_result";
+      const operationalDiagnosis = await recordComprasMxOperationalOutcome({
+        success: extractionSucceeded,
+        error:
+          collectResult.failureDiagnosis?.technicalReason ??
+          collectResult.stopReason,
+        diagnosis: collectResult.failureDiagnosis,
+        recoveredFromTransient401: collectResult.recoveredFromTransient401,
+      });
+      comprasMxOutcomeRecorded = true;
+      if (operationalDiagnosis) {
+        collectResult.failureDiagnosis = operationalDiagnosis;
+      }
 
       itemsSeen = collectResult.items.length;
       commercialTelemetry.rawResultsReceived = itemsSeen;
@@ -760,6 +843,7 @@ export async function runCollectJob(): Promise<CollectJobResult> {
       }
 
       const partialSourceFailure =
+        collectResult.status === "degraded" ||
         collectResult.status === "source_unavailable" ||
         collectResult.status === "site_accessible_extraction_failed";
 
@@ -769,14 +853,25 @@ export async function runCollectJob(): Promise<CollectJobResult> {
       }
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : String(err);
+      const diagnosis = classifyComprasMxFailure(err, {
+        phase: collectResult ? "post_collection_processing" : "collect_job",
+      });
+      if (!comprasMxOutcomeRecorded) {
+        await recordComprasMxOperationalOutcome({
+          success: false,
+          error: err,
+          diagnosis,
+        });
+      }
       if (!collectResult) {
         healthTracker.setPlaywrightHealth("down");
       }
-      log.error({ err }, "Error en ciclo de colección");
-      // Notificar a Telegram cuando hay falla crítica del collector
-      await sendTelegramMessage(
-        `⚠️ ERROR en ciclo de colección: ${(errorMessage ?? "Error desconocido").slice(0, 300)}`,
-      ).catch(() => {});
+      log.error(
+        { err, diagnosis, suppressTelegram: true },
+        diagnosis.origin === "NETWORK_INFRA"
+          ? "Fallo de infraestructura/navegador"
+          : "Error técnico persistente en scraper ComprasMX",
+      );
     } finally {
       const finishedAt = nowISO();
 
@@ -797,7 +892,9 @@ export async function runCollectJob(): Promise<CollectJobResult> {
       });
 
       await (async () => {
-        const { setState, STATE_KEYS } = await import("../core/system-state");
+        const comprasMxTelemetry = await getState<ComprasMxTelemetryState>(
+          STATE_KEYS.COMPRASMX_TELEMETRY,
+        );
         await setState(STATE_KEYS.LAST_COLLECT_RUN, {
           collectorKey: "comprasmx_playwright",
           mode: "listing_scan",
@@ -819,6 +916,22 @@ export async function runCollectJob(): Promise<CollectJobResult> {
           total_mutated_detected: collectResult?.totalMutatedDetected ?? 0,
           total_attachments_checked:
             collectResult?.totalAttachmentsChecked ?? 0,
+          comprasmx_consecutive_failures:
+            comprasMxTelemetry?.comprasmx_consecutive_failures ?? 0,
+          last_comprasmx_success_at:
+            comprasMxTelemetry?.last_comprasmx_success_at ?? null,
+          last_comprasmx_error_at:
+            comprasMxTelemetry?.last_comprasmx_error_at ?? null,
+          last_comprasmx_error_reason:
+            comprasMxTelemetry?.last_comprasmx_error_reason ?? null,
+          last_comprasmx_error_origin:
+            comprasMxTelemetry?.last_comprasmx_error_origin ?? null,
+          last_comprasmx_error_confidence:
+            comprasMxTelemetry?.last_comprasmx_error_confidence ?? null,
+          last_comprasmx_recovery_at:
+            comprasMxTelemetry?.last_comprasmx_recovery_at ?? null,
+          recovered_from_transient_401:
+            collectResult?.recoveredFromTransient401 ?? false,
           itemsSeen,
           itemsCreated,
           itemsUpdated,

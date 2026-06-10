@@ -34,18 +34,6 @@ import { nowInMexico, todayMexicoStr } from "../core/time";
 const log = createModuleLogger("scheduler");
 
 const JITTER_MS = 3 * 60 * 1000; // ±3 min
-const COMPRASMX_EXTRACTION_FAILED_ALERT =
-  "No se pudo completar el flujo de extracción de ComprasMX. El sitio carga, pero el scraper no logró activar Buscar o capturar la respuesta API. Sistema vivo; siguiente intento programado.";
-const COMPRASMX_SOURCE_UNAVAILABLE_ALERT =
-  "No se pudo acceder a ComprasMX o su API dentro del tiempo esperado. Sistema vivo; siguiente intento programado.";
-const COMPRASMX_RECOVERY_ALERT =
-  "🟢 ComprasMX volvió a extraer información correctamente.";
-
-type ComprasMxIncidentType =
-  | "site_accessible_extraction_failed"
-  | "source_unavailable";
-
-let openComprasMxIncident: ComprasMxIncidentType | null = null;
 
 function jitter(): number {
   return (Math.random() * 2 - 1) * JITTER_MS;
@@ -72,41 +60,14 @@ export function isCriticalCollectFailure(result: CollectJobResult): boolean {
 }
 
 export function resetComprasMxIncidentStateForTests(): void {
-  openComprasMxIncident = null;
-}
-
-function recordComprasMxIncident(result: CollectJobResult): string | null {
-  if (result.status === "success") {
-    if (openComprasMxIncident) {
-      openComprasMxIncident = null;
-      return COMPRASMX_RECOVERY_ALERT;
-    }
-    return null;
-  }
-
-  if (result.status === "empty_result") return null;
-
-  if (
-    result.status !== "site_accessible_extraction_failed" &&
-    result.status !== "source_unavailable"
-  ) {
-    return null;
-  }
-
-  if (openComprasMxIncident === result.status) {
-    return null;
-  }
-
-  openComprasMxIncident = result.status;
-  return result.status === "site_accessible_extraction_failed"
-    ? COMPRASMX_EXTRACTION_FAILED_ALERT
-    : COMPRASMX_SOURCE_UNAVAILABLE_ALERT;
+  // La deduplicación ahora se persiste en system_state desde collect.job.
 }
 
 export function recordCollectResultForCircuitBreaker(result: CollectJobResult): string | null {
   if (result.status === "skipped") return null;
 
   if (
+    result.status === "degraded" ||
     result.status === "source_unavailable" ||
     result.status === "site_accessible_extraction_failed"
   ) {
@@ -120,7 +81,7 @@ export function recordCollectResultForCircuitBreaker(result: CollectJobResult): 
       "Falla parcial de ComprasMX; se mantiene scheduler vivo sin activar circuit breaker",
     );
     comprasMxCB.recordSuccess();
-    return recordComprasMxIncident(result);
+    return null;
   }
 
   if (isCriticalCollectFailure(result)) {
@@ -141,7 +102,7 @@ export function recordCollectResultForCircuitBreaker(result: CollectJobResult): 
   }
 
   comprasMxCB.recordSuccess();
-  return recordComprasMxIncident(result);
+  return null;
 }
 
 export async function runExternalLeadsIfEnabled(
