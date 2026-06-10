@@ -280,7 +280,7 @@ export interface ExternalLeadSourceQueryResult {
 }
 
 export interface ExternalLeadRunResult {
-  status: "success" | "skipped" | "error";
+  status: "success" | "disabled" | "skipped" | "error";
   reason?: string;
   dryRun: boolean;
   discoveryMode: boolean;

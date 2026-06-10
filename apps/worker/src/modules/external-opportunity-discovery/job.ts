@@ -25,6 +25,7 @@ import type {
   ExternalLeadRunResult,
   ExternalLeadSourceQueryResult,
 } from "./types";
+import { isExternalOsintEnabled } from "./config";
 
 const log = createModuleLogger("external-leads-job");
 
@@ -235,20 +236,46 @@ export async function runExternalLeadsOsintJob(
   overrides: Partial<ExternalLeadRunOptions> = {},
   dependencies: ExternalLeadJobDependencies = {},
 ): Promise<ExternalLeadRunResult> {
-  const options = { ...getExternalLeadRunOptions(), ...overrides };
+  const configuredOptions = getExternalLeadRunOptions();
+  const enabledByEnvironment = isExternalOsintEnabled({
+    ENABLE_EXTERNAL_LEADS_OSINT: configuredOptions.enabled,
+  });
+  const options = {
+    ...configuredOptions,
+    ...overrides,
+    enabled: enabledByEnvironment,
+  };
   const recordState = dependencies.recordState ?? recordExternalLeadRunState;
 
-  if (!options.enabled) {
-    const skipped = emptyResult(
-      "skipped",
-      options.dryRun,
-      options.discoveryMode,
-      "ENABLE_EXTERNAL_LEADS_OSINT=false",
+  if (!enabledByEnvironment) {
+    const disabledOptions: ExternalLeadRunOptions = {
+      ...options,
+      enabled: false,
+      dryRun: false,
+      discoveryMode: false,
+      telegramEnabled: false,
+      debugDiscards: false,
+      saveLowScoreCandidates: false,
+      debugCandidates: false,
+    };
+    const disabled = emptyResult(
+      "disabled",
+      false,
+      false,
+      "disabled_by_env",
     );
-    await recordState(skipped, options).catch((err) =>
-      log.warn({ err }, "No se pudo registrar estado OSINT skipped"),
+    await recordState(disabled, disabledOptions).catch((err) =>
+      log.warn({ err }, "No se pudo registrar estado OSINT disabled"),
     );
-    return skipped;
+    log.info(
+      {
+        status: "disabled",
+        reason: "disabled_by_env",
+        discoveryMode: false,
+      },
+      "External OSINT deshabilitado por configuración",
+    );
+    return disabled;
   }
 
   const errors: string[] = [];

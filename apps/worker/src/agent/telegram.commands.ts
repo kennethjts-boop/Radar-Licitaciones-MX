@@ -19,72 +19,45 @@ import { getActiveRadars } from "../radars/index";
 import { getLastCollectRun } from "../storage/collect-run.repo";
 import { getLastSentAlert } from "../storage/match-alert.repo";
 import type { DbCollectRun } from "../types/database";
+import {
+  getExternalOsintOperationalView,
+  isExternalOsintEnabled,
+} from "../modules/external-opportunity-discovery/config";
+import {
+  classifyTelegramPollingError,
+  isTelegramCommandsPollingEnabled,
+  recordTelegramCommandsStartup,
+  recordTelegramPollingFailure,
+  recordTelegramPollingSuccess,
+} from "../core/telegram-commands-health";
 
 const log = createModuleLogger("commands");
 const MANUAL_SCAN_TIMEOUT_MS = 30 * 60 * 1000;
 
 let _bot: TelegramBot | null = null;
 let manualScanInFlight: Promise<void> | null = null;
-let pollingConflictHandled = false;
-
-function getTelegramErrorDetails(err: Error): { statusCode?: number; code?: string; message: string } {
-  const errorLike = err as Error & {
-    code?: string;
-    response?: {
-      statusCode?: number;
-      body?: {
-        description?: string;
-        error_code?: number;
-      };
-    };
-  };
-
-  return {
-    statusCode: errorLike.response?.statusCode ?? errorLike.response?.body?.error_code,
-    code: errorLike.code,
-    message: errorLike.response?.body?.description ?? err.message,
-  };
-}
-
-function isPollingConflict(err: Error): boolean {
-  const details = getTelegramErrorDetails(err);
-  const message = details.message.toLowerCase();
-  return (
-    details.statusCode === 409 ||
-    message.includes("terminated by other getupdates request") ||
-    message.includes("another bot instance")
-  );
-}
-
-function isTransientPollingError(err: Error): boolean {
-  const details = getTelegramErrorDetails(err);
-  return (
-    details.code === "EFATAL" ||
-    details.code === "ETIMEDOUT" ||
-    details.code === "ECONNRESET" ||
-    details.code === "ECONNREFUSED" ||
-    details.code === "ENOTFOUND" ||
-    details.statusCode === 502 ||
-    details.statusCode === 503 ||
-    details.statusCode === 504
-  );
-}
-
-async function stopPollingAfterConflict(bot: TelegramBot): Promise<void> {
-  try {
-    await bot.stopPolling();
-  } catch (stopErr) {
-    log.warn({ err: stopErr }, "No se pudo detener Telegram polling tras conflicto");
-  }
-}
 
 export async function initCommandBot(): Promise<TelegramBot> {
   if (_bot) return _bot;
 
   const config = getConfig();
+  if (!isTelegramCommandsPollingEnabled(config)) {
+    await recordTelegramCommandsStartup("disabled").catch((err) => {
+      log.warn({ err }, "No se pudo registrar Telegram commands disabled");
+    });
+    throw new Error("Telegram commands polling is disabled by configuration");
+  }
 
   // Crear instancia sin polling primero para poder llamar deleteWebhook
   _bot = new TelegramBot(config.TELEGRAM_BOT_TOKEN, { polling: false });
+  await recordTelegramCommandsStartup("polling").catch((err) => {
+    log.warn({ err }, "No se pudo registrar inicio de Telegram polling");
+  });
+  const sendOperationalMessage = (text: string) =>
+    _bot!.sendMessage(config.TELEGRAM_CHAT_ID, text, {
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+    });
 
   // Eliminar webhook si existía — evita 409 Conflict en getUpdates
   try {
@@ -96,39 +69,35 @@ export async function initCommandBot(): Promise<TelegramBot> {
 
   // Registrar handlers de error antes de iniciar polling
   _bot.on("polling_error", (err: Error) => {
-    const details = getTelegramErrorDetails(err);
-
-    if (isPollingConflict(err)) {
-      if (!pollingConflictHandled) {
-        pollingConflictHandled = true;
-        log.warn(
-          {
-            code: details.code,
-            statusCode: details.statusCode,
-            msg: details.message,
-          },
-          "Telegram polling conflict: another instance is already polling. Disable TELEGRAM_COMMAND_BOT_ENABLED on secondary workers.",
-        );
-      }
-      void stopPollingAfterConflict(_bot!);
-      return;
-    }
-
-    const payload = {
-      code: details.code,
-      statusCode: details.statusCode,
-      msg: details.message,
-    };
-
-    if (isTransientPollingError(err)) {
-      log.warn(payload, "Telegram polling_error transitorio");
-      return;
-    }
-
-    log.error(payload, "❌ Telegram polling_error");
+    const diagnosis = classifyTelegramPollingError(err);
+    void recordTelegramPollingFailure(
+      err,
+      sendOperationalMessage,
+    ).catch((recordError) => {
+      log.warn(
+        { err: recordError, diagnosis },
+        "No se pudo registrar Telegram polling_error",
+      );
+    });
   });
   _bot.on("error", (err: Error) => {
-    log.error({ msg: err.message }, "❌ Telegram bot error");
+    void recordTelegramPollingFailure(
+      err,
+      sendOperationalMessage,
+    ).catch((recordError) => {
+      log.warn(
+        { err: recordError },
+        "No se pudo registrar error de Telegram commands",
+      );
+    });
+  });
+  _bot.on("message", () => {
+    void recordTelegramPollingSuccess(sendOperationalMessage).catch((err) => {
+      log.warn(
+        { err },
+        "No se pudo registrar recuperación Telegram commands",
+      );
+    });
   });
 
   // Iniciar polling
@@ -144,6 +113,11 @@ export async function initCommandBot(): Promise<TelegramBot> {
 
 export function getCommandBot(): TelegramBot | null {
   return _bot;
+}
+
+export function resetCommandBotForTests(): void {
+  _bot = null;
+  manualScanInFlight = null;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -386,6 +360,9 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       const schedulerState = await getState<Record<string, unknown>>(STATE_KEYS.SCHEDULER_STATUS);
       const healthcheckState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_HEALTHCHECK_AT);
       const dailySummaryState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_DAILY_SUMMARY);
+      const telegramCommandsState = await getState<Record<string, unknown>>(
+        STATE_KEYS.TELEGRAM_COMMANDS_TELEMETRY,
+      );
       const lastAlert = await getLastSentAlert().catch((err) => {
         log.warn({ err }, "No se pudo leer última alerta enviada");
         return null;
@@ -415,15 +392,47 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
 
       const external =
         status.externalLeads.status !== "none" ? status.externalLeads : externalState;
-      const lastErrorLine = buildLastErrorLine(lastRunState, dailySummaryState, external as Record<string, unknown> | null);
       const externalRecord = external as Record<string, unknown> | null;
+      const externalView = getExternalOsintOperationalView(config, externalRecord);
+      const lastErrorLine = buildLastErrorLine(
+        lastRunState,
+        dailySummaryState,
+        externalView.state,
+      );
       const dailySummaryDisplay = dailySummaryState
         ? `${dailySummaryState.status ?? "N/D"} | Esperado: ${formatTelemetryDate(dailySummaryState.expectedAt)} | Real: ${formatTelemetryDate(dailySummaryState.finishedAt ?? dailySummaryState.actualAt ?? dailySummaryState.startedAt)}`
         : "Sin registro";
       const commercialState = lastRunState?.commercialMatching as Record<string, unknown> | undefined;
-      const externalSummary = config.ENABLE_EXTERNAL_LEADS_OSINT
-        ? `vivo, ${numberField(externalRecord, "detected") > 0 ? "con leads" : `sin leads: ${externalNoLeadCause(externalRecord)}`}`
-        : "inactivo";
+      const externalSummary = externalView.disabled
+        ? "deshabilitado"
+        : `vivo, ${externalView.detected > 0 ? "con leads" : `sin leads: ${externalNoLeadCause(externalView.state)}`}`;
+      const externalStatusLines = externalView.disabled
+        ? [
+            `🧭 External OSINT: <b>deshabilitado</b>`,
+            `   Discovery: <b>false</b>`,
+            `   Último: <b>disabled_by_env</b>`,
+            `   Fuentes: <b>0</b> | Raw: <b>0</b> | Detectados: <b>0</b> | Guardados: <b>0</b> | Alertas: <b>0</b> | Errores: <b>0</b>`,
+          ]
+        : [
+            `🧭 External OSINT: <b>${escapeHtml(externalSummary)}</b> | Dry run: <b>${formatBool(externalView.dryRun)}</b> | Discovery: <b>${formatBool(externalView.discoveryMode)}</b>`,
+            `   Último: <b>${escapeHtml(externalView.status)}</b> | Fuentes: <b>${externalView.sourcesReviewed}</b> | Raw: <b>${externalView.rawResultsReceived}</b> | Detectados: <b>${externalView.detected}</b> | Guardados: <b>${externalView.saved}</b> | Alertas: <b>${externalView.alerted}</b> | Errores: <b>${externalView.errors.length}</b>`,
+          ];
+      const pollingEnabled = isTelegramCommandsPollingEnabled(config);
+      const pollingStatus = !pollingEnabled
+        ? "deshabilitado"
+        : telegramCommandsState?.telegram_polling_ok === false &&
+            numberField(
+              telegramCommandsState,
+              "telegram_commands_consecutive_failures",
+            ) > 0
+          ? "DEGRADADO"
+          : telegramCommandsState?.telegram_polling_ok === true
+            ? "OK"
+            : "iniciando";
+      const sendStatus =
+        telegramCommandsState?.telegram_send_message_ok === false
+          ? "DEGRADADO"
+          : serviceLabel(status.services.telegram);
 
       const lines = [
         `🔍 <b>ESTADO — Radar Licitaciones MX</b>`,
@@ -431,7 +440,8 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `🖥 Worker: <b>${workerIcon} ${serviceLabel(status.overall)}</b>`,
         `${dbIcon} DB: <b>${serviceLabel(status.services.database)}</b> (${status.dbConnected ? "Conectada" : "Desconectada"})`,
         `🧱 Schema: <b>${status.dbSchemaValid ? "Válido" : "Inválido"}</b>`,
-        `${tgIcon} Telegram: <b>${serviceLabel(status.services.telegram)}</b>`,
+        `${tgIcon} Telegram alertas (sendMessage): <b>${sendStatus}</b>`,
+        `🤖 Telegram commands (polling): <b>${pollingStatus}</b> | Fallos: <b>${numberField(telegramCommandsState, "telegram_commands_consecutive_failures")}</b> | Razón: <b>${escapeHtml(telegramCommandsState?.last_telegram_commands_error_reason ?? "N/D")}</b>`,
         ...degradationLine,
         ...stalledLine,
         ...lastCycleErrorLine,
@@ -445,10 +455,7 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `🧾 Resumen 7am: <b>${escapeHtml(dailySummaryDisplay)}</b>`,
         `🛰 Radares: <b>${radars.length} activos</b>`,
         `💼 Motor comercial: <b>${config.COMMERCIAL_MATCHING_ENABLED ? "activo" : "inactivo"}</b> | Candidatos: <b>${numberField(commercialState, "commercialCandidates")}</b> | Matches perfiles: <b>${numberField(commercialState, "matchedProfiles")}</b>`,
-        `🧭 External OSINT: <b>${escapeHtml(externalSummary)}</b> | Dry run: <b>${formatBool(config.EXTERNAL_LEADS_DRY_RUN)}</b> | Discovery: <b>${formatBool(config.EXTERNAL_LEADS_DISCOVERY_MODE)}</b>`,
-        external
-          ? `   Último: <b>${external.status ?? "N/D"}</b> | Fuentes: <b>${numberField(externalRecord, "sourcesReviewed")}</b> | Raw: <b>${numberField(externalRecord, "rawResultsReceived")}</b> | Detectados: <b>${numberField(externalRecord, "detected")}</b> | Guardados: <b>${numberField(externalRecord, "saved")}</b> | Alertas: <b>${numberField(externalRecord, "alerted")}</b> | Errores: <b>${Array.isArray(externalRecord?.errors) ? externalRecord.errors.length : 0}</b>`
-          : `   Último: <b>N/D</b>`,
+        ...externalStatusLines,
         "",
         `⏱ Uptime: <b>${formatDuration(status.uptimeMs)}</b>`,
         `🌍 Env: <b>${config.NODE_ENV}</b> | <b>${config.RAILWAY_ENVIRONMENT ?? "local"}</b>`,
@@ -586,12 +593,49 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       const rawLastRunState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_COLLECT_RUN);
       const lastRunState = await resolveLastRunState(rawLastRunState, status.lastCycleAt);
       const externalState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_EXTERNAL_LEADS_RUN);
+      const telegramCommandsState = await getState<Record<string, unknown>>(
+        STATE_KEYS.TELEGRAM_COMMANDS_TELEMETRY,
+      );
       const config = getConfig();
       const radars = getActiveRadars();
       const external =
         status.externalLeads.status !== "none" ? status.externalLeads : externalState;
       const externalRecord = external as Record<string, unknown> | null;
+      const externalView = getExternalOsintOperationalView(config, externalRecord);
       const commercialState = lastRunState?.commercialMatching as Record<string, unknown> | undefined;
+      const externalDebugLines = externalView.disabled
+        ? [
+            `<b>🧭 External OSINT:</b> deshabilitado por configuración`,
+            `  Discovery mode: <b>false</b>`,
+            `  Fuentes revisadas: <b>0</b>`,
+            `  Resultados crudos: <b>0</b>`,
+            `  Detectados: <b>0</b>`,
+            `  Guardados: <b>0</b>`,
+            `  Alertas: <b>0</b>`,
+            `  Errores: <b>0</b>`,
+          ]
+        : [
+            `<b>🧭 External OSINT:</b> activo`,
+            `  Dry run: <b>${formatBool(externalView.dryRun)}</b>`,
+            `  Discovery mode: <b>${formatBool(externalView.discoveryMode)}</b>`,
+            `  Último ciclo: <b>${escapeHtml(externalView.status)}</b>`,
+            `  Fuentes revisadas: <b>${externalView.sourcesReviewed}</b>`,
+            `  Resultados crudos: <b>${externalView.rawResultsReceived}</b>`,
+            `  Normalizados: <b>${externalView.normalized}</b>`,
+            `  Detectados: <b>${externalView.detected}</b>`,
+            `  Guardados: <b>${externalView.saved}</b>`,
+            `  Alertas: <b>${externalView.alerted}</b>`,
+            `  Descartados keyword: <b>${numberField(externalView.state, "discardedByKeyword")}</b>`,
+            `  Descartados evidencia: <b>${numberField(externalView.state, "discardedByEvidence") + numberField(externalView.state, "discardedByMissingEvidence")}</b>`,
+            `  Descartados fecha: <b>${numberField(externalView.state, "discardedByDate")}</b>`,
+            `  Descartados sanitización: <b>${numberField(externalView.state, "discardedBySanitization")}</b>`,
+            `  Descartados alcance: <b>${numberField(externalView.state, "discardedByScope")}</b>`,
+            `  Descartados score: <b>${numberField(externalView.state, "discardedByScore")}</b>`,
+            `  Descartados dedupe: <b>${numberField(externalView.state, "discardedByDeduplication")}</b>`,
+            `  Errores: <b>${externalView.errors.length}</b>`,
+            ...formatTopDiscarded(externalView.state),
+            ...formatTopErrors(externalView.state),
+          ];
 
       const lines = [
         `🔧 <b>TELEMETRÍA — Radar Licitaciones MX</b>`,
@@ -628,26 +672,13 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         ...formatCommercialCandidates(commercialState, "topMatchedCandidates"),
         ...formatCommercialCandidates(commercialState, "topDiscardedCandidates"),
         "",
-        `<b>🧭 External OSINT:</b> ${config.ENABLE_EXTERNAL_LEADS_OSINT ? "activo" : "inactivo"}`,
-        `  Dry run: <b>${formatBool(config.EXTERNAL_LEADS_DRY_RUN)}</b>`,
-        `  Discovery mode: <b>${formatBool(config.EXTERNAL_LEADS_DISCOVERY_MODE)}</b>`,
-        `  Último ciclo: <b>${external?.status ?? "N/D"}</b>`,
-        `  Fuentes revisadas: <b>${numberField(externalRecord, "sourcesReviewed")}</b>`,
-        `  Resultados crudos: <b>${numberField(externalRecord, "rawResultsReceived")}</b>`,
-        `  Normalizados: <b>${numberField(externalRecord, "normalized")}</b>`,
-        `  Detectados: <b>${numberField(externalRecord, "detected")}</b>`,
-        `  Guardados: <b>${numberField(externalRecord, "saved")}</b>`,
-        `  Alertas: <b>${numberField(externalRecord, "alerted")}</b>`,
-        `  Descartados keyword: <b>${numberField(externalRecord, "discardedByKeyword")}</b>`,
-        `  Descartados evidencia: <b>${numberField(externalRecord, "discardedByEvidence") + numberField(externalRecord, "discardedByMissingEvidence")}</b>`,
-        `  Descartados fecha: <b>${numberField(externalRecord, "discardedByDate")}</b>`,
-        `  Descartados sanitización: <b>${numberField(externalRecord, "discardedBySanitization")}</b>`,
-        `  Descartados alcance: <b>${numberField(externalRecord, "discardedByScope")}</b>`,
-        `  Descartados score: <b>${numberField(externalRecord, "discardedByScore")}</b>`,
-        `  Descartados dedupe: <b>${numberField(externalRecord, "discardedByDeduplication")}</b>`,
-        `  Errores: <b>${Array.isArray(externalRecord?.errors) ? externalRecord.errors.length : 0}</b>`,
-        ...formatTopDiscarded(externalRecord),
-        ...formatTopErrors(externalRecord),
+        ...externalDebugLines,
+        "",
+        `<b>🤖 Telegram commands:</b> ${isTelegramCommandsPollingEnabled(config) ? "polling activo" : "deshabilitado"}`,
+        `  Polling OK: <b>${formatBool(telegramCommandsState?.telegram_polling_ok)}</b>`,
+        `  sendMessage OK: <b>${formatBool(telegramCommandsState?.telegram_send_message_ok)}</b>`,
+        `  Fallos consecutivos: <b>${numberField(telegramCommandsState, "telegram_commands_consecutive_failures")}</b>`,
+        `  Último error: <b>${escapeHtml(telegramCommandsState?.last_telegram_commands_error_reason ?? "N/D")}</b>`,
         "",
         lastRunState?.errorMessage ? `⚠️ <b>Error:</b> <code>${String(lastRunState.errorMessage).slice(0, 100)}</code>` : "",
         "",
@@ -803,6 +834,15 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     log.info({ command: msg.text, chatIdPartial, from: msg.from?.username }, "command_received");
 
     if (String(msg.chat.id) !== chatId) return;
+
+    if (!isExternalOsintEnabled(getConfig())) {
+      await bot.sendMessage(
+        chatId,
+        "🧭 External OSINT está deshabilitado por configuración.",
+        { parse_mode: "HTML" },
+      );
+      return;
+    }
 
     let limit = 5;
     if (match?.[1]) {

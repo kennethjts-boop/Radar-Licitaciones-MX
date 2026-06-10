@@ -1,5 +1,8 @@
 import { initCommandBot } from "../telegram.commands";
 import TelegramBot from "node-telegram-bot-api";
+import { getConfig } from "../../config/env";
+
+let mockExternalState: Record<string, unknown> | null = null;
 
 // Mock Supabase
 const mockSelect = jest.fn();
@@ -14,10 +17,13 @@ jest.mock("../../storage/client", () => ({
 }));
 
 // Mock config
-jest.mock("../../config/env", () => ({
-  getConfig: () => ({
+jest.mock("../../config/env", () => {
+  const config = {
     TELEGRAM_BOT_TOKEN: "mock_token",
     TELEGRAM_CHAT_ID: "123456",
+    TELEGRAM_COMMAND_BOT_ENABLED: true,
+    TELEGRAM_COMMANDS_ENABLED: true,
+    TELEGRAM_POLLING_ENABLED: true,
     COLLECT_INTERVAL_MINUTES: 30,
     NODE_ENV: "test",
     RAILWAY_ENVIRONMENT: "local",
@@ -26,15 +32,30 @@ jest.mock("../../config/env", () => ({
     EXTERNAL_LEADS_DRY_RUN: false,
     EXTERNAL_LEADS_DISCOVERY_MODE: true,
     LOG_LEVEL: "info",
-  }),
-}));
+  };
+  return {
+    getConfig: jest.fn(() => config),
+  };
+});
 
 // Mock system state
 jest.mock("../../core/system-state", () => ({
-  getState: jest.fn().mockResolvedValue(null),
+  getState: jest.fn(async (key: string) => {
+    if (key === "last_external_leads_run") return mockExternalState;
+    if (key === "telegram_commands_telemetry") {
+      return {
+        telegram_polling_ok: true,
+        telegram_send_message_ok: true,
+        telegram_commands_consecutive_failures: 0,
+      };
+    }
+    return null;
+  }),
+  setState: jest.fn().mockResolvedValue(undefined),
   STATE_KEYS: {
     LAST_COLLECT_RUN: "last_collect_run",
     LAST_EXTERNAL_LEADS_RUN: "last_external_leads_run",
+    TELEGRAM_COMMANDS_TELEMETRY: "telegram_commands_telemetry",
     WORKER_BOOT_TIME: "worker_boot_time",
     SCHEDULER_STATUS: "scheduler_status",
     LAST_HEALTHCHECK_AT: "last_healthcheck_at",
@@ -55,14 +76,31 @@ jest.mock("../../core/healthcheck", () => ({
       dbConnected: true,
       dbSchemaValid: true,
       degradationReasons: [],
+      lastCycleAt: null,
+      lastCycleStatus: "success",
+      uptimeMs: 60_000,
+      schedulerStatus: "active",
       externalLeads: { status: "none" },
     }),
+    setTelegramHealth: jest.fn(),
   },
+}));
+
+jest.mock("../../storage/collect-run.repo", () => ({
+  getLastCollectRun: jest.fn().mockResolvedValue(null),
+}));
+
+jest.mock("../../storage/match-alert.repo", () => ({
+  getLastSentAlert: jest.fn().mockResolvedValue(null),
 }));
 
 describe("Telegram Commands - /noticias_comerciales", () => {
   let botInstance: TelegramBot;
   const mockSendMessage = jest.fn().mockResolvedValue({ message_id: 111 });
+  const mockConfig = getConfig() as ReturnType<typeof getConfig> & {
+    ENABLE_EXTERNAL_LEADS_OSINT: boolean;
+    EXTERNAL_LEADS_DISCOVERY_MODE: boolean;
+  };
 
   beforeAll(async () => {
     // Override prototype methods on TelegramBot mock to avoid real API calls
@@ -75,6 +113,102 @@ describe("Telegram Commands - /noticias_comerciales", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockConfig.ENABLE_EXTERNAL_LEADS_OSINT = true;
+    mockConfig.EXTERNAL_LEADS_DISCOVERY_MODE = true;
+    mockExternalState = null;
+  });
+
+  it("/estado muestra External OSINT deshabilitado y contadores actuales en cero", async () => {
+    mockConfig.ENABLE_EXTERNAL_LEADS_OSINT = false;
+    mockExternalState = {
+      status: "error",
+      sourcesReviewed: 40,
+      rawResultsReceived: 386,
+      detected: 12,
+      errors: ["certificate error"],
+    };
+
+    const callbacks = (botInstance as any)._textRegexpCallbacks || [];
+    const handler = callbacks.find(
+      (callback: any) =>
+        callback.regexp?.toString().includes("prueba|estado"),
+    )?.callback;
+    expect(handler).toBeDefined();
+
+    await handler({
+      chat: { id: 123456 },
+      text: "/estado",
+    });
+
+    const message = mockSendMessage.mock.calls.at(-1)?.[1] as string;
+    expect(message).toContain("External OSINT: <b>deshabilitado</b>");
+    expect(message).toContain("Discovery: <b>false</b>");
+    expect(message).toContain("Último: <b>disabled_by_env</b>");
+    expect(message).toContain("Fuentes: <b>0</b> | Raw: <b>0</b>");
+    expect(message).not.toContain("certificate error");
+    expect(message).not.toContain("Discovery: <b>true</b>");
+  });
+
+  it("/debug_resumen oculta errores y descartes históricos si OSINT está disabled", async () => {
+    mockConfig.ENABLE_EXTERNAL_LEADS_OSINT = false;
+    mockExternalState = {
+      status: "error",
+      sourcesReviewed: 40,
+      rawResultsReceived: 386,
+      errors: ["certificate error"],
+      topErrors: [{ message: "certificate error" }],
+      topDiscardedCandidates: [{ title: "old candidate" }],
+    };
+
+    const callbacks = (botInstance as any)._textRegexpCallbacks || [];
+    const handler = callbacks.find(
+      (callback: any) =>
+        callback.regexp?.toString().includes("debug_resumen"),
+    )?.callback;
+    expect(handler).toBeDefined();
+
+    await handler({
+      chat: { id: 123456 },
+      text: "/debug_resumen",
+    });
+
+    const message = mockSendMessage.mock.calls.at(-1)?.[1] as string;
+    expect(message).toContain(
+      "External OSINT:</b> deshabilitado por configuración",
+    );
+    expect(message).toContain("Discovery mode: <b>false</b>");
+    expect(message).toContain("Fuentes revisadas: <b>0</b>");
+    expect(message).toContain("Resultados crudos: <b>0</b>");
+    expect(message).toContain("Errores: <b>0</b>");
+    expect(message).not.toContain("certificate error");
+    expect(message).not.toContain("old candidate");
+    expect(message).not.toContain("Top errores");
+  });
+
+  it("/noticias_comerciales no consulta fuentes guardadas si OSINT está disabled", async () => {
+    mockConfig.ENABLE_EXTERNAL_LEADS_OSINT = false;
+
+    const callbacks = (botInstance as any)._textRegexpCallbacks || [];
+    const matchObj = callbacks.find(
+      (callback: any) =>
+        callback.regexp?.toString().includes("noticias_comerciales"),
+    );
+    expect(matchObj).toBeDefined();
+
+    await matchObj.callback(
+      {
+        chat: { id: 123456 },
+        text: "/noticias_comerciales",
+      },
+      ["/noticias_comerciales", undefined],
+    );
+
+    expect(mockFrom).not.toHaveBeenCalled();
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      "123456",
+      "🧭 External OSINT está deshabilitado por configuración.",
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
   });
 
   it("responde cuando no hay noticias comerciales útiles", async () => {

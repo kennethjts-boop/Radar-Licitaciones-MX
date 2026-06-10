@@ -2,6 +2,10 @@ export {
   getExternalLeadRunOptions,
   runExternalLeadsOsintJob,
 } from "./job";
+export {
+  getExternalOsintOperationalView,
+  isExternalOsintEnabled,
+} from "./config";
 export { BUSINESS_LINE_KEYWORDS } from "./keywords";
 export {
   buildExternalLeadFingerprint,

@@ -42,6 +42,13 @@ TELEGRAM_CHAT_ID=-1001234567890
 # Para canales: @nombrecanal o ID numérico
 # Para obtener el ID: usar @userinfobot o la API de Telegram
 
+TELEGRAM_COMMAND_BOT_ENABLED=true
+TELEGRAM_COMMANDS_ENABLED=true
+TELEGRAM_POLLING_ENABLED=true
+# Los tres deben estar en true para escuchar comandos por polling.
+# En servicios o réplicas secundarias de Railway, usar TELEGRAM_POLLING_ENABLED=false
+# para evitar 409 Conflict por múltiples getUpdates con el mismo token.
+
 # ── Playwright ────────────────────────────────────────────────────────────────
 PLAYWRIGHT_HEADLESS=true
 # En Railway debe ser true (sin display)
@@ -114,6 +121,7 @@ COMMERCIAL_MATCHING_DEBUG=true
 # Guarda telemetria de descartes y candidatos comerciales en /debug_resumen.
 
 EXTERNAL_LEADS_DISCOVERY_MODE=true
+# Se ignora y se reporta como false cuando ENABLE_EXTERNAL_LEADS_OSINT=false.
 # Modo de inspección seguro: registra telemetría completa, muestra descartes y
 # fuerza Telegram apagado para External OSINT.
 
@@ -163,6 +171,9 @@ SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
+TELEGRAM_COMMAND_BOT_ENABLED=true
+TELEGRAM_COMMANDS_ENABLED=true
+TELEGRAM_POLLING_ENABLED=true
 PLAYWRIGHT_HEADLESS=true
 COLLECT_INTERVAL_MINUTES=30
 DAILY_SUMMARY_HOUR=7
