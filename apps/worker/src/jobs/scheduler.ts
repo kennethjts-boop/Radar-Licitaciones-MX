@@ -109,9 +109,6 @@ export async function runExternalLeadsIfEnabled(
   runner: typeof runExternalLeadsOsintJob = runExternalLeadsOsintJob,
 ): Promise<void> {
   try {
-    const config = getConfig();
-    if (!config.ENABLE_EXTERNAL_LEADS_OSINT) return;
-
     const result = await runner();
     log.info(
       {
