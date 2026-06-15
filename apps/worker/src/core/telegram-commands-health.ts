@@ -407,6 +407,7 @@ export async function recordTelegramPollingSuccess(
     last_telegram_commands_recovery_at: recoveryAt,
     telegram_polling_ok: true,
     incident_alerted_at: null,
+    last_telegram_commands_error_reason: null,
   });
 }
 
