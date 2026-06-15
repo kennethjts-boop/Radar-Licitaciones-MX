@@ -21,33 +21,39 @@ export function toErrorMessage(error: unknown): string {
   return String(error);
 }
 
-export function isRetryableNetworkError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
+const RETRYABLE_NETWORK_TOKENS = [
+  "timeout",
+  "timed out",
+  "etimedout",
+  "econnreset",
+  "econnrefused",
+  "enotfound",
+  "network",
+  "socket hang up",
+  "503",
+  "gateway",
+  "fetch failed",
+  "net::err",
+  "429",
+  "too many requests",
+];
 
-  const message = error.message.toLowerCase();
-  const name = error.name.toLowerCase();
-  const stack = (error.stack ?? "").toLowerCase();
-
-  const candidates = [
-    "timeout",
-    "timed out",
-    "etimedout",
-    "econnreset",
-    "econnrefused",
-    "enotfound",
-    "network",
-    "socket hang up",
-    "503",
-    "gateway",
-    "fetch failed",
-    "net::err",
-    "429",
-    "too many requests",
-  ];
-
-  return candidates.some(
+function checkSingleError(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  const message = e.message.toLowerCase();
+  const name = e.name.toLowerCase();
+  const stack = (e.stack ?? "").toLowerCase();
+  return RETRYABLE_NETWORK_TOKENS.some(
     (token) => message.includes(token) || name.includes(token) || stack.includes(token),
   );
+}
+
+export function isRetryableNetworkError(error: unknown): boolean {
+  if (checkSingleError(error)) return true;
+  if (error instanceof AggregateError) {
+    return error.errors.some(checkSingleError);
+  }
+  return false;
 }
 
 export async function withRetries<T>(

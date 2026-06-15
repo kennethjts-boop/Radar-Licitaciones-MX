@@ -141,6 +141,19 @@ export function describeTelegramSendError(err: unknown): TelegramSendErrorDetail
     };
   }
 
+  // EFATAL de node-telegram-bot-api con AggregateError interior = fallo de red transitorio
+  if (code === "EFATAL") {
+    return {
+      kind: "network",
+      retryable: true,
+      code,
+      statusCode,
+      apiErrorCode,
+      apiDescription,
+      summary,
+    };
+  }
+
   if (isRetryableNetworkError(err)) {
     return {
       kind: "network",
