@@ -959,6 +959,87 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     }
   });
 
+  // ── /perdidas ─────────────────────────────────────────────────────────────
+  bot.onText(/\/perdidas(?:\s+(\d+))?/, async (msg, match) => {
+    const chatIdPartial = String(msg.chat.id).slice(-4);
+    log.info({ command: msg.text, chatIdPartial, from: msg.from?.username }, "command_received");
+    if (String(msg.chat.id) !== chatId) return;
+
+    const rawHours = parseInt(match?.[1] ?? "6", 10);
+    const hours = Number.isFinite(rawHours) && rawHours > 0 ? Math.min(rawHours, 48) : 6;
+    const MAX_RESEND = 10;
+
+    try {
+      const { getSupabaseClient } = await import("../storage/client");
+      const db = getSupabaseClient();
+      const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+
+      const { data: alerts, error } = await db
+        .from("alerts")
+        .select("id, telegram_message, telegram_status, alert_type, created_at, sent_at")
+        .gte("created_at", since)
+        .order("created_at", { ascending: true })
+        .limit(50);
+
+      if (error) throw error;
+
+      if (!alerts || alerts.length === 0) {
+        await bot.sendMessage(
+          chatId,
+          `🔍 No hubo matches en las últimas <b>${hours}h</b>.\nEl sistema está activo y revisando.`,
+          { parse_mode: "HTML" },
+        );
+        return;
+      }
+
+      const sent = alerts.filter(a => a.telegram_status === "sent");
+      const lost = alerts.filter(a => a.telegram_status !== "sent");
+
+      const headerLines = [
+        `📬 <b>MATCHES — últimas ${hours}h</b>`,
+        "",
+        `Total detectados: <b>${alerts.length}</b>`,
+        `✅ Alertados correctamente: <b>${sent.length}</b>`,
+        `⚠️ No enviados: <b>${lost.length}</b>`,
+      ];
+
+      if (lost.length === 0) {
+        headerLines.push("", "✅ No hubo alertas perdidas en este período.");
+      } else if (lost.length > MAX_RESEND) {
+        headerLines.push("", `Mostrando los primeros <b>${MAX_RESEND}</b> de ${lost.length}. Usa <code>/perdidas 24</code> para ampliar.`);
+      }
+
+      await bot.sendMessage(chatId, headerLines.join("\n"), { parse_mode: "HTML" });
+
+      const toResend = lost.slice(0, MAX_RESEND);
+      for (const alert of toResend) {
+        if (!alert.telegram_message) continue;
+        const ts = formatMexicoDate(alert.created_at as string, "dd/MM HH:mm");
+        const header = `⚠️ <b>[ALERTA NO ENVIADA — ${ts}]</b>\n\n`;
+        await bot.sendMessage(
+          chatId,
+          header + alert.telegram_message,
+          { parse_mode: "HTML", disable_web_page_preview: true },
+        ).then(async (sentMsg) => {
+          const { markAlertSent } = await import("../storage/match-alert.repo");
+          await markAlertSent(alert.id, sentMsg.message_id).catch((dbErr) => {
+            log.error({ err: dbErr, alertId: alert.id }, "No se pudo marcar alerta como enviada en DB");
+          });
+        }).catch(async (err) => {
+          log.warn({ err, alertId: alert.id }, "No se pudo re-enviar alerta perdida");
+          await bot.sendMessage(
+            chatId,
+            `⚠️ <b>[ALERTA — ${ts}]</b> No se pudo mostrar el mensaje (formato inválido). Alert ID: <code>${alert.id}</code>`,
+            { parse_mode: "HTML" },
+          ).catch(() => {});
+        });
+      }
+    } catch (err) {
+      log.error({ err }, "❌ Error en /perdidas");
+      await bot.sendMessage(chatId, "❌ Error consultando alertas perdidas").catch(() => {});
+    }
+  });
+
   log.info("telegram_handlers_registered");
-  log.info("✅ Comandos registrados: /prueba, /estado, /radares, /buscar, /monto, /debug_resumen, /scan, /recuperar, /techo, /noticias_comerciales");
+  log.info("✅ Comandos registrados: /prueba, /estado, /radares, /buscar, /monto, /debug_resumen, /scan, /recuperar, /techo, /noticias_comerciales, /perdidas");
 }

@@ -90,7 +90,7 @@ export async function runDailySummaryJob(): Promise<void> {
       ...summaryData.soonExpiring.map(s => s.externalId),
       ...summaryData.highScore.map(s => s.externalId),
     ]).size;
-    const { error: insertErr } = await db.from('daily_summaries').insert({
+    const { error: insertErr } = await db.from('daily_summaries').upsert({
       id: uuidv4(),
       summary_date: today,
       total_seen: summaryData.totalSeen,
@@ -100,7 +100,7 @@ export async function runDailySummaryJob(): Promise<void> {
       total_alerts: summaryData.totalAlerts,
       summary_text: JSON.stringify(summaryData),
       created_at: nowISO(),
-    });
+    }, { onConflict: 'summary_date' });
     if (insertErr) {
       log.warn({ err: insertErr }, 'No se pudo guardar resumen en DB; continuando con envío Telegram');
       summaryData.technicalIncidents.push('Error al guardar resumen en DB');
