@@ -1,4 +1,8 @@
-import { isCriticalCollectFailure } from "../scheduler";
+import {
+  isCriticalCollectFailure,
+  recordCollectResultForCircuitBreaker,
+  resetComprasMxIncidentStateForTests,
+} from "../scheduler";
 import type { CollectJobResult } from "../collect.job";
 
 function collectResult(overrides: Partial<CollectJobResult> = {}): CollectJobResult {
@@ -17,6 +21,10 @@ function collectResult(overrides: Partial<CollectJobResult> = {}): CollectJobRes
 }
 
 describe("scheduler collect failure classification", () => {
+  beforeEach(() => {
+    resetComprasMxIncidentStateForTests();
+  });
+
   it("marca timeouts sin filas como fallo crítico de ComprasMX", () => {
     expect(
       isCriticalCollectFailure(
@@ -59,6 +67,31 @@ describe("scheduler collect failure classification", () => {
     ).toBe(false);
   });
 
+  it("no marca una falla parcial de extracción como fallo crítico", () => {
+    expect(
+      isCriticalCollectFailure(
+        collectResult({
+          status: "site_accessible_extraction_failed",
+          itemsSeen: 0,
+          pagesScanned: 0,
+          stopReason: "site_accessible_extraction_failed",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("mantiene vivo el scheduler cuando ComprasMX está degradado por 401", () => {
+    const degraded = collectResult({
+      status: "degraded",
+      itemsSeen: 0,
+      pagesScanned: 0,
+      stopReason: "COMPRASMX_TRANSIENT_AUTH_401",
+    });
+
+    expect(isCriticalCollectFailure(degraded)).toBe(false);
+    expect(recordCollectResultForCircuitBreaker(degraded)).toBeNull();
+  });
+
   it("ignora ciclos saltados por lock", () => {
     expect(
       isCriticalCollectFailure(
@@ -71,5 +104,64 @@ describe("scheduler collect failure classification", () => {
         }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("scheduler ComprasMX incident alerts", () => {
+  beforeEach(() => {
+    resetComprasMxIncidentStateForTests();
+  });
+
+  it("no manda alertas inmediatas por fallos parciales de extracción", () => {
+    const failure = collectResult({
+      status: "site_accessible_extraction_failed",
+      itemsSeen: 0,
+      pagesScanned: 0,
+    });
+
+    expect(recordCollectResultForCircuitBreaker(failure)).toBeNull();
+    expect(recordCollectResultForCircuitBreaker(failure)).toBeNull();
+  });
+
+  it("no trata empty_result como error crítico ni abre un incidente", () => {
+    const empty = collectResult({
+      status: "empty_result",
+      itemsSeen: 0,
+      pagesScanned: 1,
+      stopReason: "empty_result",
+    });
+
+    expect(isCriticalCollectFailure(empty)).toBe(false);
+    expect(recordCollectResultForCircuitBreaker(empty)).toBeNull();
+  });
+
+  it("delega la recuperación a la telemetría persistente del collect job", () => {
+    const failure = collectResult({
+      status: "site_accessible_extraction_failed",
+      itemsSeen: 0,
+      pagesScanned: 0,
+    });
+    const recovered = collectResult({
+      status: "success",
+      itemsSeen: 12,
+      pagesScanned: 1,
+    });
+
+    recordCollectResultForCircuitBreaker(failure);
+    expect(recordCollectResultForCircuitBreaker(recovered)).toBeNull();
+    expect(recordCollectResultForCircuitBreaker(recovered)).toBeNull();
+  });
+
+  it("no duplica alertas al alternar fallo y recuperación", () => {
+    const failure = collectResult({
+      status: "site_accessible_extraction_failed",
+      itemsSeen: 0,
+      pagesScanned: 0,
+    });
+    const recovered = collectResult({ status: "success" });
+
+    expect(recordCollectResultForCircuitBreaker(failure)).toBeNull();
+    expect(recordCollectResultForCircuitBreaker(recovered)).toBeNull();
+    expect(recordCollectResultForCircuitBreaker(failure)).toBeNull();
   });
 });

@@ -24,6 +24,8 @@ export const STATE_KEYS = {
   LAST_HEALTHCHECK_AT: "last_healthcheck_at",
   SCHEDULER_STATUS: "scheduler_status",
   LAST_COLLECT_RUN: "last_collect_run",
+  COMPRASMX_TELEMETRY: "comprasmx_telemetry",
+  TELEGRAM_COMMANDS_TELEMETRY: "telegram_commands_telemetry",
   LAST_EXTERNAL_LEADS_RUN: "last_external_leads_run",
   LAST_DAILY_SUMMARY: "last_daily_summary",
   WORKER_VERSION: "worker_version",

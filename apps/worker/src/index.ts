@@ -22,6 +22,10 @@ import { runMaestrosScraper } from "./scripts/maestros-morelos";
 import { startHttpServer } from "./core/http-server";
 import { registerErrorNotifier } from "./core/error-notifier";
 import { sendTelegramMessage } from "./alerts/telegram.alerts";
+import {
+  isTelegramCommandsPollingEnabled,
+  recordTelegramCommandsStartup,
+} from "./core/telegram-commands-health";
 
 async function main(): Promise<void> {
   // ── 1. Configuración y logger ─────────────────────────────────────────────
@@ -122,7 +126,7 @@ async function main(): Promise<void> {
   }
 
   // ── 5. Bot de comandos Telegram ───────────────────────────────────────────
-  if (bootResult.telegramOk && config.TELEGRAM_COMMAND_BOT_ENABLED) {
+  if (bootResult.telegramOk && isTelegramCommandsPollingEnabled(config)) {
     try {
       await initCommandBot();
       log.info("🤖 Bot Telegram iniciado con polling");
@@ -130,7 +134,20 @@ async function main(): Promise<void> {
       log.warn({ err }, "⚠️ Error iniciando bot — continuando sin comandos");
     }
   } else if (bootResult.telegramOk) {
-    log.warn("⚠️ Bot Telegram de comandos desactivado por TELEGRAM_COMMAND_BOT_ENABLED=false");
+    await recordTelegramCommandsStartup("disabled").catch((err) => {
+      log.warn(
+        { err },
+        "No se pudo registrar Telegram commands disabled",
+      );
+    });
+    log.warn(
+      {
+        TELEGRAM_COMMAND_BOT_ENABLED: config.TELEGRAM_COMMAND_BOT_ENABLED,
+        TELEGRAM_COMMANDS_ENABLED: config.TELEGRAM_COMMANDS_ENABLED,
+        TELEGRAM_POLLING_ENABLED: config.TELEGRAM_POLLING_ENABLED,
+      },
+      "⚠️ Bot Telegram de comandos desactivado por configuración",
+    );
   } else {
     log.warn("⚠️ Bot Telegram desactivado — Telegram no disponible");
   }

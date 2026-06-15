@@ -42,7 +42,7 @@ export interface HealthStatus {
   schedulerStatus: "active" | "starting" | "stopped";
   externalLeads: {
     lastRunAt: string | null;
-    status: "success" | "error" | "skipped" | "none";
+    status: "success" | "disabled" | "error" | "skipped" | "none";
     enabled: boolean;
     dryRun: boolean;
     discoveryMode: boolean;
@@ -89,10 +89,10 @@ class HealthTracker {
   // External leads OSINT (en memoria para soportar dry-run sin escribir en DB)
   private externalLeadsStatus = {
     lastRunAt: null as string | null,
-    status: "none" as "success" | "error" | "skipped" | "none",
+    status: "none" as "success" | "disabled" | "error" | "skipped" | "none",
     enabled: false,
     dryRun: true,
-    discoveryMode: true,
+    discoveryMode: false,
     sourcesReviewed: 0,
     rawResultsReceived: 0,
     normalized: 0,
@@ -181,7 +181,7 @@ class HealthTracker {
   }
 
   recordExternalLeadsCycle(params: {
-    status: "success" | "error" | "skipped";
+    status: "success" | "disabled" | "error" | "skipped";
     enabled: boolean;
     dryRun: boolean;
     discoveryMode: boolean;

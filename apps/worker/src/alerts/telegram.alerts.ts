@@ -20,6 +20,10 @@ import type { DocumentLink } from "../collectors/comprasmx-detail/index";
 import type { DownloadResult } from "../services/document-downloader";
 import type { CeilingResult } from "../services/budget-ceiling-engine";
 import type { SimilarProcedure } from "../services/procurement-similarity-engine";
+import {
+  recordTelegramSendFailure,
+  recordTelegramSendSuccess,
+} from "../core/telegram-commands-health";
 
 const log = createModuleLogger("telegram-alerts");
 
@@ -347,9 +351,21 @@ export async function sendTelegramMessage(
         },
       },
     );
+    await recordTelegramSendSuccess().catch((telemetryError) => {
+      log.warn(
+        { err: telemetryError },
+        "No se pudo registrar telemetría de Telegram sendMessage exitoso",
+      );
+    });
     return msg.message_id;
   } catch (err) {
     const details = describeTelegramSendError(err);
+    await recordTelegramSendFailure(err).catch((telemetryError) => {
+      log.warn(
+        { err: telemetryError },
+        "No se pudo registrar telemetría de fallo Telegram sendMessage",
+      );
+    });
     log.error(
       {
         kind: details.kind,

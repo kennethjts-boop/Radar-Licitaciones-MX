@@ -20,8 +20,14 @@ import {
   ComprasMxNavigator,
   buildListingFingerprint,
   apiRegistroToRawInput,
-  SELECTORS,
+  type ComprasMxScanStatus,
 } from "./comprasmx.navigator";
+import {
+  ComprasMxFailureError,
+  classifyComprasMxFailure,
+  withComprasMxCleanSessionRetry,
+  type ComprasMxFailureDiagnosis,
+} from "./comprasmx.failure";
 import { normalize } from "../../normalizers/procurement.normalizer";
 import { getConfig } from "../../config/env";
 import { getSupabaseClient } from "../../storage/client";
@@ -80,6 +86,7 @@ export interface ComprasMxCollectorOptions {
  */
 export interface ComprasMxCollectResult {
   mode: "listing_scan" | "daily_recheck";
+  status: ComprasMxScanStatus;
   items: NormalizedProcurement[];
   /** Número de páginas de listado escaneadas (solo Modo 1). */
   pagesScanned: number;
@@ -101,8 +108,11 @@ export interface ComprasMxCollectResult {
   knownStreak: number;
   /** Razón de parada del scan (streak, maxPages, error, vacío, etc.). */
   stopReason: string | null;
-  /** ComprasMX no entregó listado en este ciclo, sin considerarse falla fatal del worker. */
+  /** Compatibilidad para consumidores existentes; derivado de status. */
   sourceUnavailable?: boolean;
+  failureDiagnosis?: ComprasMxFailureDiagnosis;
+  retryPerformed?: boolean;
+  recoveredFromTransient401?: boolean;
   errors: string[];
   startedAt: string;
   finishedAt: string;
@@ -121,7 +131,7 @@ export async function collectComprasMx(
 
   log.info(
     { mode: "listing_scan", baseUrl, maxPages, maxStreak: MAX_STREAK },
-    "🏁 incremental scan started",
+    "Iniciando extracción ComprasMX",
   );
 
   const items: NormalizedProcurement[] = [];
@@ -137,6 +147,10 @@ export async function collectComprasMx(
   let knownStreak = 0;
   let stopReason: string | null = null;
   let sourceUnavailable = false;
+  let status: ComprasMxScanStatus = "success";
+  let failureDiagnosis: ComprasMxFailureDiagnosis | undefined;
+  let retryPerformed = false;
+  let recoveredFromTransient401 = false;
 
   try {
     const db = getSupabaseClient();
@@ -148,38 +162,65 @@ export async function collectComprasMx(
       .single();
     const sourceId = sourceData?.id ?? null;
 
-    await withRetries(
-      () => BrowserManager.withContext(async (page, _context) => {
-      const navigator = new ComprasMxNavigator();
+    const scanOutcome = await withRetries(
+      () => withComprasMxCleanSessionRetry((forceBrowser) =>
+        BrowserManager.withContext(async (page) => {
+          const navigator = new ComprasMxNavigator();
+          return navigator.scanListing(page, baseUrl, maxPages, { forceBrowser });
+        }, {
+          // Cada intento usa un BrowserManager y contexto distintos.
+          timeoutMs: 5 * 60 * 1000,
+        }),
+      ),
+      {
+        maxAttempts: 3,
+        initialDelayMs: 1_000,
+        backoffMultiplier: 2,
+        maxDelayMs: 4_000,
+        shouldRetry: shouldRetryCollectionError,
+        onRetry: (_err, attempt, delay) =>
+          log.warn({ attempt, delayMs: delay }, "⏳ Reintentando BrowserManager (ComprasMX)..."),
+      },
+    );
 
+    retryPerformed = scanOutcome.retryPerformed;
+    recoveredFromTransient401 = scanOutcome.recoveredFromTransient401;
+    if (recoveredFromTransient401) {
+      log.info("ComprasMX recuperado después de fallo previo");
+    }
+    const listingResult = scanOutcome.value;
+    const {
+      rows: listingRows,
+      apiRegistros,
+      pagesScanned: scanned,
+      unavailableReason,
+    } = listingResult;
+    pagesScanned = scanned;
+    totalListingRowsSeen = listingRows.length;
+    status = listingResult.status;
+    failureDiagnosis = listingResult.failureDiagnosis;
+    sourceUnavailable = status === "source_unavailable";
 
-      // ── A. Listing Scan ────────────────────────────────────────────────────
-      const listingResult = await navigator.scanListing(page, baseUrl, maxPages);
-      const {
-        rows: listingRows,
-        apiRegistros,
-        pagesScanned: scanned,
-        unavailableReason,
-      } = listingResult;
-      pagesScanned = scanned;
-      totalListingRowsSeen = listingRows.length;
-      sourceUnavailable = listingResult.sourceUnavailable === true;
-
-      if (listingRows.length === 0) {
-        stopReason = sourceUnavailable
-          ? `source_unavailable — ComprasMX temporalmente no disponible${unavailableReason ? `: ${unavailableReason}` : ""}`
-          : pagesScanned === 0
-            ? "listing_unavailable — no rows extracted from ComprasMX"
-            : "listing_empty — no rows returned by ComprasMX";
-        if (pagesScanned === 0 && !sourceUnavailable) {
-          errors.push(stopReason);
-        }
-        log.warn(
-          { stopReason, sourceUnavailable, pagesScanned },
-          "No se extrajeron filas del listado ComprasMX",
-        );
-        return;
-      }
+    if (listingRows.length === 0) {
+      stopReason = status === "source_unavailable"
+        ? `source_unavailable${unavailableReason ? ` — ${unavailableReason}` : ""}`
+        : status === "site_accessible_extraction_failed"
+          ? `site_accessible_extraction_failed${unavailableReason ? ` — ${unavailableReason}` : ""}`
+          : "empty_result — búsqueda completada sin filas";
+      log.warn(
+        { stopReason, status, pagesScanned, failureDiagnosis },
+        "No se extrajeron filas del listado ComprasMX",
+      );
+    } else {
+      log.info(
+        {
+          rows: listingRows.length,
+          pagesScanned,
+          retryPerformed,
+          recoveredFromTransient401,
+        },
+        "ComprasMX extracción exitosa",
+      );
 
       // ── B–E. Análisis secuencial con Stop Condition ────────────────────────
       for (const row of listingRows) {
@@ -295,26 +336,37 @@ export async function collectComprasMx(
       if (!stopReason) {
         stopReason = `completed — ${pagesScanned} pages scanned, all rows evaluated`;
       }
-      },
-      // Timeout del browser: 5 min. Si se cuelga, el finally de withContext
-      // cierra el browser antes de que dispare el outer withTimeout (25 min).
-      { timeoutMs: 5 * 60 * 1000 },
-    ),
-      {
-        maxAttempts: 3,
-        initialDelayMs: 1_000,
-        backoffMultiplier: 2,
-        maxDelayMs: 4_000,
-        shouldRetry: shouldRetryCollectionError,
-        onRetry: (_err, attempt, delay) =>
-          log.warn({ attempt, delayMs: delay }, "⏳ Reintentando BrowserManager (ComprasMX)..."),
-      },
-    );
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error({ err }, "💥 Falla crítica en BrowserManager");
-    errors.push(`BrowserManager crítico: ${msg}`);
-    if (!stopReason) stopReason = "critical_error";
+    failureDiagnosis = err instanceof ComprasMxFailureError
+      ? err.diagnosis
+      : classifyComprasMxFailure(err, { phase: "collector" });
+
+    if (
+      failureDiagnosis.category === "TRANSIENT_AUTH_OR_SESSION_401" ||
+      failureDiagnosis.category === "PERSISTENT_AUTH_401"
+    ) {
+      status = "degraded";
+      sourceUnavailable = false;
+      retryPerformed = true;
+      stopReason = "COMPRASMX_TRANSIENT_AUTH_401";
+      log.warn(
+        { error: msg, failureDiagnosis },
+        "ComprasMX 401 persistente después de reintento",
+      );
+    } else {
+      status = "source_unavailable";
+      sourceUnavailable = true;
+      stopReason = stopReason ?? failureDiagnosis.category;
+      errors.push(`BrowserManager crítico: ${msg}`);
+      log.error(
+        { err, failureDiagnosis, suppressTelegram: true },
+        failureDiagnosis.category === "SCRAPER_OR_SITE_STRUCTURE_CHANGED"
+          ? "Error técnico persistente en scraper ComprasMX"
+          : "Fallo de infraestructura/navegador",
+      );
+    }
   }
 
   log.info(
@@ -336,6 +388,7 @@ export async function collectComprasMx(
 
   return {
     mode: "listing_scan",
+    status,
     items,
     pagesScanned,
     totalListingRowsSeen,
@@ -348,6 +401,9 @@ export async function collectComprasMx(
     knownStreak,
     stopReason,
     sourceUnavailable,
+    failureDiagnosis,
+    retryPerformed,
+    recoveredFromTransient401,
     errors,
     startedAt,
     finishedAt: nowISO(),
@@ -435,6 +491,7 @@ export async function recheckComprasMx(
 
   return {
     mode: "daily_recheck",
+    status: "success",
     items,
     pagesScanned: 0,
     totalListingRowsSeen: 0,

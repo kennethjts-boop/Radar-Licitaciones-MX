@@ -96,6 +96,9 @@ npx playwright install chromium
 
 # 3. Levantar el Worker en modo desarrollo (hot-reload)
 npm run dev
+
+# 4. Probar solo ComprasMX (sin Supabase ni Telegram)
+npm run comprasmx:smoke
 ```
 
 ### 3. Scripts de Investigación Manual

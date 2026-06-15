@@ -384,6 +384,50 @@ describe("external-opportunity-discovery job hardening", () => {
     debugCandidates: false,
   };
 
+  beforeEach(() => {
+    process.env.ENABLE_EXTERNAL_LEADS_OSINT = "true";
+    resetConfig();
+  });
+
+  afterAll(() => {
+    process.env.ENABLE_EXTERNAL_LEADS_OSINT = "false";
+    resetConfig();
+  });
+
+  it("hard-disable por env no ejecuta fuentes ni conserva errores", async () => {
+    process.env.ENABLE_EXTERNAL_LEADS_OSINT = "false";
+    resetConfig();
+    const discoverCandidates = jest.fn();
+    const recordState = jest.fn(async () => {});
+
+    const result = await runExternalLeadsOsintJob(
+      { ...baseOptions, enabled: true, discoveryMode: true },
+      { discoverCandidates, recordState },
+    );
+
+    expect(result).toMatchObject({
+      status: "disabled",
+      reason: "disabled_by_env",
+      discoveryMode: false,
+      sourcesReviewed: 0,
+      rawResultsReceived: 0,
+      detected: 0,
+      saved: 0,
+      alerted: 0,
+      errors: [],
+      topErrors: [],
+    });
+    expect(discoverCandidates).not.toHaveBeenCalled();
+    expect(recordState).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "disabled", errors: [] }),
+      expect.objectContaining({
+        enabled: false,
+        discoveryMode: false,
+        telegramEnabled: false,
+      }),
+    );
+  });
+
   it("dry-run no guarda ni alerta", async () => {
     const upsertLead = jest.fn();
     const sendAlert = jest.fn();
@@ -628,16 +672,11 @@ describe("external-opportunity-discovery job hardening", () => {
   });
 
   it("fallo del módulo externo no rompe scheduler principal", async () => {
-    process.env.ENABLE_EXTERNAL_LEADS_OSINT = "true";
-    resetConfig();
-
     await expect(
       runExternalLeadsIfEnabled(async () => {
         throw new Error("fallo externo");
       }),
     ).resolves.toBeUndefined();
 
-    process.env.ENABLE_EXTERNAL_LEADS_OSINT = "false";
-    resetConfig();
   });
 });

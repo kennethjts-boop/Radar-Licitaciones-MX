@@ -63,6 +63,14 @@ const envSchema = z.object({
     .string()
     .default("true")
     .transform((v) => v === "true"),
+  TELEGRAM_COMMANDS_ENABLED: z
+    .string()
+    .default("true")
+    .transform((v) => v === "true"),
+  TELEGRAM_POLLING_ENABLED: z
+    .string()
+    .default("true")
+    .transform((v) => v === "true"),
 
   // Playwright & Escudo
   PLAYWRIGHT_HEADLESS: z
@@ -229,6 +237,8 @@ export function getConfig(): AppConfig {
       TELEGRAM_SEND_TIMEOUT_MS: result.data.TELEGRAM_SEND_TIMEOUT_MS,
       TELEGRAM_MAX_RETRIES: result.data.TELEGRAM_MAX_RETRIES,
       TELEGRAM_COMMAND_BOT_ENABLED: result.data.TELEGRAM_COMMAND_BOT_ENABLED,
+      TELEGRAM_COMMANDS_ENABLED: result.data.TELEGRAM_COMMANDS_ENABLED,
+      TELEGRAM_POLLING_ENABLED: result.data.TELEGRAM_POLLING_ENABLED,
       PLAYWRIGHT_IGNORE_HTTPS_ERRORS: result.data.PLAYWRIGHT_IGNORE_HTTPS_ERRORS,
       ALERT_MAX_PER_CYCLE: result.data.ALERT_MAX_PER_CYCLE,
     },
