@@ -45,6 +45,20 @@ describe("scheduler collect failure classification", () => {
     ).toBe(false);
   });
 
+  it("no marca ComprasMX temporalmente no disponible como fallo crítico", () => {
+    expect(
+      isCriticalCollectFailure(
+        collectResult({
+          status: "source_unavailable",
+          errorMessage: null,
+          itemsSeen: 0,
+          pagesScanned: 0,
+          stopReason: "source_unavailable — ComprasMX temporalmente no disponible",
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("ignora ciclos saltados por lock", () => {
     expect(
       isCriticalCollectFailure(

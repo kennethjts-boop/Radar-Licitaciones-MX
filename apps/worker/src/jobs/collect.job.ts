@@ -104,7 +104,7 @@ const MAX_ATTACHMENT_PIPELINES_PER_CYCLE = 5;
 const MAX_CAPUFE_DEEP_REPORTS_PER_CYCLE = 2;
 
 export interface CollectJobResult {
-  status: "success" | "error" | "skipped";
+  status: "success" | "error" | "skipped" | "source_unavailable";
   reason?: string;
   errorMessage: string | null;
   durationMs: number;
@@ -753,8 +753,12 @@ export async function runCollectJob(): Promise<CollectJobResult> {
         }
       }
 
-      // Errores del collector
-      if (collectResult.errors.length > 0) {
+      const sourceUnavailable = collectResult.sourceUnavailable === true;
+
+      // Errores del collector. Si ComprasMX no está disponible temporalmente,
+      // el ciclo queda vivo y se reporta como source_unavailable sin romper DB,
+      // scheduler, healthcheck ni el resumen operativo.
+      if (collectResult.errors.length > 0 && !sourceUnavailable) {
         errorMessage = collectResult.errors.join("; ");
       }
     } catch (err) {
@@ -780,6 +784,7 @@ export async function runCollectJob(): Promise<CollectJobResult> {
         metadata: {
           totalMatches,
           pagesScanned: collectResult?.pagesScanned || 0,
+          sourceUnavailable: collectResult?.sourceUnavailable === true,
           commercialMatching: commercialTelemetry,
         },
       });
@@ -792,7 +797,9 @@ export async function runCollectJob(): Promise<CollectJobResult> {
           startedAt,
           startedAtMs: cycleStart,
           finishedAt,
-          status: errorMessage ? "error" : "success",
+          status: collectResult?.sourceUnavailable === true
+            ? "source_unavailable"
+            : errorMessage ? "error" : "success",
           errorMessage: errorMessage ?? null,
           // Telemetría Fase 2A
           pages_scanned: collectResult?.pagesScanned ?? 0,
@@ -861,7 +868,9 @@ export async function runCollectJob(): Promise<CollectJobResult> {
     }
 
     return {
-      status: errorMessage ? "error" : "success",
+      status: collectResult?.sourceUnavailable === true
+        ? "source_unavailable"
+        : errorMessage ? "error" : "success",
       errorMessage,
       durationMs,
       itemsSeen,
