@@ -132,4 +132,48 @@ describe("ComprasMX telemetry and Telegram throttling", () => {
     );
     expect(transition.diagnosis?.origin).toBe("SITE_CHANGED");
   });
+
+  it("NO genera alerta 'Configuración ComprasMX' cuando el browser fue cerrado por timeout", () => {
+    // Escenario real: el browser-manager cerró Chromium por timeout; el error de Playwright
+    // incluye flags de Chrome con "config", pero NO debe clasificarse como LOCAL_CONFIG_ERROR.
+    const playwrightMsg = [
+      "browserType.launch: Target page, context or browser has been closed",
+      "Browser logs:",
+      "<launching> /ms-playwright/chromium-1140/chrome-linux/chrome",
+      "--disable-field-trial-config --disable-background-networking",
+    ].join("\n");
+    const technicalReason = `phase=collector; error=${playwrightMsg}`;
+
+    const transition = transitionComprasMxTelemetry(
+      EMPTY_COMPRASMX_TELEMETRY,
+      {
+        success: false,
+        error: technicalReason,
+        diagnosis: classifyComprasMxFailure(new Error(playwrightMsg), { phase: "collector" }),
+      },
+      START,
+    );
+
+    expect(transition.alertMessage).toBeNull();
+    expect(transition.diagnosis?.category).toBe("BROWSER_CLOSED_AFTER_TIMEOUT");
+    expect(transition.diagnosis?.category).not.toBe("LOCAL_CONFIG_ERROR");
+  });
+
+  it("NO genera alerta 'Configuración ComprasMX' cuando el collector recibió timeout del browser", () => {
+    const timeoutError = new Error("Browser operation timed out after 300000ms");
+    const technicalReason = "phase=collector; error=Browser operation timed out after 300000ms";
+
+    const transition = transitionComprasMxTelemetry(
+      EMPTY_COMPRASMX_TELEMETRY,
+      {
+        success: false,
+        error: technicalReason,
+        diagnosis: classifyComprasMxFailure(timeoutError, { phase: "collector" }),
+      },
+      START,
+    );
+
+    expect(transition.alertMessage).toBeNull();
+    expect(transition.diagnosis?.category).not.toBe("LOCAL_CONFIG_ERROR");
+  });
 });
