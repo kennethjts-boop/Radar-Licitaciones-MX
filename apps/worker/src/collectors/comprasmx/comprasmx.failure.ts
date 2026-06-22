@@ -68,8 +68,40 @@ export function classifyComprasMxFailure(
       : null,
   ].filter(Boolean).join("; ");
 
-  if ((context.missingConfig?.length ?? 0) > 0 ||
-      /missing|required|faltan?|no source_id|environment|env var|config/i.test(normalized)) {
+  // Playwright: el browser/page/context fue cerrado (por timeout del browser-manager u OOM).
+  // DEBE revisarse ANTES del check LOCAL_CONFIG_ERROR porque el mensaje de error de Playwright
+  // incluye los flags de lanzamiento de Chrome (e.g. --disable-field-trial-config), y la
+  // palabra "config" en esos flags activaría incorrectamente LOCAL_CONFIG_ERROR.
+  const browserClosedPatterns = [
+    /target\s+(?:page|context|browser)\s+has\s+been\s+closed/i,
+    /browser\s+has\s+been\s+closed/i,
+    /page\s+has\s+been\s+closed/i,
+    /context\s+has\s+been\s+closed/i,
+    /browsertype\.launch.*(?:closed|crash)/i,
+  ];
+  if (browserClosedPatterns.some((p) => p.test(normalized))) {
+    return {
+      origin: "NETWORK_INFRA",
+      category: "BROWSER_CLOSED_AFTER_TIMEOUT",
+      confidence: "HIGH",
+      userDiagnosis: "El browser fue cerrado durante la operación (timeout controlado del browser-manager o caída de Chromium). No es un error de configuración de ComprasMX.",
+      technicalReason,
+      recommendedAction: "Revisar logs del browser-manager para el timeout anterior. La siguiente corrida iniciará un browser nuevo automáticamente.",
+      shouldAlertTelegram: false,
+      severity: "WARN",
+    };
+  }
+
+  // LOCAL_CONFIG_ERROR: solo errores reales de configuración interna del sistema.
+  // Se excluye deliberadamente la coincidencia genérica de "config" para no hacer match
+  // con flags de Chrome (--disable-field-trial-config) u otras cadenas técnicas.
+  const isConfigError =
+    (context.missingConfig?.length ?? 0) > 0 ||
+    /missing|required|faltan?|no source_id|environment|env var/i.test(normalized) ||
+    /\bconfig(?:uration)?\s+(?:error|invalid|missing|not\s+(?:set|found)|required)/i.test(normalized) ||
+    /(?:missing|invalid|required)\s+(?:config|configuration)\b/i.test(normalized);
+
+  if (isConfigError) {
     return {
       origin: "OUR_SCRAPER",
       category: "LOCAL_CONFIG_ERROR",

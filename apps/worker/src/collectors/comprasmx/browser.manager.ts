@@ -161,10 +161,13 @@ export class BrowserManager {
     let forcedClosePromise: Promise<void> | null = null;
     const timeoutMs = options.timeoutMs ?? DEFAULT_BROWSER_OPERATION_TIMEOUT_MS;
     let timeoutHandle: NodeJS.Timeout | null = null;
+    // Flag para que el handler del floating promise sepa si ya hubo timeout.
+    let timedOut = false;
 
     const timeoutPromise = timeoutMs > 0
       ? new Promise<never>((_, reject) => {
           timeoutHandle = setTimeout(() => {
+            timedOut = true;
             log.error(
               { timeoutMs },
               "⏱ Browser operation timeout — cerrando browser para abortar operaciones pendientes",
@@ -188,12 +191,27 @@ export class BrowserManager {
       return operation(page, context);
     };
 
-    try {
-      if (timeoutMs <= 0) {
+    if (timeoutMs <= 0) {
+      try {
         return await runBrowserOperation();
+      } finally {
+        await manager.close();
       }
+    }
 
-      return await Promise.race([runBrowserOperation(), timeoutPromise!]);
+    // Registrar .catch() en el promise antes de pasarlo a race() para que si el
+    // timeout ya ganó y este promise falla después, no genere unhandledRejection.
+    const browserOperationPromise = runBrowserOperation();
+    browserOperationPromise.catch((err) => {
+      if (timedOut) {
+        // Esperado: el browser fue cerrado por el timeout, el error es consecuencia.
+        log.debug({ err }, "🔕 Browser operation cancelled after timeout (expected)");
+      }
+      // Si !timedOut: Promise.race ya propagó este error correctamente.
+    });
+
+    try {
+      return await Promise.race([browserOperationPromise, timeoutPromise!]);
     } finally {
       if (timeoutHandle) {
         clearTimeout(timeoutHandle);
