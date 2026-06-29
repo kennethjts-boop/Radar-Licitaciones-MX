@@ -181,6 +181,15 @@ export interface CollectJobResult {
   stopReason: string | null;
 }
 
+export function buildCollectRunPersistenceStatus(input: {
+  errorMessage: string | null;
+}): { status: "success" | "error"; errorMessage: string | null } {
+  return {
+    status: input.errorMessage ? "error" : "success",
+    errorMessage: input.errorMessage,
+  };
+}
+
 function procurementToCommercialInput(item: NormalizedProcurement) {
   return {
     title: item.title,
@@ -874,14 +883,15 @@ export async function runCollectJob(): Promise<CollectJobResult> {
       );
     } finally {
       const finishedAt = nowISO();
+      const collectRunStatus = buildCollectRunPersistenceStatus({ errorMessage });
 
       await finishCollectRun(runId, {
         finishedAt,
-        status: errorMessage ? "error" : "success",
+        status: collectRunStatus.status,
         itemsSeen,
         itemsCreated,
         itemsUpdated,
-        errorMessage: errorMessage || collectResult?.stopReason || null,
+        errorMessage: collectRunStatus.errorMessage,
         metadata: {
           totalMatches,
           pagesScanned: collectResult?.pagesScanned || 0,

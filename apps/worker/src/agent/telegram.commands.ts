@@ -335,6 +335,10 @@ function buildLastErrorLine(
   return "Sin errores registrados";
 }
 
+export function isManualScanOkStatus(status: string): boolean {
+  return status === "success" || status === "empty_result";
+}
+
 // ─── Registro de comandos ─────────────────────────────────────────────────────
 
 function registerCommands(bot: TelegramBot, chatId: string): void {
@@ -731,7 +735,7 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
             return;
           }
 
-          const ok = result.status === "success";
+          const ok = isManualScanOkStatus(result.status);
           const lines = [
             `${ok ? "✅" : "⚠️"} <b>Escaneo manual ${ok ? "terminado" : "terminó con error"}</b>`,
             "",

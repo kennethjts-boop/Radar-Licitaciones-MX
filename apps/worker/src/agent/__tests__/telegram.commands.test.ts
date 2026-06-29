@@ -1,4 +1,4 @@
-import { initCommandBot } from "../telegram.commands";
+import { initCommandBot, isManualScanOkStatus } from "../telegram.commands";
 import TelegramBot from "node-telegram-bot-api";
 import { getConfig } from "../../config/env";
 
@@ -183,6 +183,13 @@ describe("Telegram Commands - /noticias_comerciales", () => {
     expect(message).not.toContain("certificate error");
     expect(message).not.toContain("old candidate");
     expect(message).not.toContain("Top errores");
+  });
+
+  it("/scan trata empty_result como ejecución correcta", () => {
+    expect(isManualScanOkStatus("success")).toBe(true);
+    expect(isManualScanOkStatus("empty_result")).toBe(true);
+    expect(isManualScanOkStatus("degraded")).toBe(false);
+    expect(isManualScanOkStatus("error")).toBe(false);
   });
 
   it("/noticias_comerciales no consulta fuentes guardadas si OSINT está disabled", async () => {

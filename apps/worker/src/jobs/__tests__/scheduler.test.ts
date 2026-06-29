@@ -3,7 +3,10 @@ import {
   recordCollectResultForCircuitBreaker,
   resetComprasMxIncidentStateForTests,
 } from "../scheduler";
-import type { CollectJobResult } from "../collect.job";
+import {
+  buildCollectRunPersistenceStatus,
+  type CollectJobResult,
+} from "../collect.job";
 
 function collectResult(overrides: Partial<CollectJobResult> = {}): CollectJobResult {
   return {
@@ -163,5 +166,29 @@ describe("scheduler ComprasMX incident alerts", () => {
     expect(recordCollectResultForCircuitBreaker(failure)).toBeNull();
     expect(recordCollectResultForCircuitBreaker(recovered)).toBeNull();
     expect(recordCollectResultForCircuitBreaker(failure)).toBeNull();
+  });
+});
+
+describe("collect run persistence status", () => {
+  it("no persiste stopReason exitoso como error falso", () => {
+    expect(
+      buildCollectRunPersistenceStatus({
+        errorMessage: null,
+      }),
+    ).toEqual({
+      status: "success",
+      errorMessage: null,
+    });
+  });
+
+  it("persiste error real cuando existe errorMessage", () => {
+    expect(
+      buildCollectRunPersistenceStatus({
+        errorMessage: "Timeout en comprasmx-collection",
+      }),
+    ).toEqual({
+      status: "error",
+      errorMessage: "Timeout en comprasmx-collection",
+    });
   });
 });
