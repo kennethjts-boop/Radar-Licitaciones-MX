@@ -50,3 +50,6 @@ playwright/.auth/
 
 # ── Datos de scripts manuales ─────────────────────────────────────────────────
 apps/worker/data/
+
+# Local diagnostic/download artifacts
+/downloads/
