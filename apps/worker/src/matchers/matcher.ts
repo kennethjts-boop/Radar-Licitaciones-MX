@@ -28,6 +28,62 @@ import type {
 
 const log = createModuleLogger("matcher");
 
+const CAPUFE_DOMAIN_RADAR_KEYS = new Set([
+  "capufe_mantenimiento_equipos",
+  "capufe_peaje",
+  "capufe_emergencia",
+  "capufe_oportunidades",
+]);
+
+const CAPUFE_STRONG_DOMAIN_TERMS = [
+  "capufe",
+  "caminos y puentes federales",
+  "fonadin",
+  "fondo nacional de infraestructura",
+  "peaje",
+  "telepeaje",
+  "plaza de cobro",
+  "plazas de cobro",
+  "caseta",
+  "casetas",
+  "carril",
+  "carriles",
+  "iave",
+  "equipo de peaje",
+  "equipos de peaje",
+  "sistema de peaje",
+  "sistema de telepeaje",
+  "aforo",
+  "clasificacion vehicular",
+  "clasificación vehicular",
+  "red carretera",
+  "autopista",
+  "tramo carretero",
+];
+
+const CAPUFE_STRONG_NEGATIVE_TERMS = [
+  "imss",
+  "issste",
+  "hospital",
+  "clínica",
+  "clinica",
+  "electromédico",
+  "electromedico",
+  "electromédicos",
+  "electromedicos",
+  "biomédico",
+  "biomedico",
+  "biomédicos",
+  "biomedicos",
+  "quirófano",
+  "quirofano",
+  "equipo médico",
+  "equipo medico",
+  "equipo hospitalario",
+  "laboratorio clínico",
+  "laboratorio clinico",
+];
+
 /**
  * Convierte score numérico a nivel de match.
  */
@@ -52,6 +108,42 @@ function commercialMinScore(): number {
 
 function commercialRequireTerritory(): boolean {
   return process.env.COMMERCIAL_MATCHING_REQUIRE_TERRITORY !== "false";
+}
+
+function passesCapufeDomainGuard(
+  procurement: NormalizedProcurement,
+  radar: RadarConfig,
+): boolean {
+  if (!CAPUFE_DOMAIN_RADAR_KEYS.has(radar.key)) return true;
+
+  const text = [
+    procurement.dependencyName ?? "",
+    procurement.buyingUnit ?? "",
+    procurement.title,
+    procurement.description ?? "",
+    procurement.canonicalText,
+  ].join(" ");
+  const strongMatches = findMatchingTerms(text, CAPUFE_STRONG_DOMAIN_TERMS);
+  if (strongMatches.length > 0) return true;
+
+  const negativeMatches = findMatchingTerms(text, CAPUFE_STRONG_NEGATIVE_TERMS);
+  if (negativeMatches.length > 0) {
+    log.info(
+      {
+        radarKey: radar.key,
+        externalId: procurement.externalId,
+        negativeMatches,
+      },
+      "CAPUFE radar descartado: contexto medico/hospitalario sin señal fuerte CAPUFE",
+    );
+    return false;
+  }
+
+  log.info(
+    { radarKey: radar.key, externalId: procurement.externalId },
+    "CAPUFE radar descartado: sin señal fuerte de CAPUFE/FONADIN/peaje",
+  );
+  return false;
 }
 
 function calculateOpportunityScore(procurement: NormalizedProcurement): number {
@@ -132,6 +224,10 @@ export function evaluateProcurementAgainstRadar(
       isNew,
       previousStatus,
     );
+  }
+
+  if (!passesCapufeDomainGuard(procurement, radar)) {
+    return null;
   }
 
   const canonical = procurement.canonicalText;

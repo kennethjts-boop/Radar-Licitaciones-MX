@@ -6,14 +6,14 @@ import TelegramBot from "node-telegram-bot-api";
 import { getConfig } from "../config/env";
 import { getCommandBot } from "../agent/telegram.commands";
 import { createModuleLogger } from "../core/logger";
-import { truncateForTelegram, formatCurrency } from "../core/text";
+import { truncateForTelegram, formatCurrency, normalizeText } from "../core/text";
 import { formatMexicoDate, formatDateSafe } from "../core/time";
 import { TelegramError, withTimeout } from "../core/errors";
 import { withRetries, isRetryableNetworkError } from "../utils/retry.util";
 import type {
   EnrichedAlert,
   DailySummary,
-  MatchLevel,
+  PublicTenderDocument,
 } from "../types/procurement";
 import type { SummaryData } from '../modules/alert-filter';
 import type { DocumentLink } from "../collectors/comprasmx-detail/index";
@@ -451,188 +451,241 @@ export async function sendTelegramLongReport(
   }
 }
 
-// ─── Formato de alerta de match ──────────────────────────────────────────────
+// ─── Formato público de licitación detectada ────────────────────────────────
 
-function matchLevelEmoji(level: MatchLevel): string {
-  return level === "high" ? "🔴" : level === "medium" ? "🟡" : "🟢";
+function normalizePublicValue(value: string | null | undefined, fallback = "No disponible"): string {
+  if (!value || value.trim().length === 0) return fallback;
+  return value.trim();
 }
 
-function formatImssMorelosPriorityAlert(alert: EnrichedAlert): string {
-  const p = alert.procurement;
-  const raw = p.rawJson as Record<string, unknown>;
-  const fechaPublicacion =
-    (raw.fecha_publicacion as string | null | undefined) ??
-    p.publicationDate ??
-    null;
-  const fechaLimite =
-    (raw.fecha_limite as string | null | undefined) ??
-    (raw.fecha_apertura as string | null | undefined) ??
-    p.openingDate ??
-    null;
-  const comprador = [p.dependencyName, p.buyingUnit].filter(Boolean).join(" / ");
-  const procedimiento = p.procedureNumber ?? p.licitationNumber ?? p.expedienteId;
-  const territorio = alert.territoryMatched ?? p.municipality ?? p.state ?? "Morelos";
-  const motivos = (alert.scoreReasons ?? ["buyer_imss", "territory_morelos"]).join(" + ");
-
-  const lines = [
-    "🚨 PRIORIDAD IMSS MORELOS",
-    "",
-    "Se detectó licitación del IMSS en Morelos.",
-    "",
-    `Objeto: ${escapeHtml(p.title ?? "N/D")}`,
-    `Comprador: ${escapeHtml(comprador || "N/D")}`,
-    p.buyingUnit ? `Unidad compradora: ${escapeHtml(p.buyingUnit)}` : "",
-    `Territorio: ${escapeHtml(territorio)}`,
-    procedimiento ? `Procedimiento: ${escapeHtml(procedimiento)}` : "",
-    fechaPublicacion ? `Fecha de publicación: ${formatDateSafe(fechaPublicacion)}` : "",
-    fechaLimite ? `Fecha límite: ${formatDateSafe(fechaLimite)}` : "",
-    `Motivo: ${escapeHtml(motivos)}`,
-    "Razón del match: IMSS + Morelos",
-    `URL: ${escapeHtml(p.sourceUrl)}`,
-  ];
-
-  return truncateForTelegram(lines.filter(Boolean).join("\n"));
+function titleCaseLocation(value: string | null | undefined): string {
+  const text = normalizePublicValue(value);
+  if (text === "No disponible") return text;
+  return text
+    .toLocaleLowerCase("es-MX")
+    .replace(/(^|\s|-)([a-záéíóúñü])/g, (match) => match.toLocaleUpperCase("es-MX"));
 }
 
-function formatCapufeDirectAwardAlert(alert: EnrichedAlert): string {
+function buildPublicLocation(state: string | null, municipality: string | null): string {
+  const stateText = titleCaseLocation(state);
+  if (!municipality) return stateText;
+  return `${titleCaseLocation(municipality)}, ${stateText}`;
+}
+
+function rawDate(raw: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = raw[key];
+    if (typeof value === "string" && value.trim().length > 0) return value;
+  }
+  return null;
+}
+
+function formatPublicDate(value: string | null | undefined): string {
+  if (!value) return "No disponible";
+  return formatDateSafe(value);
+}
+
+function formatProcedureTypeLabel(value: string): string {
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  if (!cleaned) return "No disponible";
+  if (cleaned === cleaned.toLocaleUpperCase("es-MX")) {
+    return cleaned
+      .toLocaleLowerCase("es-MX")
+      .replace(/(^|\s|-)([a-záéíóúñü])/g, (match) => match.toLocaleUpperCase("es-MX"));
+  }
+  return cleaned.charAt(0).toLocaleUpperCase("es-MX") + cleaned.slice(1);
+}
+
+function procedureTypeFromEnum(type: string | null | undefined): string | null {
+  switch (type) {
+    case "licitacion_publica":
+      return "Licitación pública";
+    case "invitacion_tres":
+      return "Invitación a cuando menos tres personas";
+    case "adjudicacion_directa":
+      return "Adjudicación directa";
+    case "licitacion_privada":
+      return "Licitación privada";
+    case "concurso":
+      return "Concurso";
+    case "subasta":
+      return "Subasta";
+    case "other":
+      return "Otro tipo de procedimiento";
+    default:
+      return null;
+  }
+}
+
+function procedureTypeFromProcedureNumber(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const normalized = value.trim().toLocaleUpperCase("es-MX");
+  if (/^IA[-_]/.test(normalized)) return "Invitación a cuando menos tres personas";
+  if (/^LA[-_]/.test(normalized)) return "Licitación pública";
+  if (/^AA[-_]/.test(normalized)) return "Adjudicación directa";
+  return null;
+}
+
+function inferPublicProcedureType(p: EnrichedAlert["procurement"]): {
+  bodyLabel: string;
+  headerLabel: string;
+  source: string;
+  confidence: "high" | "medium" | "low";
+} {
+  const raw = p.rawJson as Record<string, unknown>;
+  const explicitRaw = rawDate(raw, [
+    "tipo_procedimiento",
+    "tipoProcedimiento",
+    "tipo_procedimiento_contratacion",
+    "procedimiento",
+    "tipo_contratacion",
+    "tipoContratacion",
+    "caracter_procedimiento",
+    "carácter_procedimiento",
+    "caracterProcedimiento",
+    "modalidad",
+    "tipo",
+  ]);
+
+  if (explicitRaw) {
+    const bodyLabel = formatProcedureTypeLabel(explicitRaw);
+    return {
+      bodyLabel,
+      headerLabel: bodyLabel.toLocaleUpperCase("es-MX"),
+      source: "explicit",
+      confidence: "high",
+    };
+  }
+
+  const enumLabel = procedureTypeFromEnum(p.procedureType);
+  if (enumLabel) {
+    return {
+      bodyLabel: enumLabel,
+      headerLabel: enumLabel.toLocaleUpperCase("es-MX"),
+      source: p.procedureTypeSource ?? "normalized_procedure_type",
+      confidence: p.procedureTypeConfidence ?? "medium",
+    };
+  }
+
+  const searchableText = [
+    p.licitationNumber,
+    p.procedureNumber,
+    p.externalId,
+    p.title,
+    p.description,
+    p.canonicalText,
+  ].filter(Boolean).join(" ");
+  const textNorm = normalizeText(searchableText);
+  if (textNorm.includes("licitacion privada")) {
+    return {
+      bodyLabel: "Licitación privada",
+      headerLabel: "LICITACIÓN PRIVADA",
+      source: "text_inference",
+      confidence: "medium",
+    };
+  }
+
+  const numberLabel =
+    procedureTypeFromProcedureNumber(p.licitationNumber) ??
+    procedureTypeFromProcedureNumber(p.procedureNumber) ??
+    procedureTypeFromProcedureNumber(p.externalId);
+  if (numberLabel) {
+    return {
+      bodyLabel: numberLabel,
+      headerLabel: numberLabel.toLocaleUpperCase("es-MX"),
+      source: "procedure_number_prefix",
+      confidence: "medium",
+    };
+  }
+
+  return {
+    bodyLabel: "No disponible",
+    headerLabel: "TIPO NO DISPONIBLE",
+    source: "unavailable",
+    confidence: "low",
+  };
+}
+
+function publicDocumentName(doc: PublicTenderDocument, index: number): string {
+  if (doc.documentName?.trim()) return doc.documentName.trim();
+  if (doc.documentType && doc.documentType !== "otro") {
+    return doc.documentType.replace(/_/g, " ");
+  }
+  return `Documento ${index + 1}`;
+}
+
+function formatDocumentSection(documents: PublicTenderDocument[] | undefined, escape: (value: string) => string): string[] {
+  const validDocuments = (documents ?? []).filter((doc) => doc.isAvailable && doc.publicUrl);
+  if (validDocuments.length === 0) {
+    return ["📎 Documentos disponibles: No detectados por el momento."];
+  }
+
+  const lines = ["📎 Documentos disponibles:", ""];
+  validDocuments.forEach((doc, index) => {
+    lines.push(`${index + 1}. ${escape(publicDocumentName(doc, index))}:`);
+    lines.push(`   ${escape(doc.publicUrl)}`);
+    if (index < validDocuments.length - 1) lines.push("");
+  });
+  return lines;
+}
+
+function formatPublicTenderAlert(
+  alert: EnrichedAlert,
+  options: { escapeHtmlEntities: boolean },
+): string {
+  const esc = options.escapeHtmlEntities ? escapeHtml : (value: string) => value;
   const p = alert.procurement;
   const raw = p.rawJson as Record<string, unknown>;
-  const fechaPublicacion =
-    (raw.fecha_publicacion as string | null | undefined) ??
-    (raw.visibleDate as string | null | undefined) ??
-    p.publicationDate ??
-    null;
-  const fechaLimite =
-    (raw.fecha_limite as string | null | undefined) ??
-    (raw.fecha_apertura as string | null | undefined) ??
-    p.openingDate ??
-    null;
-  const comprador = [p.dependencyName, p.buyingUnit].filter(Boolean).join(" / ");
-  const procedimiento = p.procedureNumber ?? p.licitationNumber ?? p.expedienteId;
-  const rawProcedureType =
-    (raw.tipo_procedimiento as string | null | undefined) ??
-    (raw.tipoProcedimiento as string | null | undefined) ??
-    (raw.tipo as string | null | undefined) ??
-    null;
-  const tipo = rawProcedureType ?? p.procedureType;
-  const motivos = (alert.scoreReasons ?? [
-    "buyer_capufe",
-    "procedure_direct_award",
-  ]).join(" + ");
+  const dependency = normalizePublicValue(p.dependencyName, "Dependencia no disponible");
+  const location = buildPublicLocation(p.state, p.municipality);
+  const title = normalizePublicValue(p.title, "Objeto no disponible");
+  const publicationDate =
+    rawDate(raw, ["fecha_publicacion", "visibleDate"]) ?? p.publicationDate;
+  const clarificationDate = rawDate(raw, [
+    "fecha_aclaraciones",
+    "fecha_junta_aclaraciones",
+    "fecha_junta",
+  ]);
+  const openingDate =
+    rawDate(raw, ["fecha_apertura", "fecha_presentacion_apertura"]) ?? p.openingDate;
+  const detectedAt = formatDateSafe(alert.detectedAt);
+  const procedureType = inferPublicProcedureType(p);
 
-  const lines = [
-    "🚨 CAPUFE — ADJUDICACIÓN DIRECTA",
+  const lines: string[] = [
+    `🔔 NUEVA LICITACIÓN DETECTADA — ${esc(procedureType.headerLabel)}`,
+    `🏛 ${esc(dependency)} — ${esc(location)}`,
+    `📌 ${esc(title)}`,
     "",
-    "Se detectó procedimiento de adjudicación directa relacionado con CAPUFE.",
+    `🏷 Tipo de procedimiento: ${esc(procedureType.bodyLabel)}`,
+    `🏛 Dependencia: ${esc(dependency)}`,
+    `📍 Ubicación: ${esc(location)}`,
+    `📊 Estatus: ${esc(p.status)}`,
+    `🔢 Licitación: ${esc(p.licitationNumber ?? p.procedureNumber ?? "No disponible")}`,
+    `📋 Expediente: ${esc(p.expedienteId ?? "No disponible")}`,
+    `📅 Publicación: ${esc(formatPublicDate(publicationDate))}`,
+    `🗣 Junta de aclaraciones: ${esc(formatPublicDate(clarificationDate))}`,
+    `📂 Apertura: ${esc(formatPublicDate(openingDate))}`,
     "",
-    `Objeto: ${escapeHtml(p.title ?? "N/D")}`,
-    `Comprador: ${escapeHtml(comprador || "N/D")}`,
-    p.buyingUnit ? `Unidad compradora: ${escapeHtml(p.buyingUnit)}` : "",
-    `Tipo: ${escapeHtml(tipo)}`,
-    procedimiento ? `Procedimiento: ${escapeHtml(procedimiento)}` : "",
-    fechaPublicacion ? `Fecha de publicación: ${formatDateSafe(fechaPublicacion)}` : "",
-    fechaLimite ? `Fecha límite: ${formatDateSafe(fechaLimite)}` : "",
-    `Motivo: ${escapeHtml(motivos)}`,
-    "Razón del match: CAPUFE + adjudicación directa",
-    `URL: ${escapeHtml(p.sourceUrl)}`,
+    "🔗 Ver licitación original:",
+    esc(p.sourceUrl),
+    "",
+    ...formatDocumentSection(alert.publicDocuments, esc),
+    "",
+    `⏱ Detectado: ${esc(detectedAt)}`,
   ];
 
-  return truncateForTelegram(lines.filter(Boolean).join("\n"));
+  return truncateForTelegram(lines.join("\n"));
 }
 
 /**
  * Construye el mensaje HTML para alerta de nuevo match.
  */
 export function formatMatchAlert(alert: EnrichedAlert): string {
-  if (alert.radarKey === "imss_morelos") {
-    return formatImssMorelosPriorityAlert(alert);
-  }
+  return formatPublicTenderAlert(alert, { escapeHtmlEntities: true });
+}
 
-  if (alert.radarKey === "capufe_direct_awards") {
-    return formatCapufeDirectAwardAlert(alert);
-  }
-
-  const p = alert.procurement;
-  const emoji = matchLevelEmoji(alert.matchLevel);
-  const score = (alert.matchScore * 100).toFixed(0);
-  const opportunityScore = (alert.opportunityScore * 100).toFixed(0);
-  const documentScore = (alert.documentScore * 100).toFixed(0);
-  const commercialLines = alert.commercialProfileId || alert.explanation.includes("Match comercial")
-    ? [
-        `🏢 <b>Perfil comercial:</b> ${escapeHtml(alert.commercialProfileName ?? alert.radarName)}`,
-        alert.commercialCompanyName
-          ? `🏷 <b>Empresa:</b> ${escapeHtml(alert.commercialCompanyName)}`
-          : "",
-        alert.commercialTerritoryMatched
-          ? `📍 <b>Territorio detectado:</b> ${escapeHtml(alert.commercialTerritoryMatched)}`
-          : "",
-        ...(alert.commercialScoreReasons ?? [])
-          .slice(0, 5)
-          .map((reason) => `• ${escapeHtml(reason)}`),
-      ]
-    : [];
-
-  // Fechas reales del API (vienen en ISO "2026-04-17T10:30:00")
-  const raw = p.rawJson as Record<string, unknown>;
-  const fechaPublicacion = (raw.fecha_publicacion as string | null | undefined)
-    ?? (raw.visibleDate as string | null | undefined)
-    ?? null;
-  const fechaAclaraciones = (raw.fecha_aclaraciones as string | null | undefined) ?? null;
-  const fechaLimite = (raw.fecha_limite as string | null | undefined) ?? null;
-  const fechaFallo = (raw.fecha_fallo as string | null | undefined) ?? null;
-  const fechaVisita = (raw.fecha_visita as string | null | undefined) ?? null;
-  const fechaInicioContrato = (raw.fecha_inicio_contrato as string | null | undefined) ?? null;
-
-  // null → omit the line; non-null → formatDateSafe (never "Fecha inválida")
-  const fmtDate = (d: string | null) => (d ? formatDateSafe(d) : null);
-
-  const lines: string[] = [
-    `${emoji} <b>NUEVO MATCH — ${alert.radarName}</b>`,
-    `🎯 <b>Match territorial:</b> ${score}%`,
-    `💼 <b>Potencial comercial:</b> ${opportunityScore}%`,
-    `📄 <b>Calidad documental:</b> ${documentScore}%`,
-    "",
-    ...commercialLines,
-    commercialLines.length > 0 ? "" : "",
-    `📌 <b>${escapeHtml(p.title ?? "")}</b>`,
-    "",
-    `🏛 <b>Dependencia:</b> ${escapeHtml(p.dependencyName ?? "N/D")}`,
-    p.state
-      ? `📍 <b>Ubicación:</b> ${p.municipality ? `${p.municipality}, ` : ""}${p.state}`
-      : "",
-    `📊 <b>Estatus:</b> ${p.status}`,
-    p.amount ? `💰 <b>Monto:</b> ${formatCurrency(p.amount, p.currency)}` : "",
-    alert.modalidadProbable
-      ? `📋 <b>Modalidad probable:</b> ${alert.modalidadProbable.replace(/_/g, " ")}`
-      : "",
-    "",
-    `🔢 <b>Licitación:</b> ${p.licitationNumber ?? p.procedureNumber ?? "N/D"}`,
-    p.expedienteId ? `📋 <b>Expediente:</b> ${p.expedienteId}` : "",
-    "",
-    // Fechas relevantes, omitiendo las nulas para no ensuciar
-    fechaPublicacion ? `📅 <b>Publicación:</b> ${fmtDate(fechaPublicacion)}` : "",
-    p.openingDate ? `📂 <b>Apertura:</b> ${fmtDate(p.openingDate)}` : "",
-    fechaAclaraciones ? `🗣 <b>Junta de Aclaraciones:</b> ${fmtDate(fechaAclaraciones)}` : "",
-    fechaVisita ? `👷 <b>Visita:</b> ${fmtDate(fechaVisita)}` : "",
-    fechaLimite ? `⏰ <b>Límite Aclaraciones:</b> ${fmtDate(fechaLimite)}` : "",
-    fechaFallo ? `⚖️ <b>Fallo:</b> ${fmtDate(fechaFallo)}` : "",
-    fechaInicioContrato ? `🗓 <b>Inicio Contrato:</b> ${fmtDate(fechaInicioContrato)}` : "",
-    "",
-    `🎯 <b>Razones del Match:</b>`,
-    `Términos: ${escapeHtml(alert.matchedTerms.slice(0, 8).join(" · "))}`,
-    alert.explanation ? `Explicación: ${escapeHtml(alert.explanation).slice(0, 400)}` : "",
-    alert.procurement.attachments.length > 0
-      ? `📎 Adjuntos: ${alert.procurement.attachments.length} archivo(s)`
-      : "",
-    alert.hasHistory
-      ? `🔁 Historial: ${alert.historyCount} versión(es) previa(s)`
-      : "",
-    "",
-    `🔗 <a href="${p.sourceUrl}">Ver Expediente Original</a>`,
-    `⏱ <i>Detectado: ${formatDateSafe(alert.detectedAt)}</i>`,
-  ];
-
-  return truncateForTelegram(lines.filter(Boolean).join("\n"));
+export function formatWhatsAppMatchAlert(alert: EnrichedAlert): string {
+  return formatPublicTenderAlert(alert, { escapeHtmlEntities: false });
 }
 
 /**
@@ -643,20 +696,26 @@ export function formatStatusChangeAlert(
   previousStatus: string,
 ): string {
   const p = alert.procurement;
+  const dependency = normalizePublicValue(p.dependencyName, "Dependencia no disponible");
+  const location = buildPublicLocation(p.state, p.municipality);
 
   const lines: string[] = [
-    `🔄 <b>CAMBIO DE ESTATUS — ${alert.radarName}</b>`,
+    `🔄 CAMBIO DE ESTATUS — ${escapeHtml(dependency)} — ${escapeHtml(location)}`,
     "",
-    `📋 <b>Expediente:</b> ${p.expedienteId ?? "N/D"}`,
-    `📌 <b>${escapeHtml(p.title ?? "")}</b>`,
+    `📌 ${escapeHtml(p.title ?? "")}`,
     "",
-    `🏛 <b>Dependencia:</b> ${escapeHtml(p.dependencyName ?? "N/D")}`,
+    `🏛 Dependencia: ${escapeHtml(dependency)}`,
+    `📍 Ubicación: ${escapeHtml(location)}`,
+    `🔢 Licitación: ${escapeHtml(p.licitationNumber ?? p.procedureNumber ?? "No disponible")}`,
+    `📋 Expediente: ${escapeHtml(p.expedienteId ?? "No disponible")}`,
     "",
-    `📊 <b>Estatus anterior:</b> ${previousStatus}`,
-    `📊 <b>Estatus nuevo:</b> <b>${p.status}</b>`,
+    `📊 Estatus anterior: ${escapeHtml(previousStatus)}`,
+    `📊 Estatus nuevo: ${escapeHtml(p.status)}`,
     "",
-    `🔗 ${p.sourceUrl}`,
-    `⏱ ${formatMexicoDate(alert.detectedAt)}`,
+    "🔗 Ver licitación original:",
+    escapeHtml(p.sourceUrl),
+    "",
+    `⏱ Detectado: ${escapeHtml(formatMexicoDate(alert.detectedAt))}`,
   ];
 
   return truncateForTelegram(lines.join("\n"));

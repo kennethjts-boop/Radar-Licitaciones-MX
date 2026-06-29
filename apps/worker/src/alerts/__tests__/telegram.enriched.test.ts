@@ -1,8 +1,8 @@
-import { formatEnrichedAlert, formatMatchAlert } from "../telegram.alerts";
+import { formatEnrichedAlert, formatMatchAlert, formatWhatsAppMatchAlert } from "../telegram.alerts";
 import type { EnrichedAlertData } from "../telegram.alerts";
 import type { DocumentLink } from "../../collectors/comprasmx-detail/index";
 import type { DownloadResult } from "../../services/document-downloader";
-import type { EnrichedAlert, NormalizedProcurement } from "../../types/procurement";
+import type { EnrichedAlert, NormalizedProcurement, PublicTenderDocument } from "../../types/procurement";
 
 function makeDocLink(title: string): DocumentLink {
   return {
@@ -215,9 +215,8 @@ describe("formatEnrichedAlert", () => {
   });
 });
 
-describe("formatMatchAlert IMSS Morelos", () => {
-  it("inicia con prioridad IMSS Morelos e incluye motivo institucional", () => {
-    const procurement: NormalizedProcurement = {
+function makeProcurement(overrides: Partial<NormalizedProcurement> = {}): NormalizedProcurement {
+  return {
       source: "comprasmx",
       sourceUrl: "https://comprasmx.example/proc/1",
       externalId: "PROC-IMSS-MOR-001",
@@ -244,31 +243,222 @@ describe("formatMatchAlert IMSS Morelos", () => {
       canonicalHash: null,
       rawJson: {},
       fetchedAt: "2026-05-01T10:00:00Z",
+      ...overrides,
     };
-    const alert: EnrichedAlert = {
-      alertType: "new_match",
-      radarKey: "imss_morelos",
-      radarName: "IMSS Morelos — Prioridad total",
-      matchLevel: "high",
-      matchScore: 1,
-      opportunityScore: 1,
-      documentScore: 1,
-      procurement,
-      matchedTerms: ["IMSS", "Cuernavaca"],
-      explanation: "Motivo: buyer_imss + territory_morelos.",
-      scoreReasons: ["buyer_imss", "territory_morelos", "priority_institutional_radar"],
-      territoryMatched: "Cuernavaca",
-      hasHistory: false,
-      historyCount: 0,
-      detectedAt: "2026-05-01T10:00:00Z",
-      telegramMessage: "",
-    };
+}
+
+function makePublicDoc(name: string, url: string, type = "convocatoria"): PublicTenderDocument {
+  return {
+    documentName: name,
+    documentType: type,
+    originalUrl: url,
+    publicUrl: url,
+    mimeType: "application/pdf",
+    fileExtension: "pdf",
+    fileSize: 1024,
+    sha256Hash: null,
+    detectedAt: "2026-06-29T17:20:00Z",
+    lastCheckedAt: "2026-06-29T17:21:00Z",
+    isAvailable: true,
+    source: "ComprasMX",
+  };
+}
+
+function makeAlert(overrides: Partial<EnrichedAlert> = {}): EnrichedAlert {
+  return {
+    alertType: "new_match",
+    radarKey: "capufe_mantenimiento_equipos",
+    radarName: "CAPUFE — Mantenimiento Equipos Peaje/Telepeaje FONADIN",
+    matchLevel: "low",
+    matchScore: 0.3,
+    opportunityScore: 0.9,
+    documentScore: 0.7,
+    procurement: makeProcurement(),
+    matchedTerms: ["mantenimiento preventivo"],
+    explanation: "Match LOW (score: 30%) en radar interno.",
+    scoreReasons: ["internal_reason"],
+    territoryMatched: "Morelos",
+    hasHistory: false,
+    historyCount: 0,
+    detectedAt: "2026-06-29T23:28:00Z",
+    telegramMessage: "",
+    ...overrides,
+  };
+}
+
+describe("formatMatchAlert public tender format", () => {
+  it("IMSS Guerrero no aparece como CAPUFE ni expone lenguaje de match", () => {
+    const alert = makeAlert({
+      procurement: makeProcurement({
+        procedureType: "unknown",
+        dependencyName: "IMSS",
+        state: "GUERRERO",
+        municipality: null,
+        title: "SERVICIO DE MANTENIMIENTO PREVENTIVO Y CORRECTIVO A EQUIPOS ELECTROMÉDICOS",
+        licitationNumber: "IA-50-GYR-050GYR001-N-65-2026",
+        expedienteId: "E-2026-00069043",
+        rawJson: {
+          fecha_aclaraciones: "2026-07-07T09:00:00-06:00",
+          fecha_apertura: "2026-07-14T09:00:00-06:00",
+        },
+      }),
+      radarName: "CAPUFE — Mantenimiento Equipos Peaje/Telepeaje FONADIN",
+      territoryMatched: "Morelos",
+    });
 
     const msg = formatMatchAlert(alert);
 
-    expect(msg.startsWith("🚨 PRIORIDAD IMSS MORELOS")).toBe(true);
-    expect(msg).toContain("Se detectó licitación del IMSS en Morelos.");
-    expect(msg).toContain("Motivo: buyer_imss + territory_morelos + priority_institutional_radar");
-    expect(msg).toContain("Razón del match: IMSS + Morelos");
+    expect(msg.startsWith("🔔 NUEVA LICITACIÓN DETECTADA — INVITACIÓN A CUANDO MENOS TRES PERSONAS")).toBe(true);
+    expect(msg).toContain("🏛 IMSS — Guerrero");
+    expect(msg).toContain("📌 SERVICIO DE MANTENIMIENTO PREVENTIVO Y CORRECTIVO A EQUIPOS ELECTROMÉDICOS");
+    expect(msg).toContain("🏷 Tipo de procedimiento: Invitación a cuando menos tres personas");
+    expect(msg).toContain("🏛 Dependencia: IMSS");
+    expect(msg).toContain("📍 Ubicación: Guerrero");
+    expect(msg).not.toContain("NUEVO MATCH");
+    expect(msg).not.toContain("CAPUFE — Mantenimiento Equipos Peaje/Telepeaje FONADIN");
+    expect(msg).not.toContain("Razones del Match");
+    expect(msg).not.toContain("Match territorial");
+    expect(msg).not.toContain("Términos coincidentes");
+    expect(msg).not.toContain("términos coincidentes");
+    expect(msg).not.toContain("score comercial");
+    expect(msg).not.toContain("Potencial comercial");
+    expect(msg).not.toContain("Calidad documental");
+    expect(msg).not.toContain("radar interno");
+  });
+
+  it("CAPUFE real sí puede aparecer como CAPUFE", () => {
+    const msg = formatMatchAlert(makeAlert({
+      procurement: makeProcurement({
+        dependencyName: "CAPUFE",
+        state: "MORELOS",
+        municipality: null,
+        title: "Mantenimiento de equipos de peaje y telepeaje",
+      }),
+    }));
+
+    expect(msg).toContain("🏛 CAPUFE — Morelos");
+  });
+
+  it("preferencia territorial Morelos no reemplaza la ubicación real", () => {
+    const msg = formatMatchAlert(makeAlert({
+      procurement: makeProcurement({
+        dependencyName: "IMSS",
+        state: "GUERRERO",
+        municipality: null,
+      }),
+      commercialTerritoryMatched: "Morelos 100%",
+      territoryMatched: "Morelos",
+    }));
+
+    expect(msg).toContain("🏛 IMSS — Guerrero");
+    expect(msg).not.toContain("— IMSS — Morelos");
+  });
+
+  it("IA aparece como invitación a cuando menos tres personas", () => {
+    const msg = formatMatchAlert(makeAlert({
+      procurement: makeProcurement({
+        procedureType: "unknown",
+        licitationNumber: "IA-50-GYR-050GYR001-N-65-2026",
+        procedureNumber: "IA-50-GYR-050GYR001-N-65-2026",
+        dependencyName: "IMSS",
+        state: "Guerrero",
+        municipality: null,
+        title: "SERVICIO DE MANTENIMIENTO PREVENTIVO Y CORRECTIVO A EQUIPOS ELECTROMÉDICOS",
+      }),
+    }));
+
+    expect(msg.startsWith("🔔 NUEVA LICITACIÓN DETECTADA — INVITACIÓN A CUANDO MENOS TRES PERSONAS")).toBe(true);
+    expect(msg).toContain("🏷 Tipo de procedimiento: Invitación a cuando menos tres personas");
+  });
+
+  it("LA aparece como licitación pública", () => {
+    const msg = formatMatchAlert(makeAlert({
+      procurement: makeProcurement({
+        procedureType: "unknown",
+        licitationNumber: "LA-09-J0U-009J0U012-N-7-2026",
+        procedureNumber: "LA-09-J0U-009J0U012-N-7-2026",
+      }),
+    }));
+
+    expect(msg.startsWith("🔔 NUEVA LICITACIÓN DETECTADA — LICITACIÓN PÚBLICA")).toBe(true);
+    expect(msg).toContain("🏷 Tipo de procedimiento: Licitación pública");
+  });
+
+  it("AA aparece como adjudicación directa", () => {
+    const msg = formatMatchAlert(makeAlert({
+      procurement: makeProcurement({
+        procedureType: "unknown",
+        licitationNumber: "AA-50-GYR-050GYR001-N-10-2026",
+        procedureNumber: "AA-50-GYR-050GYR001-N-10-2026",
+      }),
+    }));
+
+    expect(msg.startsWith("🔔 NUEVA LICITACIÓN DETECTADA — ADJUDICACIÓN DIRECTA")).toBe(true);
+    expect(msg).toContain("🏷 Tipo de procedimiento: Adjudicación directa");
+  });
+
+  it("campo explícito de ComprasMX tiene prioridad sobre inferencia", () => {
+    const msg = formatMatchAlert(makeAlert({
+      procurement: makeProcurement({
+        procedureType: "unknown",
+        licitationNumber: "ZZ-50-GYR-050GYR001-N-10-2026",
+        procedureNumber: "ZZ-50-GYR-050GYR001-N-10-2026",
+        rawJson: {
+          tipo_procedimiento: "Licitación pública nacional",
+        },
+      }),
+    }));
+
+    expect(msg.startsWith("🔔 NUEVA LICITACIÓN DETECTADA — LICITACIÓN PÚBLICA NACIONAL")).toBe(true);
+    expect(msg).toContain("🏷 Tipo de procedimiento: Licitación pública nacional");
+  });
+
+  it("sin tipo disponible muestra tipo no disponible", () => {
+    const msg = formatMatchAlert(makeAlert({
+      procurement: makeProcurement({
+        procedureType: "unknown",
+        licitationNumber: "ZZ-50-GYR-050GYR001-N-10-2026",
+        procedureNumber: "ZZ-50-GYR-050GYR001-N-10-2026",
+        externalId: "ZZ-50-GYR-050GYR001-N-10-2026",
+        rawJson: {},
+        canonicalText: "servicio sin modalidad visible",
+      }),
+    }));
+
+    expect(msg.startsWith("🔔 NUEVA LICITACIÓN DETECTADA — TIPO NO DISPONIBLE")).toBe(true);
+    expect(msg).toContain("🏷 Tipo de procedimiento: No disponible");
+  });
+
+  it("documentos PDF aparecen después del enlace original con URLs visibles", () => {
+    const urlOriginal = "https://comprasmx.example/expediente/E-2026-00069043";
+    const msg = formatMatchAlert(makeAlert({
+      procurement: makeProcurement({ sourceUrl: urlOriginal }),
+      publicDocuments: [
+        makePublicDoc("Convocatoria", "https://cdn.example/convocatoria.pdf"),
+        makePublicDoc("Anexo técnico", "https://cdn.example/anexo-tecnico.pdf", "anexo_tecnico"),
+        makePublicDoc("Modelo de contrato", "https://cdn.example/modelo-contrato.pdf", "contrato"),
+      ],
+    }));
+
+    expect(msg).toContain(`🔗 Ver licitación original:\n${urlOriginal}\n\n📎 Documentos disponibles:`);
+    expect(msg).toContain("1. Convocatoria:\n   https://cdn.example/convocatoria.pdf");
+    expect(msg).toContain("2. Anexo técnico:\n   https://cdn.example/anexo-tecnico.pdf");
+    expect(msg).toContain("3. Modelo de contrato:\n   https://cdn.example/modelo-contrato.pdf");
+  });
+
+  it("WhatsApp usa URLs completas visibles y sin markdown oculto", () => {
+    const msg = formatWhatsAppMatchAlert(makeAlert({
+      publicDocuments: [makePublicDoc("Convocatoria", "https://cdn.example/convocatoria.pdf")],
+    }));
+
+    expect(msg).toContain("https://comprasmx.example/proc/1");
+    expect(msg).toContain("https://cdn.example/convocatoria.pdf");
+    expect(msg).not.toContain("[Convocatoria]");
+    expect(msg).not.toContain("<a href=");
+  });
+
+  it("sin documentos muestra mensaje explícito", () => {
+    const msg = formatMatchAlert(makeAlert({ publicDocuments: [] }));
+    expect(msg).toContain("📎 Documentos disponibles: No detectados por el momento.");
   });
 });

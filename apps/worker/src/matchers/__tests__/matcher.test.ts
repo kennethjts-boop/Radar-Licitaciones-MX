@@ -317,6 +317,52 @@ describe("business line radars", () => {
   });
 });
 
+describe("CAPUFE specialized radar guard", () => {
+  it("no activa CAPUFE mantenimiento por términos genéricos en licitación IMSS Guerrero electromédica", () => {
+    const radar = getRadarByKey("capufe_mantenimiento_equipos");
+    expect(radar).toBeDefined();
+
+    const result = evaluateProcurementAgainstRadar(
+      makeProcurement({
+        dependencyName: "IMSS",
+        buyingUnit: "OOAD Guerrero",
+        state: "GUERRERO",
+        municipality: null,
+        title: "SERVICIO DE MANTENIMIENTO PREVENTIVO Y CORRECTIVO A EQUIPOS ELECTROMÉDICOS",
+        description: null,
+        licitationNumber: "IA-50-GYR-050GYR001-N-65-2026",
+        expedienteId: "E-2026-00069043",
+        canonicalText:
+          "IMSS Guerrero SERVICIO DE MANTENIMIENTO PREVENTIVO Y CORRECTIVO A EQUIPOS ELECTROMÉDICOS hospital equipo medico",
+      }),
+      radar!,
+      true,
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it("sí activa CAPUFE mantenimiento cuando hay señal fuerte de peaje/telepeaje", () => {
+    const radar = getRadarByKey("capufe_mantenimiento_equipos");
+    expect(radar).toBeDefined();
+
+    const result = evaluateProcurementAgainstRadar(
+      makeProcurement({
+        dependencyName: "CAPUFE",
+        state: "MORELOS",
+        title: "Mantenimiento preventivo y correctivo a equipos de peaje y telepeaje",
+        canonicalText:
+          "CAPUFE mantenimiento preventivo y correctivo a equipos de peaje telepeaje plaza de cobro",
+      }),
+      radar!,
+      true,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.radarKey).toBe("capufe_mantenimiento_equipos");
+  });
+});
+
 describe("CAPUFE direct awards priority radar", () => {
   function makeCapufeDirectAwardCase(title: string, overrides: Partial<NormalizedProcurement> = {}) {
     return makeProcurement({

@@ -49,6 +49,8 @@ const PROCEDURE_TYPE_MAP: Record<string, ProcedureType> = {
   "adjudicación directa": "adjudicacion_directa",
   "adjudicacion directa": "adjudicacion_directa",
   ad: "adjudicacion_directa",
+  "licitación privada": "licitacion_privada",
+  "licitacion privada": "licitacion_privada",
   concurso: "concurso",
   subasta: "subasta",
 };
@@ -78,6 +80,17 @@ export function normalizeProcedureType(
   for (const [key, val] of Object.entries(PROCEDURE_TYPE_MAP)) {
     if (normalized.includes(key)) return val;
   }
+  return "other";
+}
+
+function inferProcedureTypeFromNumber(
+  value: string | null | undefined,
+): ProcedureType {
+  if (!value) return "unknown";
+  const normalized = value.trim().toUpperCase();
+  if (/^IA[-_]/.test(normalized)) return "invitacion_tres";
+  if (/^LA[-_]/.test(normalized)) return "licitacion_publica";
+  if (/^AA[-_]/.test(normalized)) return "adjudicacion_directa";
   return "unknown";
 }
 
@@ -112,6 +125,8 @@ export interface RawProcurementInput {
   dependencyName?: string | null;
   buyingUnit?: string | null;
   procedureType?: string | null;
+  procedureTypeSource?: string | null;
+  procedureTypeConfidence?: "high" | "medium" | "low" | null;
   status?: string | null;
   publicationDate?: string | null;
   openingDate?: string | null;
@@ -162,6 +177,29 @@ export function normalize(input: RawProcurementInput): NormalizedProcurement {
   });
 
   const canonicalHash = buildCanonicalHash(input.procedureNumber, input.expedienteId);
+  const explicitProcedureType = normalizeProcedureType(input.procedureType);
+  const inferredFromLicitation = inferProcedureTypeFromNumber(input.licitationNumber);
+  const inferredFromProcedure = inferProcedureTypeFromNumber(input.procedureNumber);
+  const inferredProcedureType =
+    explicitProcedureType !== "unknown"
+      ? explicitProcedureType
+      : inferredFromLicitation !== "unknown"
+        ? inferredFromLicitation
+        : inferredFromProcedure;
+  const procedureTypeSource =
+    input.procedureTypeSource ??
+    (explicitProcedureType !== "unknown"
+      ? "raw_procedure_type"
+      : inferredProcedureType !== "unknown"
+        ? "procedure_number_prefix"
+        : null);
+  const procedureTypeConfidence =
+    input.procedureTypeConfidence ??
+    (explicitProcedureType !== "unknown"
+      ? "high"
+      : inferredProcedureType !== "unknown"
+        ? "medium"
+        : null);
 
   return {
     source: input.source,
@@ -174,7 +212,9 @@ export function normalize(input: RawProcurementInput): NormalizedProcurement {
     description: input.description?.trim() ?? null,
     dependencyName: input.dependencyName?.trim() ?? null,
     buyingUnit: input.buyingUnit?.trim() ?? null,
-    procedureType: normalizeProcedureType(input.procedureType),
+    procedureType: inferredProcedureType,
+    procedureTypeSource,
+    procedureTypeConfidence,
     status: normalizeStatus(input.status),
     publicationDate: input.publicationDate ?? null,
     openingDate: input.openingDate ?? null,

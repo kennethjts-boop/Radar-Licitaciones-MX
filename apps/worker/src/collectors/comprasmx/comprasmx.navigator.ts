@@ -176,6 +176,8 @@ export function apiRegistroToRawInput(item: ApiRegistro): RawProcurementInput {
     dependencyName: item.siglas?.trim() ?? null,
     buyingUnit: null,
     procedureType: item.tipo_procedimiento ?? null,
+    procedureTypeSource: item.tipo_procedimiento ? "comprasmx_listing.tipo_procedimiento" : null,
+    procedureTypeConfidence: item.tipo_procedimiento ? "high" : null,
     status: item.estatus_alterno ?? null,
     publicationDate: item.fecha_publicacion ?? null, // puede no estar disponible en el listado del API
     openingDate: item.fecha_apertura ?? null, // apertura de proposiciones
@@ -223,7 +225,17 @@ export const SELECTORS = {
     TITLE: 'Nombre del procedimiento de contratación:',
     STATUS: 'Estatus del procedimiento de contratación:',
     DEPENDENCY: 'Dependencia o Entidad:',
-    SOURCE_ID: 'Número de procedimiento de contratación:'
+    SOURCE_ID: 'Número de procedimiento de contratación:',
+    PROCEDURE_TYPE: [
+      'Tipo de procedimiento:',
+      'Tipo de procedimiento de contratación:',
+      'Procedimiento:',
+      'Tipo de contratación:',
+      'Carácter del procedimiento:',
+      'Caracter del procedimiento:',
+      'Modalidad:',
+      'Tipo:'
+    ],
   },
 
   // Attachments table
@@ -976,10 +988,19 @@ export class ComprasMxNavigator {
           return '';
         };
 
+        const getFirstValByLabels = (labelTexts: string[]) => {
+          for (const labelText of labelTexts) {
+            const value = getValByLabel(labelText);
+            if (value) return value;
+          }
+          return '';
+        };
+
         const externalId = getValByLabel(sel.DETAIL_LABELS.SOURCE_ID);
         const title = getValByLabel(sel.DETAIL_LABELS.TITLE);
         const status = getValByLabel(sel.DETAIL_LABELS.STATUS);
         const dependency = getValByLabel(sel.DETAIL_LABELS.DEPENDENCY);
+        const procedureType = getFirstValByLabels(sel.DETAIL_LABELS.PROCEDURE_TYPE);
 
         const attachments: any[] = [];
         // @ts-ignore
@@ -1010,6 +1031,7 @@ export class ComprasMxNavigator {
           title,
           status,
           dependencyName: dependency,
+          procedureType,
           // @ts-ignore
           sourceUrl: window.location.href,
           attachments
@@ -1023,6 +1045,9 @@ export class ComprasMxNavigator {
         title: data.title || 'Sin Título',
         status: data.status,
         dependencyName: data.dependencyName,
+        procedureType: data.procedureType || null,
+        procedureTypeSource: data.procedureType ? "comprasmx_detail.label" : null,
+        procedureTypeConfidence: data.procedureType ? "high" : null,
         attachments: data.attachments,
         rawJson: { ...data, extractedAt: new Date().toISOString() }
       };

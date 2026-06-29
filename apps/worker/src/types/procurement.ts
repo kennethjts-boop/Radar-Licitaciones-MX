@@ -10,8 +10,10 @@ export type ProcedureType =
   | "licitacion_publica"
   | "invitacion_tres"
   | "adjudicacion_directa"
+  | "licitacion_privada"
   | "concurso"
   | "subasta"
+  | "other"
   | "unknown";
 
 export type ProcurementStatus =
@@ -45,6 +47,21 @@ export interface ProcurementAttachment {
   detectedText: string | null;
 }
 
+export interface PublicTenderDocument {
+  documentName: string;
+  documentType: string;
+  originalUrl: string;
+  publicUrl: string;
+  mimeType: string | null;
+  fileExtension: string | null;
+  fileSize: number | null;
+  sha256Hash: string | null;
+  detectedAt: string;
+  lastCheckedAt: string;
+  isAvailable: boolean;
+  source: string;
+}
+
 // ─── Contrato normalizado central ────────────────────────────────────────────
 // Este es el tipo que circula entre collector → normalizer → matcher → enricher → alert.
 
@@ -69,6 +86,8 @@ export interface NormalizedProcurement {
 
   // Clasificación
   procedureType: ProcedureType;
+  procedureTypeSource?: string | null;
+  procedureTypeConfidence?: "high" | "medium" | "low" | null;
   status: ProcurementStatus;
 
   // Fechas (ISO-8601 strings o null)
@@ -162,6 +181,7 @@ export interface EnrichedAlert {
   commercialCompanyName?: string;
   commercialScoreReasons?: string[];
   commercialTerritoryMatched?: string | null;
+  publicDocuments?: PublicTenderDocument[];
   hasHistory: boolean;
   historyCount: number;
   detectedAt: string; // ISO-8601

@@ -11,6 +11,7 @@ export interface UploadedAttachment {
   storagePath: string;
   fileSizeBytes: number;
   fileHash: string;
+  publicUrl?: string;
 }
 
 async function calculateFileHash(tempFilePath: string): Promise<string> {
@@ -124,4 +125,68 @@ export async function uploadAttachment(
       );
     }
   }
+}
+
+export async function uploadPublicDocument(
+  storageFolder: string,
+  fileName: string,
+  localPath: string,
+): Promise<UploadedAttachment & { publicUrl: string }> {
+  const db = getSupabaseClient();
+  const safeFolder = storageFolder.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const safeFileName = basename(fileName).replace(/[^a-zA-Z0-9._-]/g, "_");
+  const storagePath = `${safeFolder}/${safeFileName}`;
+
+  await withRetries(
+    async (attempt) => {
+      const stream = createReadStream(localPath);
+      const { error } = await db.storage
+        .from("tender-documents")
+        .upload(storagePath, stream, {
+          upsert: true,
+        });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      log.debug(
+        {
+          event: "PUBLIC_DOCUMENT_UPLOAD_SUCCESS",
+          attempt,
+          storagePath,
+        },
+        "Documento público subido a Storage",
+      );
+    },
+    {
+      maxAttempts: 3,
+      initialDelayMs: 1_000,
+      backoffMultiplier: 2,
+      onRetry: async (error, attempt, delayMs) => {
+        log.warn(
+          {
+            event: "PUBLIC_DOCUMENT_UPLOAD_RETRY",
+            attempt,
+            storagePath,
+            delayMs,
+            error: toErrorMessage(error),
+          },
+          "Reintentando upload de documento público",
+        );
+      },
+    },
+  );
+
+  const fileSizeBytes = statSync(localPath).size;
+  const fileHash = await calculateFileHash(localPath);
+  const { data } = db.storage.from("tender-documents").getPublicUrl(storagePath);
+  const publicUrl = data.publicUrl;
+
+  return {
+    storagePath,
+    fileSizeBytes,
+    fileHash,
+    publicUrl,
+  };
 }

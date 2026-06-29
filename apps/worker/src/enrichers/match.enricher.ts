@@ -12,6 +12,7 @@ import type {
   NormalizedProcurement,
   MatchResult,
   EnrichedAlert,
+  PublicTenderDocument,
 } from "../types/procurement";
 
 const log = createModuleLogger("enricher");
@@ -23,6 +24,7 @@ export async function enrichMatch(
   procurement: NormalizedProcurement,
   match: MatchResult,
   modalidadProbable?: string,
+  publicDocuments?: PublicTenderDocument[],
 ): Promise<EnrichedAlert> {
   const radar = getRadarByKey(match.radarKey);
 
@@ -69,6 +71,7 @@ export async function enrichMatch(
     commercialCompanyName: match.commercialCompanyName,
     commercialScoreReasons: match.commercialScoreReasons,
     commercialTerritoryMatched: match.commercialTerritoryMatched,
+    publicDocuments,
     hasHistory,
     historyCount,
     detectedAt: nowISO(),

@@ -48,7 +48,12 @@ import {
   sendTelegramMessage,
   formatAiVipAlertMessage,
 } from "../alerts/telegram.alerts";
-import type { ProcurementStatus, NormalizedProcurement, ProcedureType } from "../types/procurement";
+import type {
+  ProcurementStatus,
+  NormalizedProcurement,
+  ProcedureType,
+  PublicTenderDocument,
+} from "../types/procurement";
 import type { DbProcurement } from "../types/database";
 import { getSupabaseClient } from "../storage/client";
 import { BrowserManager } from "../collectors/comprasmx/browser.manager";
@@ -66,6 +71,7 @@ import { getConfig } from '../config/env';
 import { enrichProcurement } from "./enrich-procurement.job";
 import { filterProcurementScope } from "../services/procurement-scope-filter";
 import { matchCommercialOpportunity } from "../modules/commercial-matching";
+import { preparePublicTenderDocuments } from "../services/public-tender-documents";
 import {
   createCommercialMatchingTelemetry,
   recordCommercialMatchTelemetry,
@@ -467,6 +473,7 @@ export async function runCollectJob(): Promise<CollectJobResult> {
     let capufeDeepReportsAttempted = 0;
     const capufeDeepReportsSent = new Set<string>();
     let alertsSentThisCycle = 0;
+    const publicDocumentsByProcurementId = new Map<string, PublicTenderDocument[]>();
     const commercialTelemetry: CommercialMatchingTelemetry =
       createCommercialMatchingTelemetry();
     const cycleMetrics: CycleMetrics = {
@@ -797,7 +804,33 @@ export async function runCollectJob(): Promise<CollectJobResult> {
                 }
               }
 
-              const enriched = await enrichMatch(item, enrichableMatch, modalidadProbable);
+              let publicDocuments = publicDocumentsByProcurementId.get(upsertResult.procurementId);
+              if (!publicDocuments) {
+                try {
+                  publicDocuments = await preparePublicTenderDocuments({
+                    tenderId: upsertResult.procurementId,
+                    sourceUrl: item.sourceUrl,
+                    procedureNumber: item.procedureNumber ?? item.licitationNumber,
+                    expedienteId: item.expedienteId,
+                    scope: match.radarKey,
+                  });
+                  publicDocumentsByProcurementId.set(upsertResult.procurementId, publicDocuments);
+                } catch (docErr) {
+                  log.warn(
+                    { err: docErr, procurementId: upsertResult.procurementId, externalId: item.externalId },
+                    "No se pudieron preparar documentos públicos; se enviará alerta sin documentos",
+                  );
+                  publicDocuments = [];
+                  publicDocumentsByProcurementId.set(upsertResult.procurementId, publicDocuments);
+                }
+              }
+
+              const enriched = await enrichMatch(
+                item,
+                enrichableMatch,
+                modalidadProbable,
+                publicDocuments,
+              );
               const alertId = await createAlert(enriched, upsertResult.procurementId, radarDbId);
 
               const msgId = await sendMatchAlert(enriched);
