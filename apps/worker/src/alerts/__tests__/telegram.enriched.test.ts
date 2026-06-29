@@ -336,7 +336,8 @@ describe("formatMatchAlert public tender format", () => {
       }),
     }));
 
-    expect(msg).toContain("🏛 CAPUFE — Morelos");
+    expect(msg).toContain("🏛 Dependencia: CAPUFE");
+    expect(msg).toContain("📍 Ubicación: Morelos");
   });
 
   it("preferencia territorial Morelos no reemplaza la ubicación real", () => {
@@ -440,7 +441,7 @@ describe("formatMatchAlert public tender format", () => {
       ],
     }));
 
-    expect(msg).toContain(`🔗 Ver licitación original:\n${urlOriginal}\n\n📎 Documentos disponibles:`);
+    expect(msg).toContain(`🔗 Ver licitación original:\n${urlOriginal}\n\n📎 Documentos / anexos:`);
     expect(msg).toContain("1. Convocatoria:\n   https://cdn.example/convocatoria.pdf");
     expect(msg).toContain("2. Anexo técnico:\n   https://cdn.example/anexo-tecnico.pdf");
     expect(msg).toContain("3. Modelo de contrato:\n   https://cdn.example/modelo-contrato.pdf");
@@ -457,8 +458,46 @@ describe("formatMatchAlert public tender format", () => {
     expect(msg).not.toContain("<a href=");
   });
 
-  it("sin documentos muestra mensaje explícito", () => {
+  it("sin documentos pero con ficha original no dice documentos no disponibles", () => {
     const msg = formatMatchAlert(makeAlert({ publicDocuments: [] }));
-    expect(msg).toContain("📎 Documentos disponibles: No detectados por el momento.");
+    expect(msg).toContain("📎 Documentos / anexos:");
+    expect(msg).toContain("Disponibles desde la ficha original. Abrir el enlace original para consultar los anexos.");
+    expect(msg.toLowerCase()).not.toContain("documentos no disponibles");
+  });
+
+  it("formato Telegram inicia con 🚨 cuando es prioridad CAPUFE/FONADIN", () => {
+    const msg = formatMatchAlert(makeAlert({
+      procurement: makeProcurement({
+        dependencyName: "CAPUFE",
+        state: "Morelos",
+        municipality: null,
+        title:
+          "Contratación del servicio de mantenimiento preventivo y correctivo a equipos de control de tránsito de peaje y telepeaje en las plazas de cobro correspondientes a la Red CAPUFE, Red FONADIN y tramo México-Cuernavaca y Michapa-Puebla.",
+        procedureType: "unknown",
+        procedureNumber: "LA-09-J0U-009J0U012-N-7-2026",
+        licitationNumber: "LA-09-J0U-009J0U012-N-7-2026",
+      }),
+    }));
+
+    expect(msg.startsWith("🚨 LICITACIÓN PRIORITARIA DETECTADA — Licitación pública")).toBe(true);
+    expect(msg).toContain("🎯 Perfil detectado: Mantenimiento Peaje/Telepeaje CAPUFE-FONADIN");
+  });
+
+  it("formato prioritario incluye links visibles de anexos", () => {
+    const msg = formatMatchAlert(makeAlert({
+      procurement: makeProcurement({
+        dependencyName: "IMSS",
+        state: "Morelos",
+        title:
+          "Adquisición de bienes terapéuticos del grupo material de laboratorio y reactivos para cubrir las necesidades de los laboratorios del IMSS en el estado de Morelos.",
+      }),
+      publicDocuments: [
+        makePublicDoc("Anexo técnico", "https://comprasmx.example/anexos/anexo-tecnico.pdf", "anexo_tecnico"),
+      ],
+    }));
+
+    expect(msg.startsWith("🚨 LICITACIÓN PRIORITARIA DETECTADA")).toBe(true);
+    expect(msg).toContain("📎 Documentos / anexos:");
+    expect(msg).toContain("1. Anexo técnico:\n   https://comprasmx.example/anexos/anexo-tecnico.pdf");
   });
 });

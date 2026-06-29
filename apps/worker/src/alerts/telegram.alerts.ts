@@ -24,6 +24,7 @@ import {
   recordTelegramSendFailure,
   recordTelegramSendSuccess,
 } from "../core/telegram-commands-health";
+import { detectPriorityAlertProfile } from "../modules/priority-alerts";
 
 const log = createModuleLogger("telegram-alerts");
 
@@ -614,13 +615,23 @@ function publicDocumentName(doc: PublicTenderDocument, index: number): string {
   return `Documento ${index + 1}`;
 }
 
-function formatDocumentSection(documents: PublicTenderDocument[] | undefined, escape: (value: string) => string): string[] {
+function formatDocumentSection(
+  documents: PublicTenderDocument[] | undefined,
+  sourceUrl: string | null | undefined,
+  escape: (value: string) => string,
+): string[] {
   const validDocuments = (documents ?? []).filter((doc) => doc.isAvailable && doc.publicUrl);
   if (validDocuments.length === 0) {
-    return ["📎 Documentos disponibles: No detectados por el momento."];
+    if (sourceUrl?.trim()) {
+      return [
+        "📎 Documentos / anexos:",
+        "Disponibles desde la ficha original. Abrir el enlace original para consultar los anexos.",
+      ];
+    }
+    return ["📎 Documentos / anexos: Documentos no disponibles."];
   }
 
-  const lines = ["📎 Documentos disponibles:", ""];
+  const lines = ["📎 Documentos / anexos:", ""];
   validDocuments.forEach((doc, index) => {
     lines.push(`${index + 1}. ${escape(publicDocumentName(doc, index))}:`);
     lines.push(`   ${escape(doc.publicUrl)}`);
@@ -650,6 +661,32 @@ function formatPublicTenderAlert(
     rawDate(raw, ["fecha_apertura", "fecha_presentacion_apertura"]) ?? p.openingDate;
   const detectedAt = formatDateSafe(alert.detectedAt);
   const procedureType = inferPublicProcedureType(p);
+  const priorityProfile = detectPriorityAlertProfile(p);
+
+  if (priorityProfile) {
+    const lines: string[] = [
+      `🚨 LICITACIÓN PRIORITARIA DETECTADA — ${esc(procedureType.bodyLabel)}`,
+      "",
+      `🎯 Perfil detectado: ${esc(priorityProfile.label)}`,
+      "",
+      `🏛 Dependencia: ${esc(dependency)}`,
+      `📍 Ubicación: ${esc(location)}`,
+      `📌 Título: ${esc(title)}`,
+      "",
+      `🧾 Tipo de procedimiento: ${esc(procedureType.bodyLabel)}`,
+      `📅 Publicación: ${esc(formatPublicDate(publicationDate))}`,
+      `⏰ Apertura: ${esc(formatPublicDate(openingDate))}`,
+      "",
+      "🔗 Enlace original:",
+      esc(p.sourceUrl),
+      "",
+      ...formatDocumentSection(alert.publicDocuments, p.sourceUrl, esc),
+      "",
+      `⏱ Detectado: ${esc(detectedAt)}`,
+    ];
+
+    return truncateForTelegram(lines.join("\n"));
+  }
 
   const lines: string[] = [
     `🔔 NUEVA LICITACIÓN DETECTADA — ${esc(procedureType.headerLabel)}`,
@@ -669,7 +706,7 @@ function formatPublicTenderAlert(
     "🔗 Ver licitación original:",
     esc(p.sourceUrl),
     "",
-    ...formatDocumentSection(alert.publicDocuments, esc),
+    ...formatDocumentSection(alert.publicDocuments, p.sourceUrl, esc),
     "",
     `⏱ Detectado: ${esc(detectedAt)}`,
   ];

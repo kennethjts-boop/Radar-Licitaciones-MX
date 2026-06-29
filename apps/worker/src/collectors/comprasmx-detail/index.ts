@@ -14,7 +14,7 @@ const CONTEXT_BUFFER_MS = 5_000;
 
 // ── Tipos ──────────────────────────────────────────────────────────────────────
 
-export type FileType = "pdf" | "docx" | "xlsx" | "zip" | "other";
+export type FileType = "pdf" | "docx" | "xlsx" | "zip" | "rar" | "other";
 export type DocumentHint =
   | "convocatoria"
   | "anexo_tecnico"
@@ -56,6 +56,9 @@ export interface DetailCollectorResult {
 
 // ── Helpers puros (exportados para tests) ─────────────────────────────────────
 
+const DOCUMENT_LINK_KEYWORD_REGEX =
+  /anexos?|documentos?|convocatoria|bases|archivos?|junta|aclaraciones|acta|fallo|contrato|pdf|docx?|xlsx?|zip|rar/i;
+
 /**
  * Clasifica un documento a partir del nombre de archivo y título del link.
  */
@@ -88,7 +91,27 @@ export function extractFileType(url: string): FileType {
   if (ext === "docx" || ext === "doc") return "docx";
   if (ext === "xlsx" || ext === "xls") return "xlsx";
   if (ext === "zip") return "zip";
+  if (ext === "rar") return "rar";
   return "other";
+}
+
+export function buildAbsoluteDocumentUrl(href: string, sourceUrl: string): string {
+  return href.startsWith("http") ? href : new URL(href, sourceUrl).toString();
+}
+
+export function isVisibleDocumentLinkCandidate(input: {
+  href: string;
+  text?: string | null;
+  ariaLabel?: string | null;
+  title?: string | null;
+}): boolean {
+  const searchable = [
+    input.href,
+    input.text ?? "",
+    input.ariaLabel ?? "",
+    input.title ?? "",
+  ].join(" ");
+  return DOCUMENT_LINK_KEYWORD_REGEX.test(searchable);
 }
 
 // ── Función principal ──────────────────────────────────────────────────────────
@@ -138,7 +161,7 @@ export async function collectComprasMxDetail(
         const discoveredAt = nowISO();
         const found: DocumentLink[] = [];
 
-        // Buscar todos los <a> con href
+        // Buscar todos los <a> con href sin hacer clic en anexos/documentos.
         const linkHandles = await page.$$("a[href]");
 
         for (const handle of linkHandles) {
@@ -148,29 +171,31 @@ export async function collectComprasMxDetail(
             if (!href) continue;
 
             const title = ((await handle.innerText().catch(() => "")) || "").trim();
+            const ariaLabel = await handle.getAttribute("aria-label").catch(() => null);
+            const titleAttr = await handle.getAttribute("title").catch(() => null);
             const fileType = extractFileType(href);
             const isDownloadable = fileType !== "other";
 
-            // Incluir si es descargable O si el título contiene palabras clave de documentos
-            const hasDocumentKeyword =
-              /convocatoria|anexo|bases|aclaraciones|fallo|contrato|modelo|cat[aá]logo/i.test(
-                title,
-              );
-
-            if (!isDownloadable && !hasDocumentKeyword) continue;
+            if (
+              !isVisibleDocumentLinkCandidate({
+                href,
+                text: title,
+                ariaLabel,
+                title: titleAttr,
+              })
+            ) continue;
 
             // Construir URL absoluta si es relativa
-            const fileUrl = href.startsWith("http")
-              ? href
-              : new URL(href, input.sourceUrl).toString();
+            const fileUrl = buildAbsoluteDocumentUrl(href, input.sourceUrl);
 
             const fileName =
               fileUrl.split("?")[0].split("/").pop() || null;
 
-            const documentHint = classifyDocumentHint(fileName, title);
+            const visibleName = title || titleAttr || ariaLabel || fileName || "Documento sin título";
+            const documentHint = classifyDocumentHint(fileName, visibleName);
 
             found.push({
-              documentTitle: title || fileName || "Documento sin título",
+              documentTitle: visibleName,
               fileName: fileName || null,
               fileUrl,
               fileType,

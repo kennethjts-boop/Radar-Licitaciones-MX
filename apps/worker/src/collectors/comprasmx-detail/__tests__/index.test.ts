@@ -1,6 +1,8 @@
 import {
+  buildAbsoluteDocumentUrl,
   classifyDocumentHint,
   extractFileType,
+  isVisibleDocumentLinkCandidate,
 } from "../index";
 
 describe("classifyDocumentHint", () => {
@@ -52,5 +54,28 @@ describe("extractFileType", () => {
 
   it("url con .zip → zip", () => {
     expect(extractFileType("https://example.com/bases.zip")).toBe("zip");
+  });
+
+  it("url con .rar → rar", () => {
+    expect(extractFileType("https://example.com/anexos.rar")).toBe("rar");
+  });
+});
+
+describe("visible document links", () => {
+  it("acepta links por texto visible, href, aria-label o title", () => {
+    expect(isVisibleDocumentLinkCandidate({ href: "/descarga/1", text: "Anexo técnico" })).toBe(true);
+    expect(isVisibleDocumentLinkCandidate({ href: "/files/convocatoria.pdf", text: "Descargar" })).toBe(true);
+    expect(isVisibleDocumentLinkCandidate({ href: "/download/1", ariaLabel: "Documento de bases" })).toBe(true);
+    expect(isVisibleDocumentLinkCandidate({ href: "/download/2", title: "Acta de junta de aclaraciones" })).toBe(true);
+  });
+
+  it("rechaza navegación no documental", () => {
+    expect(isVisibleDocumentLinkCandidate({ href: "/perfil", text: "Ver dependencia" })).toBe(false);
+  });
+
+  it("convierte links relativos a URL absoluta", () => {
+    expect(buildAbsoluteDocumentUrl("/anexos/base.pdf", "https://comprasmx.example/ficha/123")).toBe(
+      "https://comprasmx.example/anexos/base.pdf",
+    );
   });
 });

@@ -1,21 +1,16 @@
 import axios from "axios";
-import { createModuleLogger } from "../core/logger";
 import { nowISO } from "../core/time";
 import {
   collectComprasMxDetail,
   type DocumentLink,
 } from "../collectors/comprasmx-detail";
-import { downloadDocument } from "./document-downloader";
-import { uploadPublicDocument } from "../storage/storage.service";
 import { persistTenderDocuments } from "../storage/tender-documents.repo";
 import type { PublicTenderDocument } from "../types/procurement";
-
-const log = createModuleLogger("public-tender-documents");
 
 const VALIDATION_TIMEOUT_MS = 12_000;
 const VALIDATION_SAMPLE_BYTES = 4096;
 const MAX_DOCUMENTS_PER_ALERT = 12;
-const DOWNLOADABLE_EXTENSIONS = new Set(["pdf", "docx", "xlsx", "xls", "zip"]);
+const DOWNLOADABLE_EXTENSIONS = new Set(["pdf", "doc", "docx", "xls", "xlsx", "zip", "rar"]);
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -182,11 +177,7 @@ function dedupeDocumentLinks(docs: DocumentLink[]): DocumentLink[] {
   const result: DocumentLink[] = [];
 
   for (const doc of docs) {
-    const key = [
-      normalizeUrl(doc.fileUrl),
-      doc.fileName?.toLowerCase() ?? "",
-      doc.documentTitle.toLowerCase(),
-    ].join("|");
+    const key = normalizeUrl(doc.fileUrl).toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(doc);
@@ -221,39 +212,6 @@ function toPublicTenderDocument(input: {
   };
 }
 
-async function rehostDocument(
-  doc: DocumentLink,
-  storageFolder: string,
-): Promise<{ publicUrl: string; sha256Hash: string | null; fileSize: number | null } | null> {
-  const download = await downloadDocument(doc);
-  if (
-    (download.downloadStatus !== "ok" && download.downloadStatus !== "skipped_duplicate") ||
-    !download.localPath
-  ) {
-    log.warn(
-      {
-        fileUrl: doc.fileUrl,
-        status: download.downloadStatus,
-        error: download.errorMessage,
-      },
-      "Documento descartado: no se pudo descargar para rehosting",
-    );
-    return null;
-  }
-
-  const uploaded = await uploadPublicDocument(
-    storageFolder,
-    download.fileName,
-    download.localPath,
-  );
-
-  return {
-    publicUrl: uploaded.publicUrl,
-    sha256Hash: download.sha256Hash ?? uploaded.fileHash,
-    fileSize: download.sizeBytes ?? uploaded.fileSizeBytes,
-  };
-}
-
 export async function preparePublicTenderDocuments(
   input: PreparePublicTenderDocumentsInput,
 ): Promise<PublicTenderDocument[]> {
@@ -269,70 +227,23 @@ export async function preparePublicTenderDocuments(
   }
 
   const docs = dedupeDocumentLinks(detail.documents)
-    .filter(isProbablyDownloadable)
+    .filter((doc) => isProbablyDownloadable(doc) || doc.documentTitle.trim().length > 0)
     .slice(0, MAX_DOCUMENTS_PER_ALERT);
   const prepared: PublicTenderDocument[] = [];
   const auditRecords = [];
-  const storageFolder = input.expedienteId ?? input.procedureNumber ?? input.tenderId;
 
   for (const [index, doc] of docs.entries()) {
-    const originalValidation = await validatePublicDocumentUrl(doc.fileUrl);
-    if (originalValidation.ok) {
-      const publicDoc = toPublicTenderDocument({
-        doc,
-        index,
-        publicUrl: doc.fileUrl,
-        validation: originalValidation,
-        sha256Hash: null,
-      });
-      prepared.push(publicDoc);
-      auditRecords.push({
-        tenderId: input.tenderId,
-        expediente: input.expedienteId,
-        licitacionId: input.procedureNumber,
-        document: publicDoc,
-        discardReason: null,
-      });
-      continue;
-    }
-
-    let rehosted: Awaited<ReturnType<typeof rehostDocument>> = null;
-    try {
-      rehosted = await rehostDocument(doc, storageFolder);
-    } catch (err) {
-      log.warn({ err, fileUrl: doc.fileUrl }, "Rehosting de documento falló");
-    }
-
-    if (!rehosted) {
-      log.warn(
-        {
-          fileUrl: doc.fileUrl,
-          reason: originalValidation.reason,
-        },
-        "Documento descartado: URL original no pública y no se pudo rehostear",
-      );
-      continue;
-    }
-
-    const publicValidation = await validatePublicDocumentUrl(rehosted.publicUrl);
-    if (!publicValidation.ok) {
-      log.warn(
-        {
-          publicUrl: rehosted.publicUrl,
-          reason: publicValidation.reason,
-        },
-        "Documento rehosteado descartado: URL pública no validó",
-      );
-      continue;
-    }
-
     const publicDoc = toPublicTenderDocument({
       doc,
       index,
-      publicUrl: rehosted.publicUrl,
-      validation: publicValidation,
-      sha256Hash: rehosted.sha256Hash,
-      fileSizeOverride: rehosted.fileSize,
+      publicUrl: doc.fileUrl,
+      validation: {
+        ok: true,
+        mimeType: null,
+        fileSize: null,
+        reason: null,
+      },
+      sha256Hash: null,
     });
     prepared.push(publicDoc);
     auditRecords.push({
@@ -340,7 +251,7 @@ export async function preparePublicTenderDocuments(
       expediente: input.expedienteId,
       licitacionId: input.procedureNumber,
       document: publicDoc,
-      discardReason: originalValidation.reason,
+      discardReason: null,
     });
   }
 
