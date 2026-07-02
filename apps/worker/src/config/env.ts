@@ -71,6 +71,41 @@ const envSchema = z.object({
     .string()
     .default("true")
     .transform((v) => v === "true"),
+  TELEGRAM_POLLING_FAILURE_WINDOW_MS: z
+    .string()
+    .default("600000")
+    .transform(Number)
+    .pipe(z.number().int().min(1000)),
+  TELEGRAM_POLLING_ALERT_MIN_FAILURES: z
+    .string()
+    .default("3")
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  TELEGRAM_POLLING_ALERT_THROTTLE_MS: z
+    .string()
+    .default("1800000")
+    .transform(Number)
+    .pipe(z.number().int().min(1000)),
+  TELEGRAM_POLLING_RETRY_INITIAL_DELAY_MS: z
+    .string()
+    .default("1500")
+    .transform(Number)
+    .pipe(z.number().int().min(250)),
+  TELEGRAM_POLLING_RETRY_BACKOFF_MULTIPLIER: z
+    .string()
+    .default("2")
+    .transform(Number)
+    .pipe(z.number().min(1)),
+  TELEGRAM_POLLING_RETRY_MAX_DELAY_MS: z
+    .string()
+    .default("60000")
+    .transform(Number)
+    .pipe(z.number().int().min(250)),
+  TELEGRAM_POLLING_RETRY_JITTER_RATIO: z
+    .string()
+    .default("0.25")
+    .transform(Number)
+    .pipe(z.number().min(0).max(1)),
 
   // Playwright & Escudo
   PLAYWRIGHT_HEADLESS: z

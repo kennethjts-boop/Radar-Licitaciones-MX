@@ -11,7 +11,7 @@ import TelegramBot from "node-telegram-bot-api";
 import { getConfig } from "../config/env";
 import { createModuleLogger } from "../core/logger";
 import { healthTracker } from "../core/healthcheck";
-import { formatDuration, formatMexicoDate, nowISO } from "../core/time";
+import { formatDuration, formatMexicoDate } from "../core/time";
 import { withTimeout } from "../core/errors";
 import { formatCurrency } from "../core/text";
 import { getState, STATE_KEYS } from "../core/system-state";
@@ -25,6 +25,7 @@ import {
 } from "../modules/external-opportunity-discovery/config";
 import {
   classifyTelegramPollingError,
+  getTelegramPollingRetryDelayMs,
   isTelegramCommandsPollingEnabled,
   recordTelegramCommandsStartup,
   recordTelegramPollingFailure,
@@ -36,6 +37,9 @@ const MANUAL_SCAN_TIMEOUT_MS = 30 * 60 * 1000;
 
 let _bot: TelegramBot | null = null;
 let manualScanInFlight: Promise<void> | null = null;
+let pollingRetryTimer: NodeJS.Timeout | null = null;
+let pollingRetryInProgress = false;
+let pollingRetryAttempt = 0;
 
 export async function initCommandBot(): Promise<TelegramBot> {
   if (_bot) return _bot;
@@ -70,6 +74,7 @@ export async function initCommandBot(): Promise<TelegramBot> {
   // Registrar handlers de error antes de iniciar polling
   _bot.on("polling_error", (err: Error) => {
     const diagnosis = classifyTelegramPollingError(err);
+    schedulePollingRetry(_bot!, diagnosis);
     void recordTelegramPollingFailure(
       err,
       sendOperationalMessage,
@@ -92,6 +97,7 @@ export async function initCommandBot(): Promise<TelegramBot> {
     });
   });
   _bot.on("message", () => {
+    pollingRetryAttempt = 0;
     void recordTelegramPollingSuccess(sendOperationalMessage).catch((err) => {
       log.warn(
         { err },
@@ -116,8 +122,14 @@ export function getCommandBot(): TelegramBot | null {
 }
 
 export function resetCommandBotForTests(): void {
+  if (pollingRetryTimer) {
+    clearTimeout(pollingRetryTimer);
+  }
   _bot = null;
   manualScanInFlight = null;
+  pollingRetryTimer = null;
+  pollingRetryInProgress = false;
+  pollingRetryAttempt = 0;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -127,6 +139,44 @@ function statusIcon(status: "ok" | "degraded" | "down" | "unknown"): string {
   if (status === "degraded") return "⚠️";
   if (status === "down") return "❌";
   return "⬛";
+}
+
+function schedulePollingRetry(bot: TelegramBot, diagnosis: ReturnType<typeof classifyTelegramPollingError>): void {
+  if (diagnosis.kind !== "transient_network") return;
+  if (pollingRetryTimer || pollingRetryInProgress) return;
+
+  pollingRetryAttempt += 1;
+  pollingRetryInProgress = true;
+  const delayMs = getTelegramPollingRetryDelayMs(pollingRetryAttempt);
+  log.warn(
+    { delayMs, attempt: pollingRetryAttempt, diagnosis },
+    "Telegram commands polling pausado; reinicio con backoff",
+  );
+
+  void bot.stopPolling({ reason: "transient_network_backoff" })
+    .catch((err) => {
+      log.warn({ err }, "No se pudo pausar polling Telegram commands antes del backoff");
+    })
+    .finally(() => {
+      pollingRetryTimer = setTimeout(() => {
+        pollingRetryTimer = null;
+        bot.startPolling({ restart: true })
+          .then(() => {
+            pollingRetryInProgress = false;
+            log.info(
+              { attempt: pollingRetryAttempt },
+              "Telegram commands polling reiniciado tras backoff",
+            );
+          })
+          .catch((err) => {
+            pollingRetryInProgress = false;
+            log.warn(
+              { err, attempt: pollingRetryAttempt },
+              "No se pudo reiniciar Telegram commands polling tras backoff",
+            );
+          });
+      }, delayMs);
+    });
 }
 
 function serviceLabel(status: "ok" | "degraded" | "down" | "unknown"): string {
@@ -159,6 +209,62 @@ function formatBool(value: unknown): string {
 function numberField(state: Record<string, unknown> | null | undefined, key: string): number {
   const value = state?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function stringField(
+  state: Record<string, unknown> | null | undefined,
+  key: string,
+): string | null {
+  const value = state?.[key];
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+function pollingStatusLabel(
+  enabled: boolean,
+  state: Record<string, unknown> | null | undefined,
+): "OK" | "DEGRADADO" | "FAIL" | "DESHABILITADO" | "INICIANDO" {
+  if (!enabled) return "DESHABILITADO";
+  if (state?.telegram_polling_ok === true) return "OK";
+
+  const failures = numberField(state, "telegram_commands_consecutive_failures");
+  if (failures === 0) return "INICIANDO";
+
+  const reason = stringField(state, "last_telegram_commands_error_reason");
+  if (reason === "telegram_auth" || reason === "telegram_conflict") {
+    return "FAIL";
+  }
+  return "DEGRADADO";
+}
+
+function sendMessageStatusLabel(
+  state: Record<string, unknown> | null | undefined,
+  globalTelegramStatus: "ok" | "degraded" | "down" | "unknown",
+): "OK" | "FAIL" {
+  if (state?.telegram_send_message_ok === false) return "FAIL";
+  if (globalTelegramStatus === "down") return "FAIL";
+  return "OK";
+}
+
+function formatRecentPollingFailures(
+  state: Record<string, unknown> | null | undefined,
+): string[] {
+  const failures = state?.recent_telegram_polling_failures;
+  if (!Array.isArray(failures) || failures.length === 0) {
+    return ["  Últimos fallos polling: <b>ninguno</b>"];
+  }
+
+  return [
+    "  Últimos fallos polling:",
+    ...failures.slice(0, 3).map((item) => {
+      const failure = item as Record<string, unknown>;
+      const at = formatTelemetryDate(failure.at);
+      const kind = String(failure.kind ?? "unknown");
+      const statusCode = failure.statusCode ? ` status=${failure.statusCode}` : "";
+      const code = failure.code ? ` code=${failure.code}` : "";
+      const reason = String(failure.technicalReason ?? "").slice(0, 110);
+      return `  - <b>${escapeHtml(kind)}</b> | ${escapeHtml(at)} |<code>${escapeHtml(statusCode + code)}</code> ${escapeHtml(reason)}`;
+    }),
+  ];
 }
 
 function externalNoLeadCause(external: Record<string, unknown> | null | undefined): string {
@@ -422,21 +528,20 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
             `   Último: <b>${escapeHtml(externalView.status)}</b> | Fuentes: <b>${externalView.sourcesReviewed}</b> | Raw: <b>${externalView.rawResultsReceived}</b> | Detectados: <b>${externalView.detected}</b> | Guardados: <b>${externalView.saved}</b> | Alertas: <b>${externalView.alerted}</b> | Errores: <b>${externalView.errors.length}</b>`,
           ];
       const pollingEnabled = isTelegramCommandsPollingEnabled(config);
-      const pollingStatus = !pollingEnabled
-        ? "deshabilitado"
-        : telegramCommandsState?.telegram_polling_ok === false &&
-            numberField(
-              telegramCommandsState,
-              "telegram_commands_consecutive_failures",
-            ) > 0
-          ? "DEGRADADO"
-          : telegramCommandsState?.telegram_polling_ok === true
-            ? "OK"
-            : "iniciando";
-      const sendStatus =
-        telegramCommandsState?.telegram_send_message_ok === false
-          ? "DEGRADADO"
-          : serviceLabel(status.services.telegram);
+      const pollingStatus = pollingStatusLabel(
+        pollingEnabled,
+        telegramCommandsState,
+      );
+      const sendStatus = sendMessageStatusLabel(
+        telegramCommandsState,
+        status.services.telegram,
+      );
+      const pollingLastRecovery = formatTelemetryDate(
+        telegramCommandsState?.last_telegram_commands_recovery_at,
+      );
+      const pollingLastFailure = formatTelemetryDate(
+        telegramCommandsState?.last_telegram_commands_error_at,
+      );
 
       const lines = [
         `🔍 <b>ESTADO — Radar Licitaciones MX</b>`,
@@ -444,8 +549,12 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `🖥 Worker: <b>${workerIcon} ${serviceLabel(status.overall)}</b>`,
         `${dbIcon} DB: <b>${serviceLabel(status.services.database)}</b> (${status.dbConnected ? "Conectada" : "Desconectada"})`,
         `🧱 Schema: <b>${status.dbSchemaValid ? "Válido" : "Inválido"}</b>`,
-        `${tgIcon} Telegram alertas (sendMessage): <b>${sendStatus}</b>`,
-        `🤖 Telegram commands (polling): <b>${pollingStatus}</b> | Fallos: <b>${numberField(telegramCommandsState, "telegram_commands_consecutive_failures")}</b> | Razón: <b>${escapeHtml(telegramCommandsState?.last_telegram_commands_error_reason ?? "N/D")}</b>`,
+        `${tgIcon} Telegram alertas sendMessage: <b>${sendStatus}</b>`,
+        `🤖 Telegram commands polling: <b>${pollingStatus}</b> | Fallos consecutivos: <b>${numberField(telegramCommandsState, "telegram_commands_consecutive_failures")}</b>`,
+        `   Último fallo: <b>${pollingLastFailure}</b> | Razón: <b>${escapeHtml(telegramCommandsState?.last_telegram_commands_error_reason ?? "N/D")}</b>`,
+        `   Último recovery: <b>${pollingLastRecovery}</b>`,
+        ...formatRecentPollingFailures(telegramCommandsState),
+        `   No afecta ComprasMX ni matches`,
         ...degradationLine,
         ...stalledLine,
         ...lastCycleErrorLine,

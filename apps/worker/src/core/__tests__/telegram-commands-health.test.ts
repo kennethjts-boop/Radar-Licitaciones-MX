@@ -21,6 +21,7 @@ jest.mock("../system-state", () => ({
 
 import {
   classifyTelegramPollingError,
+  getTelegramPollingRetryDelayMs,
   recordTelegramPollingFailure,
   recordTelegramPollingSuccess,
   resetTelegramCommandsHealthForTests,
@@ -61,12 +62,57 @@ describe("Telegram commands polling health", () => {
       ),
     ).toMatchObject({
       origin: "OUR_INFRA",
-      category: "DUPLICATE_POLLING_INSTANCE",
+      kind: "telegram_conflict",
       severity: "DEGRADED",
     });
   });
 
-  it("polling_error aislado no alerta ni persiste incidente", async () => {
+  it("clasifica errores de red transitorios", () => {
+    for (const error of [
+      pollingError("socket hang up"),
+      pollingError("fetch failed"),
+      pollingError("request timeout"),
+      pollingError("network timeout", undefined, "ETIMEDOUT"),
+      pollingError("connection reset", undefined, "ECONNRESET"),
+      pollingError("dns retry", undefined, "EAI_AGAIN"),
+    ]) {
+      expect(classifyTelegramPollingError(error)).toMatchObject({
+        kind: "transient_network",
+        severity: "WARN",
+      });
+    }
+  });
+
+  it("clasifica auth y unknown", () => {
+    expect(classifyTelegramPollingError(
+      pollingError("Forbidden: bot was blocked by the user", 403, "ETELEGRAM"),
+    )).toMatchObject({
+      kind: "telegram_auth",
+      severity: "DEGRADED",
+    });
+
+    expect(classifyTelegramPollingError(new Error("unexpected parser crash"))).toMatchObject({
+      kind: "unknown",
+      severity: "WARN",
+    });
+  });
+
+  it("calcula backoff con jitter acotado", () => {
+    process.env.TELEGRAM_POLLING_RETRY_INITIAL_DELAY_MS = "1000";
+    process.env.TELEGRAM_POLLING_RETRY_BACKOFF_MULTIPLIER = "2";
+    process.env.TELEGRAM_POLLING_RETRY_MAX_DELAY_MS = "10000";
+    process.env.TELEGRAM_POLLING_RETRY_JITTER_RATIO = "0.25";
+
+    expect(getTelegramPollingRetryDelayMs(1, () => 0.5)).toBe(1000);
+    expect(getTelegramPollingRetryDelayMs(3, () => 1)).toBe(5000);
+
+    delete process.env.TELEGRAM_POLLING_RETRY_INITIAL_DELAY_MS;
+    delete process.env.TELEGRAM_POLLING_RETRY_BACKOFF_MULTIPLIER;
+    delete process.env.TELEGRAM_POLLING_RETRY_MAX_DELAY_MS;
+    delete process.env.TELEGRAM_POLLING_RETRY_JITTER_RATIO;
+  });
+
+  it("polling_error aislado registra telemetría pero no alerta ni contamina health global", async () => {
     const send = jest.fn();
     const result = await recordTelegramPollingFailure(
       pollingError("socket timeout", undefined, "ETIMEDOUT"),
@@ -77,7 +123,11 @@ describe("Telegram commands polling health", () => {
     expect(result.alerted).toBe(false);
     expect(result.failures).toBe(1);
     expect(send).not.toHaveBeenCalled();
-    expect(mockSetState).not.toHaveBeenCalled();
+    expect(mockState).toMatchObject({
+      telegram_commands_consecutive_failures: 1,
+      telegram_polling_ok: false,
+      last_telegram_commands_error_reason: "transient_network",
+    });
     expect(mockSetTelegramHealth).not.toHaveBeenCalled();
   });
 
@@ -112,12 +162,13 @@ describe("Telegram commands polling health", () => {
       "[DEGRADADO] Telegram commands",
     );
     expect(send.mock.calls[0][0]).toContain(
-      "No afecta extracción de ComprasMX",
+      "No afecta ComprasMX ni matches",
     );
     expect(mockState).toMatchObject({
       telegram_commands_consecutive_failures: 4,
       telegram_polling_ok: false,
       telegram_send_message_ok: true,
+      last_telegram_commands_error_reason: "transient_network",
     });
     expect(mockSetTelegramHealth).not.toHaveBeenCalledWith("down");
   });

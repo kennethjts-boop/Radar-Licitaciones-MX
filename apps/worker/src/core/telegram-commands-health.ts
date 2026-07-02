@@ -4,18 +4,16 @@ import { createModuleLogger } from "./logger";
 import { getState, setState, STATE_KEYS } from "./system-state";
 
 const log = createModuleLogger("telegram-commands-health");
-const FAILURE_WINDOW_MS = 10 * 60 * 1000;
-const ALERT_THROTTLE_MS = 30 * 60 * 1000;
 
-export type TelegramPollingFailureCategory =
-  | "TRANSIENT_TELEGRAM_POLLING_ERROR"
-  | "DUPLICATE_POLLING_INSTANCE"
-  | "TELEGRAM_NETWORK_ERROR"
-  | "TELEGRAM_COMMANDS_MODULE_ERROR";
+export type TelegramPollingErrorKind =
+  | "transient_network"
+  | "telegram_conflict"
+  | "telegram_auth"
+  | "unknown";
 
 export interface TelegramPollingDiagnosis {
   origin: "TELEGRAM" | "OUR_INFRA" | "UNKNOWN";
-  category: TelegramPollingFailureCategory;
+  kind: TelegramPollingErrorKind;
   severity: "WARN" | "DEGRADED";
   userDiagnosis: string;
   recommendedAction: string;
@@ -24,18 +22,27 @@ export interface TelegramPollingDiagnosis {
   technicalReason: string;
 }
 
+export interface TelegramPollingFailureEvent {
+  at: string;
+  kind: TelegramPollingErrorKind;
+  technicalReason: string;
+  statusCode?: number;
+  code?: string;
+}
+
 export interface TelegramCommandsState {
   telegram_commands_consecutive_failures: number;
   last_telegram_commands_error_at: string | null;
   last_telegram_commands_error_reason: string | null;
   last_telegram_commands_success_at: string | null;
   last_telegram_commands_recovery_at: string | null;
+  recent_telegram_polling_failures: TelegramPollingFailureEvent[];
   telegram_send_message_ok: boolean;
   telegram_polling_ok: boolean;
   telegram_send_consecutive_failures: number;
   last_telegram_send_error_at: string | null;
   last_alert_at: string | null;
-  last_alert_category: TelegramPollingFailureCategory | null;
+  last_alert_kind: TelegramPollingErrorKind | null;
   incident_alerted_at: string | null;
   service_name: string | null;
   instance_id: string | null;
@@ -52,12 +59,13 @@ const EMPTY_STATE: TelegramCommandsState = {
   last_telegram_commands_error_reason: null,
   last_telegram_commands_success_at: null,
   last_telegram_commands_recovery_at: null,
+  recent_telegram_polling_failures: [],
   telegram_send_message_ok: true,
   telegram_polling_ok: false,
   telegram_send_consecutive_failures: 0,
   last_telegram_send_error_at: null,
   last_alert_at: null,
-  last_alert_category: null,
+  last_alert_kind: null,
   incident_alerted_at: null,
   service_name: null,
   instance_id: null,
@@ -70,8 +78,50 @@ let pendingPollingFailures = 0;
 let pollingFailureWindowStartedAt = 0;
 let sendFailureCount = 0;
 let sendHealthRecorded = false;
-const recentAlerts = new Map<TelegramPollingFailureCategory, number>();
+const recentAlerts = new Map<TelegramPollingErrorKind, number>();
 let recoveryInFlight = false;
+
+function envNumber(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function getTelegramPollingTuning(): {
+  failureWindowMs: number;
+  alertMinFailures: number;
+  alertThrottleMs: number;
+  retryInitialDelayMs: number;
+  retryBackoffMultiplier: number;
+  retryMaxDelayMs: number;
+  retryJitterRatio: number;
+} {
+  return {
+    failureWindowMs: envNumber("TELEGRAM_POLLING_FAILURE_WINDOW_MS", 10 * 60 * 1000),
+    alertMinFailures: envNumber("TELEGRAM_POLLING_ALERT_MIN_FAILURES", 3),
+    alertThrottleMs: envNumber("TELEGRAM_POLLING_ALERT_THROTTLE_MS", 30 * 60 * 1000),
+    retryInitialDelayMs: envNumber("TELEGRAM_POLLING_RETRY_INITIAL_DELAY_MS", 1_500),
+    retryBackoffMultiplier: envNumber("TELEGRAM_POLLING_RETRY_BACKOFF_MULTIPLIER", 2),
+    retryMaxDelayMs: envNumber("TELEGRAM_POLLING_RETRY_MAX_DELAY_MS", 60_000),
+    retryJitterRatio: Math.min(envNumber("TELEGRAM_POLLING_RETRY_JITTER_RATIO", 0.25), 1),
+  };
+}
+
+export function getTelegramPollingRetryDelayMs(
+  attempt: number,
+  random = Math.random,
+): number {
+  const tuning = getTelegramPollingTuning();
+  const baseDelay = Math.min(
+    Math.floor(
+      tuning.retryInitialDelayMs *
+        Math.pow(tuning.retryBackoffMultiplier, Math.max(0, attempt - 1)),
+    ),
+    tuning.retryMaxDelayMs,
+  );
+  const jitterRange = baseDelay * tuning.retryJitterRatio;
+  const jitter = Math.floor((random() * 2 - 1) * jitterRange);
+  return Math.max(250, baseDelay + jitter);
+}
 
 function escapeHtml(value: string): string {
   return value
@@ -92,6 +142,8 @@ function getTelegramErrorDetails(error: unknown): {
 
   const errorLike = error as {
     code?: unknown;
+    cause?: unknown;
+    errors?: unknown[];
     response?: {
       statusCode?: unknown;
       body?: {
@@ -109,12 +161,23 @@ function getTelegramErrorDetails(error: unknown): {
         ? body.error_code
         : undefined;
 
+  const nestedDetails = [
+    ...(Array.isArray(errorLike.errors) ? errorLike.errors : []),
+    errorLike.cause,
+  ]
+    .filter(Boolean)
+    .map((nested) => getTelegramErrorDetails(nested));
+  const nestedMessage = nestedDetails.map((nested) => nested.message).join("; ");
+  const nestedCode = nestedDetails.find((nested) => nested.code)?.code;
+  const nestedStatusCode = nestedDetails.find((nested) => nested.statusCode)?.statusCode;
+
   return {
-    statusCode,
-    code: typeof errorLike.code === "string" ? errorLike.code : undefined,
-    message: typeof body?.description === "string"
-      ? body.description
-      : fallback,
+    statusCode: statusCode ?? nestedStatusCode,
+    code: typeof errorLike.code === "string" ? errorLike.code : nestedCode,
+    message: [
+      typeof body?.description === "string" ? body.description : fallback,
+      nestedMessage,
+    ].filter(Boolean).join("; "),
   };
 }
 
@@ -138,7 +201,7 @@ export function classifyTelegramPollingError(
   ) {
     return {
       origin: "OUR_INFRA",
-      category: "DUPLICATE_POLLING_INSTANCE",
+      kind: "telegram_conflict",
       severity: "DEGRADED",
       userDiagnosis: "Diagnóstico probable: hay dos instancias del bot intentando hacer polling.",
       recommendedAction: "Revisar réplicas o servicios duplicados en Railway y mantener una sola instancia con polling activo.",
@@ -148,20 +211,31 @@ export function classifyTelegramPollingError(
     };
   }
 
+  if (details.statusCode === 401 || details.statusCode === 403) {
+    return {
+      origin: "TELEGRAM",
+      kind: "telegram_auth",
+      severity: "DEGRADED",
+      userDiagnosis: "Diagnóstico probable: Telegram rechazó el token o permisos del bot.",
+      recommendedAction: "Revisar TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID y permisos del bot antes de reiniciar.",
+      statusCode: details.statusCode,
+      code: details.code,
+      technicalReason,
+    };
+  }
+
   const networkCodes = new Set([
     "ETIMEDOUT",
     "ECONNRESET",
-    "ECONNREFUSED",
-    "ENOTFOUND",
     "EAI_AGAIN",
   ]);
   if (
     (details.code && networkCodes.has(details.code)) ||
-    /timeout|timed out|network|socket|econn|enotfound|dns/.test(message)
+    /timeout|timed out|network|socket hang up|fetch failed|econnreset|etimedout|eai_again/.test(message)
   ) {
     return {
       origin: "TELEGRAM",
-      category: "TELEGRAM_NETWORK_ERROR",
+      kind: "transient_network",
       severity: "WARN",
       userDiagnosis: "Diagnóstico probable: fallo temporal de red durante Telegram polling.",
       recommendedAction: "Mantener el polling activo y reintentar; revisar red solo si persiste.",
@@ -179,7 +253,7 @@ export function classifyTelegramPollingError(
   ) {
     return {
       origin: "TELEGRAM",
-      category: "TRANSIENT_TELEGRAM_POLLING_ERROR",
+      kind: "transient_network",
       severity: "WARN",
       userDiagnosis: "Diagnóstico probable: fallo temporal del servicio de Telegram polling.",
       recommendedAction: "Continuar reintentando la escucha de comandos.",
@@ -191,7 +265,7 @@ export function classifyTelegramPollingError(
 
   return {
     origin: "UNKNOWN",
-    category: "TELEGRAM_COMMANDS_MODULE_ERROR",
+    kind: "unknown",
     severity: "WARN",
     userDiagnosis: "Diagnóstico probable: error aislado del módulo Telegram commands.",
     recommendedAction: "Revisar el error del módulo si se repite dentro de 10 minutos.",
@@ -218,15 +292,16 @@ function alertMessage(
   diagnosis: TelegramPollingDiagnosis,
   failures: number,
 ): string {
+  const windowMinutes = Math.round(getTelegramPollingTuning().failureWindowMs / 60_000);
   return [
     "🟡 <b>[DEGRADADO] Telegram commands</b>",
     "",
     "📌 El módulo de comandos tuvo errores de polling.",
     `🧭 ${escapeHtml(diagnosis.userDiagnosis)}`,
-    "🛠 ¿Afecta el radar?: No afecta extracción de ComprasMX ni evaluación de matches.",
+    "🛠 ¿Afecta el radar?: No afecta ComprasMX ni matches.",
     "📨 Alertas salientes: siguen funcionando si sendMessage está OK.",
     "🔁 Acción: el sistema seguirá intentando escuchar comandos.",
-    `📊 Fallos en ventana de 10 min: ${failures}`,
+    `📊 Fallos en ventana de ${windowMinutes} min: ${failures}`,
     `📌 Acción sugerida: ${escapeHtml(diagnosis.recommendedAction)}`,
   ].join("\n");
 }
@@ -285,11 +360,12 @@ export async function recordTelegramPollingFailure(
   now = new Date(),
 ): Promise<{ diagnosis: TelegramPollingDiagnosis; alerted: boolean; failures: number }> {
   const diagnosis = classifyTelegramPollingError(error);
+  const tuning = getTelegramPollingTuning();
   const nowMs = now.getTime();
 
   if (
     pollingFailureWindowStartedAt === 0 ||
-    nowMs - pollingFailureWindowStartedAt > FAILURE_WINDOW_MS
+    nowMs - pollingFailureWindowStartedAt > tuning.failureWindowMs
   ) {
     pollingFailureWindowStartedAt = nowMs;
     pendingPollingFailures = 0;
@@ -297,8 +373,9 @@ export async function recordTelegramPollingFailure(
   pendingPollingFailures++;
 
   const persistent =
-    diagnosis.category === "DUPLICATE_POLLING_INSTANCE" ||
-    pendingPollingFailures >= 3;
+    diagnosis.kind === "telegram_conflict" ||
+    diagnosis.kind === "telegram_auth" ||
+    pendingPollingFailures >= tuning.alertMinFailures;
 
   log.warn(
     {
@@ -311,7 +388,27 @@ export async function recordTelegramPollingFailure(
       : "Telegram polling_error aislado",
   );
 
+  const failureEvent: TelegramPollingFailureEvent = {
+    at: now.toISOString(),
+    kind: diagnosis.kind,
+    technicalReason: diagnosis.technicalReason,
+    statusCode: diagnosis.statusCode,
+    code: diagnosis.code,
+  };
+
   if (!persistent) {
+    const previous = await readState();
+    await writeState({
+      ...previous,
+      telegram_commands_consecutive_failures: pendingPollingFailures,
+      last_telegram_commands_error_at: now.toISOString(),
+      last_telegram_commands_error_reason: diagnosis.kind,
+      recent_telegram_polling_failures: [
+        failureEvent,
+        ...previous.recent_telegram_polling_failures,
+      ].slice(0, 5),
+      telegram_polling_ok: false,
+    });
     return {
       diagnosis,
       alerted: false,
@@ -324,14 +421,14 @@ export async function recordTelegramPollingFailure(
     ? Date.parse(previous.last_alert_at)
     : 0;
   const throttled =
-    nowMs - (recentAlerts.get(diagnosis.category) ?? 0) < ALERT_THROTTLE_MS ||
-    previous.last_alert_category === diagnosis.category &&
-    nowMs - lastAlertAt < ALERT_THROTTLE_MS;
+    nowMs - (recentAlerts.get(diagnosis.kind) ?? 0) < tuning.alertThrottleMs ||
+    previous.last_alert_kind === diagnosis.kind &&
+    nowMs - lastAlertAt < tuning.alertThrottleMs;
 
   let alerted = false;
   let sendOk = previous.telegram_send_message_ok;
   if (!throttled) {
-    recentAlerts.set(diagnosis.category, nowMs);
+    recentAlerts.set(diagnosis.kind, nowMs);
     try {
       await sendOperationalMessage(
         alertMessage(diagnosis, pendingPollingFailures),
@@ -353,13 +450,17 @@ export async function recordTelegramPollingFailure(
     ...previous,
     telegram_commands_consecutive_failures: pendingPollingFailures,
     last_telegram_commands_error_at: now.toISOString(),
-    last_telegram_commands_error_reason: diagnosis.category,
+    last_telegram_commands_error_reason: diagnosis.kind,
+    recent_telegram_polling_failures: [
+      failureEvent,
+      ...previous.recent_telegram_polling_failures,
+    ].slice(0, 5),
     telegram_send_message_ok: sendOk,
     telegram_polling_ok: false,
     last_alert_at: alerted ? now.toISOString() : previous.last_alert_at,
-    last_alert_category: alerted
-      ? diagnosis.category
-      : previous.last_alert_category,
+    last_alert_kind: alerted
+      ? diagnosis.kind
+      : previous.last_alert_kind,
     incident_alerted_at: alerted
       ? now.toISOString()
       : previous.incident_alerted_at,

@@ -3,6 +3,7 @@ import TelegramBot from "node-telegram-bot-api";
 import { getConfig } from "../../config/env";
 
 let mockExternalState: Record<string, unknown> | null = null;
+let mockTelegramCommandsState: Record<string, unknown> | null = null;
 
 // Mock Supabase
 const mockSelect = jest.fn();
@@ -43,7 +44,7 @@ jest.mock("../../core/system-state", () => ({
   getState: jest.fn(async (key: string) => {
     if (key === "last_external_leads_run") return mockExternalState;
     if (key === "telegram_commands_telemetry") {
-      return {
+      return mockTelegramCommandsState ?? {
         telegram_polling_ok: true,
         telegram_send_message_ok: true,
         telegram_commands_consecutive_failures: 0,
@@ -116,6 +117,7 @@ describe("Telegram Commands - /noticias_comerciales", () => {
     mockConfig.ENABLE_EXTERNAL_LEADS_OSINT = true;
     mockConfig.EXTERNAL_LEADS_DISCOVERY_MODE = true;
     mockExternalState = null;
+    mockTelegramCommandsState = null;
   });
 
   it("/estado muestra External OSINT deshabilitado y contadores actuales en cero", async () => {
@@ -147,6 +149,46 @@ describe("Telegram Commands - /noticias_comerciales", () => {
     expect(message).toContain("Fuentes: <b>0</b> | Raw: <b>0</b>");
     expect(message).not.toContain("certificate error");
     expect(message).not.toContain("Discovery: <b>true</b>");
+  });
+
+  it("/estado separa sendMessage de polling y muestra fallos/recovery", async () => {
+    mockTelegramCommandsState = {
+      telegram_polling_ok: false,
+      telegram_send_message_ok: true,
+      telegram_commands_consecutive_failures: 3,
+      last_telegram_commands_error_at: "2026-06-10T00:02:00.000Z",
+      last_telegram_commands_error_reason: "transient_network",
+      last_telegram_commands_recovery_at: "2026-06-10T00:10:00.000Z",
+      recent_telegram_polling_failures: [
+        {
+          at: "2026-06-10T00:02:00.000Z",
+          kind: "transient_network",
+          code: "ETIMEDOUT",
+          technicalReason: "code=ETIMEDOUT; error=socket timeout",
+        },
+      ],
+    };
+
+    const callbacks = (botInstance as any)._textRegexpCallbacks || [];
+    const handler = callbacks.find(
+      (callback: any) =>
+        callback.regexp?.toString().includes("prueba|estado"),
+    )?.callback;
+    expect(handler).toBeDefined();
+
+    await handler({
+      chat: { id: 123456 },
+      text: "/estado",
+    });
+
+    const message = mockSendMessage.mock.calls.at(-1)?.[1] as string;
+    expect(message).toContain("Telegram alertas sendMessage: <b>OK</b>");
+    expect(message).toContain("Telegram commands polling: <b>DEGRADADO</b>");
+    expect(message).toContain("Últimos fallos polling:");
+    expect(message).toContain("transient_network");
+    expect(message).toContain("ETIMEDOUT");
+    expect(message).toContain("Último recovery:");
+    expect(message).toContain("No afecta ComprasMX ni matches");
   });
 
   it("/debug_resumen oculta errores y descartes históricos si OSINT está disabled", async () => {
