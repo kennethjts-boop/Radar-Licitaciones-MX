@@ -13,6 +13,7 @@
     "test": "jest",
     "db:init": "ts-node-dev src/scripts/db-init.ts",
     "db:verify": "ts-node-dev src/scripts/db-verify.ts",
+    "db:audit:rls": "ts-node src/scripts/audit-public-rls.ts",
     "db:migrate:fase2a": "ts-node-dev src/scripts/migrate-fase2a.ts",
     "db:verify:fase2a": "ts-node-dev src/scripts/verify-fase2a.ts",
     "comprasmx:smoke": "ts-node src/scripts/comprasmx-smoke.ts",
