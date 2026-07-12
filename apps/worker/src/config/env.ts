@@ -107,6 +107,16 @@ const envSchema = z.object({
     .transform(Number)
     .pipe(z.number().min(0).max(1)),
 
+  // Watchdog de expedientes específicos (módulo aislado del colector principal)
+  WATCHDOG_EXPEDIENTES: z
+    .string()
+    .default("LA-09-J0U-009J0U001-N-68-2026"),
+  WATCHDOG_INTERVAL_MINUTES: z
+    .string()
+    .default("15")
+    .transform(Number)
+    .pipe(z.number().int().min(5).max(1440)),
+
   // Playwright & Escudo
   PLAYWRIGHT_HEADLESS: z
     .string()
@@ -274,6 +284,8 @@ export function getConfig(): AppConfig {
       TELEGRAM_COMMAND_BOT_ENABLED: result.data.TELEGRAM_COMMAND_BOT_ENABLED,
       TELEGRAM_COMMANDS_ENABLED: result.data.TELEGRAM_COMMANDS_ENABLED,
       TELEGRAM_POLLING_ENABLED: result.data.TELEGRAM_POLLING_ENABLED,
+      WATCHDOG_EXPEDIENTES: result.data.WATCHDOG_EXPEDIENTES,
+      WATCHDOG_INTERVAL_MINUTES: result.data.WATCHDOG_INTERVAL_MINUTES,
       PLAYWRIGHT_IGNORE_HTTPS_ERRORS: result.data.PLAYWRIGHT_IGNORE_HTTPS_ERRORS,
       ALERT_MAX_PER_CYCLE: result.data.ALERT_MAX_PER_CYCLE,
     },

@@ -30,6 +30,7 @@ import { sendTelegramMessage } from "../alerts/telegram.alerts";
 import { healthTracker } from "../core/healthcheck";
 import { runExternalLeadsOsintJob } from "../modules/external-opportunity-discovery";
 import { nowInMexico, todayMexicoStr } from "../core/time";
+import { startLicitacionWatchdogScheduler } from "../modules/licitacion-watchdog";
 
 const log = createModuleLogger("scheduler");
 
@@ -309,4 +310,11 @@ export function startScheduler(): void {
     },
     `✅ Scheduler iniciado — Modo 1 ~${intervalMinutes} min ±3 min, Modo 2 a las ${recheckHour}:00, Resumen a las ${summaryHour}:00`,
   );
+
+  // Extensión independiente: nunca espera ni propaga errores al scheduler principal.
+  try {
+    startLicitacionWatchdogScheduler();
+  } catch (err) {
+    log.error({ err }, "No se pudo iniciar watchdog; scheduler principal continúa");
+  }
 }

@@ -921,6 +921,20 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     }
   });
 
+  // ── /watchdog ────────────────────────────────────────────────────────────
+  bot.onText(/\/watchdog/, async (msg) => {
+    const chatIdPartial = String(msg.chat.id).slice(-4);
+    log.info({ command: "/watchdog", chatIdPartial, from: msg.from?.username }, "command_received");
+    if (String(msg.chat.id) !== chatId) return;
+    try {
+      const { handleWatchdogCommand } = await import("../modules/licitacion-watchdog/telegram-handler");
+      await handleWatchdogCommand(bot, chatId);
+    } catch (err) {
+      log.error({ err }, "Error contenido cargando /watchdog");
+      await bot.sendMessage(chatId, "⚠️ No pude consultar el watchdog; revisar logs.").catch(() => {});
+    }
+  });
+
   // ── /radares ─────────────────────────────────────────────────────────────
   bot.onText(/\/radares/, async (msg) => {
     const chatIdPartial = String(msg.chat.id).slice(-4);
@@ -1154,5 +1168,5 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
   });
 
   log.info("telegram_handlers_registered");
-  log.info("✅ Comandos registrados: /prueba, /estado, /radares, /buscar, /monto, /debug_resumen, /scan, /recuperar, /techo, /noticias_comerciales, /perdidas");
+  log.info("✅ Comandos registrados: /prueba, /estado, /watchdog, /radares, /buscar, /monto, /debug_resumen, /scan, /recuperar, /techo, /noticias_comerciales, /perdidas");
 }

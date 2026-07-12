@@ -198,6 +198,17 @@ export interface DbDailySummary {
   created_at: string;
 }
 
+// ─── watchdog_snapshots ─────────────────────────────────────────────────────
+
+export interface DbWatchdogSnapshot {
+  id: string;
+  numero_procedimiento: string;
+  snapshot_hash: string;
+  snapshot_json: Record<string, unknown>;
+  detected_changes: Record<string, unknown>;
+  created_at: string;
+}
+
 // ─── external_leads ─────────────────────────────────────────────────────────
 
 export interface DbExternalLead {
