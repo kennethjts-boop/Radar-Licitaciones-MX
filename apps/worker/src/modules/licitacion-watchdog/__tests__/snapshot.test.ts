@@ -3,6 +3,7 @@ import type { WatchdogSnapshot } from "../types";
 
 function snapshot(): WatchdogSnapshot {
   return normalizeSnapshot({
+    partial: false,
     numeroProcedimiento: "LA-09-J0U-009J0U001-N-68-2026",
     expedienteUrl: "https://comprasmx.example/detalle/uuid/procedimiento",
     uuidProcedimiento: "uuid",

@@ -12,6 +12,8 @@ import { normalizeSnapshot } from "./snapshot";
 const log = createModuleLogger("licitacion-watchdog:extractor");
 const API_ORIGIN = "https://upcp-cnetservicios.buengobierno.gob.mx";
 const DETAIL_TIMEOUT_MS = 90_000;
+const DOM_STABILITY_POLL_MS = 500;
+const DOM_STABILITY_TIMEOUT_MS = 15_000;
 
 interface ComprasMxEnvelope<T> {
   success?: boolean;
@@ -138,6 +140,52 @@ async function extractVisibleSnapshot(page: Page): Promise<{
   }) as Promise<{ fields: JsonObject; tables: VisibleTableSnapshot[] }>;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export interface VisibleSnapshotStabilityOptions {
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+}
+
+export async function waitForStableVisibleSnapshot(
+  page: Page,
+  options: VisibleSnapshotStabilityOptions = {},
+): Promise<{
+  fields: JsonObject;
+  tables: VisibleTableSnapshot[];
+  partial: boolean;
+}> {
+  const pollIntervalMs = options.pollIntervalMs ?? DOM_STABILITY_POLL_MS;
+  const timeoutMs = options.timeoutMs ?? DOM_STABILITY_TIMEOUT_MS;
+  const maxPolls = Math.max(2, Math.ceil(timeoutMs / pollIntervalMs) + 1);
+  let previousCounts: number[] | null = null;
+  let lastVisible: { fields: JsonObject; tables: VisibleTableSnapshot[] } = {
+    fields: {},
+    tables: [],
+  };
+
+  for (let poll = 0; poll < maxPolls; poll++) {
+    lastVisible = await extractVisibleSnapshot(page);
+    const counts = lastVisible.tables.map((table) => table.rows.length);
+    const sameAsPrevious = previousCounts !== null &&
+      counts.length === previousCounts.length &&
+      counts.every((count, index) => count === previousCounts?.[index]);
+    const hasIncompleteTable = lastVisible.tables.length === 0 ||
+      lastVisible.tables.some((table) => table.headers.length > 0 && table.rows.length === 0);
+
+    if (sameAsPrevious && !hasIncompleteTable) {
+      return { ...lastVisible, partial: false };
+    }
+
+    previousCounts = counts;
+    if (poll < maxPolls - 1) await sleep(pollIntervalMs);
+  }
+
+  return { ...lastVisible, partial: true };
+}
+
 export async function extractWatchdogSnapshot(input: {
   numeroProcedimiento: string;
   expedienteUrl: string;
@@ -167,11 +215,11 @@ export async function extractWatchdogSnapshot(input: {
     const detail = assertSuccessful(detailEnvelope, "detalle ComprasMX");
     const annexPages = assertSuccessful(annexEnvelope, "anexos ComprasMX");
 
-    await page.waitForSelector("label", { timeout: 30_000 });
-    const visible = await extractVisibleSnapshot(page);
+    const visible = await waitForStableVisibleSnapshot(page);
     const annexGroups = await fetchAllAnnexGroups(page, annexResponse, annexPages);
     const documents = buildDocuments(annexGroups);
     const snapshot = normalizeSnapshot({
+      partial: visible.partial,
       numeroProcedimiento: input.numeroProcedimiento,
       expedienteUrl: input.expedienteUrl,
       uuidProcedimiento: input.uuidProcedimiento,
@@ -181,10 +229,20 @@ export async function extractWatchdogSnapshot(input: {
       visibleTables: visible.tables,
     });
 
-    log.info(
-      { numeroProcedimiento: input.numeroProcedimiento, documents: documents.length },
-      "Snapshot completo de ComprasMX extraído",
-    );
+    if (snapshot.partial) {
+      log.warn(
+        {
+          numeroProcedimiento: input.numeroProcedimiento,
+          rowCounts: snapshot.visibleTables.map((table) => table.rows.length),
+        },
+        "Snapshot parcial de ComprasMX descartable: DOM no hidrató tablas en 15s",
+      );
+    } else {
+      log.info(
+        { numeroProcedimiento: input.numeroProcedimiento, documents: documents.length },
+        "Snapshot completo y estable de ComprasMX extraído",
+      );
+    }
     return snapshot;
   }, { timeoutMs: DETAIL_TIMEOUT_MS + 30_000 });
 }

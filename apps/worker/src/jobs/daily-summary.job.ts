@@ -6,7 +6,11 @@ import { v4 as uuidv4 } from 'uuid';
 import { createModuleLogger } from '../core/logger';
 import { formatMexicoDate, mexicoDateAtHourISO, todayMexicoStr, nowISO } from '../core/time';
 import { getSupabaseClient } from '../storage/client';
-import { describeTelegramSendError, sendEnhancedDailySummary } from '../alerts/telegram.alerts';
+import {
+  describeTelegramSendError,
+  formatEnhancedDailySummaryMessage,
+  sendEnhancedDailySummary,
+} from '../alerts/telegram.alerts';
 import { buildSummaryData } from '../modules/alert-filter';
 import { healthTracker } from '../core/healthcheck';
 import { getConfig } from '../config/env';
@@ -59,6 +63,8 @@ export async function runDailySummaryJob(): Promise<void> {
   const today = todayMexicoStr();
   const expectedAt = mexicoDateAtHourISO(today, config.DAILY_SUMMARY_HOUR);
   const startedAt = nowISO();
+  let summaryGenerated = false;
+  let summaryPersisted = false;
 
   await setState(STATE_KEYS.LAST_DAILY_SUMMARY, {
     status: 'running',
@@ -76,6 +82,7 @@ export async function runDailySummaryJob(): Promise<void> {
 
   try {
     const summaryData = await buildSummaryData();
+    summaryGenerated = true;
 
     const healthStatus = healthTracker.getStatus();
     if (healthStatus.services.database !== 'ok') {
@@ -101,17 +108,57 @@ export async function runDailySummaryJob(): Promise<void> {
       summary_text: JSON.stringify(summaryData),
       created_at: nowISO(),
     }, { onConflict: 'summary_date' });
-    if (insertErr) {
-      log.warn({ err: insertErr }, 'No se pudo guardar resumen en DB; continuando con envío Telegram');
-      summaryData.technicalIncidents.push('Error al guardar resumen en DB');
-    }
+    if (insertErr) throw new Error(`No se pudo guardar resumen en DB: ${insertErr.message}`);
+    summaryPersisted = true;
 
     // Enviar a Telegram con nuevo formato de secciones
-    const telegramMessageId = await sendEnhancedDailySummary(summaryData);
+    let telegramMessageId: number | null = null;
+    let telegramDeliveryStatus: 'sent' | 'failed' = 'sent';
+    let telegramFailureReason: string | null = null;
+    let failedAlertPersisted = false;
+    try {
+      telegramMessageId = await sendEnhancedDailySummary(summaryData);
+    } catch (telegramError) {
+      const failure = buildFailureReason(telegramError);
+      telegramDeliveryStatus = 'failed';
+      telegramFailureReason = failure.message;
+      const summaryText = formatEnhancedDailySummaryMessage(summaryData);
+
+      try {
+        const { error: alertError } = await db.from('alerts').insert({
+          id: uuidv4(),
+          radar_id: null,
+          procurement_id: null,
+          alert_type: 'daily_summary',
+          telegram_message: summaryText,
+          telegram_status: 'failed',
+          telegram_message_id: null,
+          sent_at: null,
+          created_at: nowISO(),
+        });
+        if (alertError) throw alertError;
+        failedAlertPersisted = true;
+      } catch (persistenceError) {
+        log.error(
+          { err: persistenceError, summaryDate: today },
+          'No se pudo persistir entrega fallida del resumen en alerts',
+        );
+      }
+
+      log.error(
+        { err: telegramError, failureReason: failure.message, failedAlertPersisted },
+        'Resumen diario generado y persistido; entrega Telegram fallida',
+      );
+    }
     const finishedAt = nowISO();
 
     await setState(STATE_KEYS.LAST_DAILY_SUMMARY, {
-      status: 'success',
+      status: 'ok',
+      summaryGenerated,
+      summaryPersisted,
+      telegramDeliveryStatus,
+      telegramFailureReason,
+      failedAlertPersisted,
       summaryDate: today,
       expectedAt,
       expectedAtMx: formatMexicoDate(expectedAt),
@@ -141,7 +188,9 @@ export async function runDailySummaryJob(): Promise<void> {
         highScore: summaryData.highScore.length,
         excluded: summaryData.excludedCount,
       },
-      'Resumen diario enviado',
+      telegramDeliveryStatus === 'sent'
+        ? 'Resumen diario generado, persistido y enviado'
+        : 'Resumen diario generado y persistido; entrega pendiente de recuperación manual',
     );
   } catch (err) {
     const failure = buildFailureReason(err);
@@ -162,6 +211,9 @@ export async function runDailySummaryJob(): Promise<void> {
       telegramTimeout: failure.telegramTimeout,
       telegramNetworkError: failure.telegramNetworkError,
       telegramApiError: failure.telegramApiError,
+      summaryGenerated,
+      summaryPersisted,
+      telegramDeliveryStatus: 'not_attempted',
     });
     log.error({ err, expectedAt, actualAt: finishedAt, failureReason: failure.message }, 'Error generando resumen diario');
   }

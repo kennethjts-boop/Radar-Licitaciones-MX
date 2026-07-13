@@ -22,6 +22,7 @@ export interface VisibleTableSnapshot extends JsonObject {
 }
 
 export interface WatchdogSnapshot extends JsonObject {
+  partial: boolean;
   numeroProcedimiento: string;
   expedienteUrl: string;
   uuidProcedimiento: string;
@@ -42,7 +43,7 @@ export interface WatchdogChange {
 }
 
 export interface NotificationState {
-  kind: "baseline" | "change";
+  kind: "baseline" | "baseline_completed" | "change";
   status: "pending" | "sent";
   messageId?: number | null;
   sentAt?: string;

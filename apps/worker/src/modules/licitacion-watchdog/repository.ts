@@ -60,7 +60,7 @@ export async function insertSnapshot(input: {
   hash: string;
   snapshot: WatchdogSnapshot;
   changes: WatchdogChange[];
-  notificationKind: "baseline" | "change";
+    notificationKind: "baseline" | "baseline_completed" | "change";
 }): Promise<WatchdogSnapshotRow> {
   const detectedChanges: StoredDetectedChanges = {
     changes: input.changes,

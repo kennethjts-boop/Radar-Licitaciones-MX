@@ -25,6 +25,8 @@ import {
   recordTelegramSendSuccess,
 } from "../core/telegram-commands-health";
 import { detectPriorityAlertProfile } from "../modules/priority-alerts";
+import { telegramBotConstructorOptions } from "../core/telegram-client-options";
+import { writeTelegramLog } from "../storage/telegram-log.repo";
 
 const log = createModuleLogger("telegram-alerts");
 
@@ -195,7 +197,7 @@ function getBot(): TelegramBot {
   if (cmdBot) return cmdBot;
   if (_bot) return _bot;
   const config = getConfig();
-  _bot = new TelegramBot(config.TELEGRAM_BOT_TOKEN, { polling: false });
+  _bot = new TelegramBot(config.TELEGRAM_BOT_TOKEN, telegramBotConstructorOptions());
   return _bot;
 }
 
@@ -352,13 +354,11 @@ export async function sendTelegramMessage(
           const details = describeTelegramSendError(error);
           log.warn(
             {
-              attempt,
-              delayMs: delay,
-              kind: details.kind,
-              statusCode: details.statusCode,
-              apiErrorCode: details.apiErrorCode,
+              intento: attempt,
+              total: config.TELEGRAM_MAX_RETRIES,
+              delay_ms: delay,
               code: details.code,
-              summary: details.summary,
+              clasificacion: details.kind,
             },
             "⏳ Reintentando envío Telegram",
           );
@@ -370,6 +370,14 @@ export async function sendTelegramMessage(
         { err: telemetryError },
         "No se pudo registrar telemetría de Telegram sendMessage exitoso",
       );
+    });
+    void writeTelegramLog({
+      command: "sendMessage",
+      requestPayload: { parseMode, textLength: text.length },
+      responsePayload: { messageId: msg.message_id },
+      status: "ok",
+    }).catch((telemetryError) => {
+      log.warn({ err: telemetryError }, "No se pudo escribir éxito en telegram_logs");
     });
     return msg.message_id;
   } catch (err) {
@@ -391,6 +399,21 @@ export async function sendTelegramMessage(
       },
       "❌ Error enviando mensaje Telegram (agotados reintentos)",
     );
+    void writeTelegramLog({
+      command: "sendMessage",
+      requestPayload: { parseMode, textLength: text.length },
+      responsePayload: {
+        kind: details.kind,
+        retryable: details.retryable,
+        code: details.code,
+        statusCode: details.statusCode,
+        apiErrorCode: details.apiErrorCode,
+        summary: details.summary,
+      },
+      status: "error",
+    }).catch((telemetryError) => {
+      log.warn({ err: telemetryError }, "No se pudo escribir fallo en telegram_logs");
+    });
     throw new TelegramError(formatTelegramFailureMessage(details), { ...details });
   }
 }

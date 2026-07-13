@@ -31,6 +31,7 @@ import {
   recordTelegramPollingFailure,
   recordTelegramPollingSuccess,
 } from "../core/telegram-commands-health";
+import { telegramBotConstructorOptions } from "../core/telegram-client-options";
 
 const log = createModuleLogger("commands");
 const MANUAL_SCAN_TIMEOUT_MS = 30 * 60 * 1000;
@@ -53,7 +54,7 @@ export async function initCommandBot(): Promise<TelegramBot> {
   }
 
   // Crear instancia sin polling primero para poder llamar deleteWebhook
-  _bot = new TelegramBot(config.TELEGRAM_BOT_TOKEN, { polling: false });
+  _bot = new TelegramBot(config.TELEGRAM_BOT_TOKEN, telegramBotConstructorOptions());
   await recordTelegramCommandsStartup("polling").catch((err) => {
     log.warn({ err }, "No se pudo registrar inicio de Telegram polling");
   });

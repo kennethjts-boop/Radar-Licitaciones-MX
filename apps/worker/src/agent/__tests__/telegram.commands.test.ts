@@ -112,6 +112,11 @@ describe("Telegram Commands - /noticias_comerciales", () => {
     botInstance = await initCommandBot();
   });
 
+  it("construye el bot compartido con timeout HTTP real de 20 segundos", () => {
+    expect((botInstance as unknown as { options: { request: { timeout: number } } }).options.request.timeout)
+      .toBe(20_000);
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     mockConfig.ENABLE_EXTERNAL_LEADS_OSINT = true;

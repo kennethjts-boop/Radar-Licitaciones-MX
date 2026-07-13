@@ -23,6 +23,13 @@ async function notifyPending(row: WatchdogSnapshotRow): Promise<void> {
 async function processExpediente(numeroProcedimiento: string): Promise<JsonObject> {
   const resolved = await resolveExpediente(numeroProcedimiento);
   const snapshot = await extractWatchdogSnapshot({ numeroProcedimiento, ...resolved });
+  if (snapshot.partial) {
+    log.warn(
+      { numeroProcedimiento },
+      "Ciclo watchdog omitido: snapshot parcial no se compara ni persiste",
+    );
+    return { status: "partial", changes: 0 };
+  }
   const hash = hashSnapshot(snapshot);
   const latest = await getLatestSnapshot(numeroProcedimiento);
 
@@ -46,15 +53,22 @@ async function processExpediente(numeroProcedimiento: string): Promise<JsonObjec
   }
 
   const changes = diffSnapshots(latest.snapshot_json, snapshot);
+  const baselineCompleted = latest.snapshot_json.visibleTables.some((table, index) =>
+    table.rows.length === 0 && (snapshot.visibleTables[index]?.rows.length ?? 0) > 0,
+  );
   const changed = await insertSnapshot({
     numeroProcedimiento,
     hash,
     snapshot,
     changes,
-    notificationKind: "change",
+    notificationKind: baselineCompleted ? "baseline_completed" : "change",
   });
   await notifyPending(changed);
-  return { status: "changed", hash, changes: changes.length };
+  return {
+    status: baselineCompleted ? "baseline_completed" : "changed",
+    hash,
+    changes: changes.length,
+  };
 }
 
 export async function runLicitacionWatchdog(expedientes: string[]): Promise<void> {
@@ -87,11 +101,19 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
     const failed = Object.values(results).filter((result) =>
       typeof result === "object" && result !== null && !Array.isArray(result) && result.status === "error",
     );
+    const partial = Object.values(results).filter((result) =>
+      typeof result === "object" && result !== null && !Array.isArray(result) && result.status === "partial",
+    );
+    const incomplete = failed.length + partial.length;
     await setState(STATE_KEYS.WATCHDOG_TELEMETRY, {
-      status: failed.length > 0 ? "error" : "ok",
+      status: incomplete > 0 ? "error" : "ok",
       lastCheckedAt: nowISO(),
-      lastSuccessfulCheckAt: failed.length === 0 ? nowISO() : null,
-      lastError: failed.length > 0 ? `${failed.length} expediente(s) con error` : null,
+      lastSuccessfulCheckAt: incomplete === 0 ? nowISO() : null,
+      lastError: failed.length > 0
+        ? `${failed.length} expediente(s) con error`
+        : partial.length > 0
+          ? `${partial.length} expediente(s) con DOM parcial; sin diff ni alerta`
+          : null,
       configuredExpedientes: expedientes,
       results,
     });

@@ -190,7 +190,7 @@ async function catchUpDailySummaryIfMissed(summaryHour: number): Promise<void> {
       STATE_KEYS.LAST_DAILY_SUMMARY,
     );
 
-    if (last?.summaryDate === today && last?.status === "success") {
+    if (last?.summaryDate === today && ["success", "ok"].includes(last.status ?? "")) {
       log.info({ today }, "✅ Catch-up: resumen diario ya enviado hoy — omitiendo");
       return;
     }
