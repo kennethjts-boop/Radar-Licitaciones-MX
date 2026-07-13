@@ -7,6 +7,7 @@ import type {
   WatchdogChange,
   WatchdogDocument,
   WatchdogSnapshot,
+  VisibleTableSnapshot,
 } from "./types";
 
 const DATE_KEY = /(?:^|_)(?:fecha|date|created_at|modified_at)|At$/i;
@@ -59,8 +60,42 @@ export function normalizeSnapshot(snapshot: WatchdogSnapshot): WatchdogSnapshot 
   return normalizeSnapshotValue(snapshot) as WatchdogSnapshot;
 }
 
+function hashJson(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+export function tableContentSignature(table: VisibleTableSnapshot): string {
+  return hashJson({ headers: table.headers, rows: table.rows });
+}
+
+export function tableContentSignatures(tables: VisibleTableSnapshot[]): string[] {
+  return tables.map(tableContentSignature);
+}
+
+export function documentContentSignature(documents: WatchdogDocument[]): string {
+  return hashJson(documents);
+}
+
+export function snapshotStructureSignature(snapshot: WatchdogSnapshot): string {
+  return hashJson({
+    visibleTables: snapshot.visibleTables,
+    documents: snapshot.documents,
+  });
+}
+
+function comparableSnapshot(snapshot: WatchdogSnapshot): JsonObject {
+  const {
+    partial: _partial,
+    deploymentSha: _deploymentSha,
+    tableSignatures: _tableSignatures,
+    documentSignature: _documentSignature,
+    ...comparable
+  } = snapshot;
+  return comparable;
+}
+
 export function hashSnapshot(snapshot: WatchdogSnapshot): string {
-  return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+  return hashJson(comparableSnapshot(snapshot));
 }
 
 function sameValue(a: JsonValue | undefined, b: JsonValue | undefined): boolean {
@@ -108,8 +143,8 @@ function documentMap(documents: WatchdogDocument[]): Map<string, WatchdogDocumen
 
 export function diffSnapshots(previous: WatchdogSnapshot, current: WatchdogSnapshot): WatchdogChange[] {
   const changes: WatchdogChange[] = [];
-  const previousWithoutDocuments = { ...previous, documents: [] } as WatchdogSnapshot;
-  const currentWithoutDocuments = { ...current, documents: [] } as WatchdogSnapshot;
+  const previousWithoutDocuments = { ...comparableSnapshot(previous), documents: [] };
+  const currentWithoutDocuments = { ...comparableSnapshot(current), documents: [] };
   diffValues(previousWithoutDocuments, currentWithoutDocuments, "", changes);
 
   const previousDocuments = documentMap(previous.documents);

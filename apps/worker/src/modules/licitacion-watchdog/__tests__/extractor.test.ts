@@ -51,4 +51,21 @@ describe("waitForStableVisibleSnapshot", () => {
     expect(result.partial).toBe(true);
     expect(result.tables[0].rows).toHaveLength(3);
   });
+
+  it("exige estabilidad del contenido completo aunque el conteo no cambie", async () => {
+    const first = visible(1);
+    const changed = visible(1);
+    changed.tables[0].rows[0][1] = "35302";
+    const evaluate = jest.fn()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(changed)
+      .mockResolvedValueOnce(changed);
+    const page = { evaluate } as unknown as Page;
+
+    const result = await waitForStableVisibleSnapshot(page, { pollIntervalMs: 1, timeoutMs: 5 });
+
+    expect(result.partial).toBe(false);
+    expect(result.tables[0].rows[0][1]).toBe("35302");
+    expect(evaluate).toHaveBeenCalledTimes(3);
+  });
 });

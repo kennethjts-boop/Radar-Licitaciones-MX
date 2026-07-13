@@ -1,9 +1,17 @@
-import { diffSnapshots, hashSnapshot, normalizeSnapshot } from "../snapshot";
+import {
+  diffSnapshots,
+  hashSnapshot,
+  normalizeSnapshot,
+  tableContentSignatures,
+} from "../snapshot";
 import type { WatchdogSnapshot } from "../types";
 
 function snapshot(): WatchdogSnapshot {
   return normalizeSnapshot({
     partial: false,
+    deploymentSha: "962840fed1f23cf7c00fe12487cd01030f28e926",
+    tableSignatures: [],
+    documentSignature: "doc-signature",
     numeroProcedimiento: "LA-09-J0U-009J0U001-N-68-2026",
     expedienteUrl: "https://comprasmx.example/detalle/uuid/procedimiento",
     uuidProcedimiento: "uuid",
@@ -30,6 +38,24 @@ describe("licitacion-watchdog snapshot diff", () => {
     const current = snapshot();
     expect(hashSnapshot(previous)).toBe(hashSnapshot(current));
     expect(diffSnapshots(previous, current)).toEqual([]);
+  });
+
+  it("metadatos de captura no alteran el hash ni producen diffs", () => {
+    const previous = snapshot();
+    const current = snapshot();
+    current.deploymentSha = "nuevo-sha";
+    current.tableSignatures = ["firma-nueva"];
+    current.documentSignature = "firma-documentos-nueva";
+
+    expect(hashSnapshot(previous)).toBe(hashSnapshot(current));
+    expect(diffSnapshots(previous, current)).toEqual([]);
+  });
+
+  it("firma contenido completo de tabla aunque no cambie el número de filas", () => {
+    const first = [{ headers: ["Partida", "CUCOP"], rows: [["1", "35301"]] }];
+    const second = [{ headers: ["Partida", "CUCOP"], rows: [["1", "35302"]] }];
+
+    expect(tableContentSignatures(first)).not.toEqual(tableContentSignatures(second));
   });
 
   it("documento nuevo genera cambio document_added", () => {

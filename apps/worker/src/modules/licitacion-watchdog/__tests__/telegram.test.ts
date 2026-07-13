@@ -36,6 +36,9 @@ function snapshotRow(
     snapshot_hash: "hash",
     snapshot_json: {
       partial: false,
+      deploymentSha: "962840fed1f23cf7c00fe12487cd01030f28e926",
+      tableSignatures: [],
+      documentSignature: "document-signature",
       numeroProcedimiento: "LA-09-J0U-009J0U001-N-68-2026",
       expedienteUrl: "https://comprasmx.example/detalle/uuid/procedimiento",
       uuidProcedimiento: "uuid",

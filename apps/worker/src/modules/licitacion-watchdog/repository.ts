@@ -2,6 +2,7 @@ import { getSupabaseClient } from "../../storage/client";
 import { nowISO } from "../../core/time";
 import type {
   StoredDetectedChanges,
+  StructuralConfirmation,
   WatchdogChange,
   WatchdogSnapshot,
   WatchdogSnapshotRow,
@@ -60,11 +61,19 @@ export async function insertSnapshot(input: {
   hash: string;
   snapshot: WatchdogSnapshot;
   changes: WatchdogChange[];
-    notificationKind: "baseline" | "baseline_completed" | "change";
+  notificationKind: "baseline" | "baseline_completed" | "change";
+  structuralConfirmation?: StructuralConfirmation;
 }): Promise<WatchdogSnapshotRow> {
   const detectedChanges: StoredDetectedChanges = {
     changes: input.changes,
-    notification: { kind: input.notificationKind, status: "pending" },
+    notification: {
+      kind: input.notificationKind,
+      status: "pending",
+      deploymentSha: input.snapshot.deploymentSha,
+    },
+    ...(input.structuralConfirmation
+      ? { structuralConfirmation: input.structuralConfirmation }
+      : {}),
   };
   const { data, error } = await getSupabaseClient()
     .from("watchdog_snapshots")

@@ -23,6 +23,9 @@ export interface VisibleTableSnapshot extends JsonObject {
 
 export interface WatchdogSnapshot extends JsonObject {
   partial: boolean;
+  deploymentSha: string | null;
+  tableSignatures: string[];
+  documentSignature: string;
   numeroProcedimiento: string;
   expedienteUrl: string;
   uuidProcedimiento: string;
@@ -47,11 +50,19 @@ export interface NotificationState {
   status: "pending" | "sent";
   messageId?: number | null;
   sentAt?: string;
+  deploymentSha?: string | null;
+}
+
+export interface StructuralConfirmation extends JsonObject {
+  signature: string;
+  captures: number;
+  confirmedAt: string;
 }
 
 export interface StoredDetectedChanges {
   changes: WatchdogChange[];
   notification: NotificationState;
+  structuralConfirmation?: StructuralConfirmation;
 }
 
 export interface WatchdogSnapshotRow {
@@ -65,6 +76,7 @@ export interface WatchdogSnapshotRow {
 
 export interface WatchdogTelemetry extends JsonObject {
   status: "idle" | "running" | "ok" | "error";
+  deploymentSha: string | null;
   lastCheckedAt: string | null;
   lastSuccessfulCheckAt: string | null;
   lastError: string | null;

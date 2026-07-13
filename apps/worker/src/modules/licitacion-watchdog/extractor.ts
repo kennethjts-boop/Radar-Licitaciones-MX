@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { BrowserManager } from "../../collectors/comprasmx/browser.manager";
+import { getConfig } from "../../config/env";
 import { createModuleLogger } from "../../core/logger";
 import type {
   JsonObject,
@@ -7,7 +8,11 @@ import type {
   WatchdogDocument,
   WatchdogSnapshot,
 } from "./types";
-import { normalizeSnapshot } from "./snapshot";
+import {
+  documentContentSignature,
+  normalizeSnapshot,
+  tableContentSignatures,
+} from "./snapshot";
 
 const log = createModuleLogger("licitacion-watchdog:extractor");
 const API_ORIGIN = "https://upcp-cnetservicios.buengobierno.gob.mx";
@@ -160,7 +165,7 @@ export async function waitForStableVisibleSnapshot(
   const pollIntervalMs = options.pollIntervalMs ?? DOM_STABILITY_POLL_MS;
   const timeoutMs = options.timeoutMs ?? DOM_STABILITY_TIMEOUT_MS;
   const maxPolls = Math.max(2, Math.ceil(timeoutMs / pollIntervalMs) + 1);
-  let previousCounts: number[] | null = null;
+  let previousSignatures: string[] | null = null;
   let lastVisible: { fields: JsonObject; tables: VisibleTableSnapshot[] } = {
     fields: {},
     tables: [],
@@ -168,10 +173,10 @@ export async function waitForStableVisibleSnapshot(
 
   for (let poll = 0; poll < maxPolls; poll++) {
     lastVisible = await extractVisibleSnapshot(page);
-    const counts = lastVisible.tables.map((table) => table.rows.length);
-    const sameAsPrevious = previousCounts !== null &&
-      counts.length === previousCounts.length &&
-      counts.every((count, index) => count === previousCounts?.[index]);
+    const signatures = tableContentSignatures(lastVisible.tables);
+    const sameAsPrevious = previousSignatures !== null &&
+      signatures.length === previousSignatures.length &&
+      signatures.every((signature, index) => signature === previousSignatures?.[index]);
     const hasIncompleteTable = lastVisible.tables.length === 0 ||
       lastVisible.tables.some((table) => table.headers.length > 0 && table.rows.length === 0);
 
@@ -179,7 +184,7 @@ export async function waitForStableVisibleSnapshot(
       return { ...lastVisible, partial: false };
     }
 
-    previousCounts = counts;
+    previousSignatures = signatures;
     if (poll < maxPolls - 1) await sleep(pollIntervalMs);
   }
 
@@ -218,8 +223,12 @@ export async function extractWatchdogSnapshot(input: {
     const visible = await waitForStableVisibleSnapshot(page);
     const annexGroups = await fetchAllAnnexGroups(page, annexResponse, annexPages);
     const documents = buildDocuments(annexGroups);
-    const snapshot = normalizeSnapshot({
+    const deploymentSha = getConfig().RAILWAY_GIT_COMMIT_SHA ?? null;
+    const snapshotWithoutSignatures = normalizeSnapshot({
       partial: visible.partial,
+      deploymentSha,
+      tableSignatures: [],
+      documentSignature: "",
       numeroProcedimiento: input.numeroProcedimiento,
       expedienteUrl: input.expedienteUrl,
       uuidProcedimiento: input.uuidProcedimiento,
@@ -228,18 +237,24 @@ export async function extractWatchdogSnapshot(input: {
       visibleFields: visible.fields,
       visibleTables: visible.tables,
     });
+    const snapshot = normalizeSnapshot({
+      ...snapshotWithoutSignatures,
+      tableSignatures: tableContentSignatures(snapshotWithoutSignatures.visibleTables),
+      documentSignature: documentContentSignature(snapshotWithoutSignatures.documents),
+    });
 
     if (snapshot.partial) {
       log.warn(
         {
           numeroProcedimiento: input.numeroProcedimiento,
+          deploymentSha,
           rowCounts: snapshot.visibleTables.map((table) => table.rows.length),
         },
         "Snapshot parcial de ComprasMX descartable: DOM no hidrató tablas en 15s",
       );
     } else {
       log.info(
-        { numeroProcedimiento: input.numeroProcedimiento, documents: documents.length },
+        { numeroProcedimiento: input.numeroProcedimiento, deploymentSha, documents: documents.length },
         "Snapshot completo y estable de ComprasMX extraído",
       );
     }

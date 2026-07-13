@@ -14,6 +14,7 @@ const envSchema = z.object({
     .string()
     .default("false")
     .transform((v) => v === "true"),
+  RAILWAY_GIT_COMMIT_SHA: z.string().min(7).optional(),
 
   // Supabase
   SUPABASE_URL: z
@@ -279,6 +280,7 @@ export function getConfig(): AppConfig {
       RADAR_DEBUG_CANDIDATES: result.data.RADAR_DEBUG_CANDIDATES,
       NODE_ENV: result.data.NODE_ENV,
       RAILWAY_ENVIRONMENT: result.data.RAILWAY_ENVIRONMENT ?? "local",
+      RAILWAY_GIT_COMMIT_SHA: result.data.RAILWAY_GIT_COMMIT_SHA ?? "local",
       TELEGRAM_SEND_TIMEOUT_MS: result.data.TELEGRAM_SEND_TIMEOUT_MS,
       TELEGRAM_MAX_RETRIES: result.data.TELEGRAM_MAX_RETRIES,
       TELEGRAM_COMMAND_BOT_ENABLED: result.data.TELEGRAM_COMMAND_BOT_ENABLED,
