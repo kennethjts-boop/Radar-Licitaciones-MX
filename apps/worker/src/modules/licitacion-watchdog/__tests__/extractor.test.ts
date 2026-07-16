@@ -1,5 +1,17 @@
 import type { Page } from "playwright";
-import { waitForStableVisibleSnapshot } from "../extractor";
+import { BrowserManager } from "../../../collectors/comprasmx/browser.manager";
+import {
+  classifyWatchdogFailure,
+  extractWatchdogSnapshot,
+  navigateWatchdogPage,
+  waitForStableVisibleSnapshot,
+} from "../extractor";
+
+jest.mock("../../../collectors/comprasmx/browser.manager", () => ({
+  BrowserManager: { withContext: jest.fn() },
+}));
+
+const mockedWithContext = jest.mocked(BrowserManager.withContext);
 
 function visible(rowCount: number) {
   return {
@@ -67,5 +79,80 @@ describe("waitForStableVisibleSnapshot", () => {
     expect(result.partial).toBe(false);
     expect(result.tables[0].rows[0][1]).toBe("35302");
     expect(evaluate).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("navegación watchdog resiliente", () => {
+  it("usa commit, espera 5s y reintenta una sola vez ante ERR_ABORTED", async () => {
+    const goto = jest.fn()
+      .mockRejectedValueOnce(new Error("page.goto: net::ERR_ABORTED"))
+      .mockResolvedValueOnce(null);
+    const wait = jest.fn().mockResolvedValue(undefined);
+
+    const result = await navigateWatchdogPage(
+      { goto } as unknown as Page,
+      "https://comprasmx.example/#/detalle",
+      wait,
+    );
+
+    expect(result).toEqual({ ok: true, attempts: 2, error: null });
+    expect(wait).toHaveBeenCalledWith(5_000);
+    expect(goto).toHaveBeenCalledTimes(2);
+    expect(goto).toHaveBeenNthCalledWith(1, "https://comprasmx.example/#/detalle", {
+      waitUntil: "commit",
+      timeout: 45_000,
+    });
+  });
+
+  it("no reintenta errores no clasificados como navegación transitoria", async () => {
+    const error = new Error("Protocol error inesperado");
+    const goto = jest.fn().mockRejectedValue(error);
+    const wait = jest.fn().mockResolvedValue(undefined);
+
+    const result = await navigateWatchdogPage(
+      { goto } as unknown as Page,
+      "https://comprasmx.example/#/detalle",
+      wait,
+    );
+
+    expect(result).toEqual({ ok: false, attempts: 1, error });
+    expect(wait).not.toHaveBeenCalled();
+    expect(goto).toHaveBeenCalledTimes(1);
+  });
+
+  it("clasifica fallos de zygote y browser cerrado como NETWORK_INFRA", () => {
+    expect(classifyWatchdogFailure(new Error("Failed to launch zygote process"))).toBe("NETWORK_INFRA");
+    expect(classifyWatchdogFailure(new Error("Target page, context or browser has been closed")))
+      .toBe("NETWORK_INFRA");
+  });
+
+  it("cierra y liquida los waiters si la sesión falla antes de hidratar datos", async () => {
+    const rejectWaiters: Array<(reason: Error) => void> = [];
+    const waitForResponse = jest.fn(() => new Promise<never>((_resolve, reject) => {
+      rejectWaiters.push(reject);
+    }));
+    const page = {
+      waitForResponse,
+      goto: jest.fn().mockRejectedValue(new Error("Target page, context or browser has been closed")),
+      close: jest.fn().mockImplementation(async () => {
+        for (const reject of rejectWaiters) reject(new Error("Page closed"));
+      }),
+    } as unknown as Page;
+    mockedWithContext.mockImplementation(async (operation) => operation(page, {} as never));
+
+    const result = await extractWatchdogSnapshot({
+      numeroProcedimiento: "PROC-1",
+      expedienteUrl: "https://comprasmx.example/#/detalle/uuid/procedimiento",
+      uuidProcedimiento: "uuid",
+    });
+
+    expect(result.partial).toBe(true);
+    expect(result.extractionFailure).toEqual(expect.objectContaining({
+      cause: "NETWORK_INFRA",
+      stage: "navigation",
+      attempts: 1,
+    }));
+    expect(page.close).toHaveBeenCalledTimes(1);
+    expect(waitForResponse).toHaveBeenCalledTimes(2);
   });
 });

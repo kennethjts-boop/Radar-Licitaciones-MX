@@ -35,7 +35,7 @@ export async function handleWatchdogCommand(bot: TelegramBot, chatId: string): P
     }
     await bot.sendMessage(chatId, lines.join("\n"), { parse_mode: "HTML", disable_web_page_preview: true }).catch(() => {});
   } catch (err) {
-    log.error({ err }, "Error contenido en /watchdog");
+    log.error({ err, suppressTelegram: true }, "Error contenido en /watchdog");
     await bot.sendMessage(chatId, "⚠️ No pude consultar el estado del watchdog; revisar logs.").catch(() => {});
   }
 }

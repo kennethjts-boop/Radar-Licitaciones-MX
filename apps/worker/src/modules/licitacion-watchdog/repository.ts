@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { getSupabaseClient } from "../../storage/client";
 import { nowISO } from "../../core/time";
 import type {
@@ -6,7 +7,25 @@ import type {
   WatchdogChange,
   WatchdogSnapshot,
   WatchdogSnapshotRow,
+  WatchdogFailureCause,
+  WatchdogHealthSeverity,
 } from "./types";
+
+const HEALTH_ALERT_PREFIX = "licitacion_watchdog_health";
+
+export interface WatchdogHealthAlertRow {
+  id: string;
+  alert_type: string;
+  telegram_message: string;
+  telegram_status: "pending" | "sent" | "failed";
+  telegram_message_id: number | null;
+  sent_at: string | null;
+  created_at: string;
+}
+
+function healthAlertType(severity: WatchdogHealthSeverity, cause: WatchdogFailureCause): string {
+  return `${HEALTH_ALERT_PREFIX}_${severity.toLowerCase()}_${cause.toLowerCase()}`;
+}
 
 export async function resolveExpediente(numeroProcedimiento: string): Promise<{
   expedienteUrl: string;
@@ -104,4 +123,63 @@ export async function markNotificationSent(row: WatchdogSnapshotRow, messageId: 
     .update({ detected_changes: detectedChanges })
     .eq("id", row.id);
   if (error) throw new Error(`No se pudo confirmar notificación watchdog: ${error.message}`);
+}
+
+export async function getRecentWatchdogHealthAlerts(
+  severity: WatchdogHealthSeverity,
+  limit = 20,
+): Promise<WatchdogHealthAlertRow[]> {
+  const { data, error } = await getSupabaseClient()
+    .from("alerts")
+    .select("id, alert_type, telegram_message, telegram_status, telegram_message_id, sent_at, created_at")
+    .like("alert_type", `${HEALTH_ALERT_PREFIX}_${severity.toLowerCase()}_%`)
+    .eq("telegram_status", "sent")
+    .order("sent_at", { ascending: false, nullsFirst: false })
+    .limit(limit);
+  if (error) throw new Error(`No se pudo leer cooldown de alertas watchdog: ${error.message}`);
+  return (data ?? []) as WatchdogHealthAlertRow[];
+}
+
+export async function createPendingWatchdogHealthAlert(input: {
+  severity: WatchdogHealthSeverity;
+  cause: WatchdogFailureCause;
+  message: string;
+}): Promise<string> {
+  const id = randomUUID();
+  const { error } = await getSupabaseClient().from("alerts").insert({
+    id,
+    radar_id: null,
+    procurement_id: null,
+    alert_type: healthAlertType(input.severity, input.cause),
+    telegram_message: input.message,
+    telegram_status: "pending",
+    telegram_message_id: null,
+    sent_at: null,
+    created_at: nowISO(),
+  });
+  if (error) throw new Error(`No se pudo persistir alerta watchdog pendiente: ${error.message}`);
+  return id;
+}
+
+export async function markWatchdogHealthAlertSent(
+  id: string,
+  messageId: number | null,
+): Promise<void> {
+  const { error } = await getSupabaseClient()
+    .from("alerts")
+    .update({
+      telegram_status: "sent",
+      telegram_message_id: messageId,
+      sent_at: nowISO(),
+    })
+    .eq("id", id);
+  if (error) throw new Error(`No se pudo confirmar alerta watchdog enviada: ${error.message}`);
+}
+
+export async function markWatchdogHealthAlertFailed(id: string): Promise<void> {
+  const { error } = await getSupabaseClient()
+    .from("alerts")
+    .update({ telegram_status: "failed" })
+    .eq("id", id);
+  if (error) throw new Error(`No se pudo marcar alerta watchdog fallida: ${error.message}`);
 }

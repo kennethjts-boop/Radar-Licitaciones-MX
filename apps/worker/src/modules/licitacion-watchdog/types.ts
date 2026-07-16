@@ -23,6 +23,7 @@ export interface VisibleTableSnapshot extends JsonObject {
 
 export interface WatchdogSnapshot extends JsonObject {
   partial: boolean;
+  extractionFailure: WatchdogExtractionFailure | null;
   deploymentSha: string | null;
   tableSignatures: string[];
   documentSignature: string;
@@ -33,6 +34,26 @@ export interface WatchdogSnapshot extends JsonObject {
   documents: WatchdogDocument[];
   visibleFields: JsonObject;
   visibleTables: VisibleTableSnapshot[];
+}
+
+export type WatchdogFailureCause = "NETWORK_INFRA" | "SITE_STRUCTURE" | "UNKNOWN";
+
+export interface WatchdogExtractionFailure extends JsonObject {
+  cause: WatchdogFailureCause;
+  stage: "browser_session" | "navigation" | "data_container" | "api_responses" | "dom_stability";
+  message: string;
+  attempts: number;
+}
+
+export type WatchdogHealthSeverity = "DEGRADED" | "CRITICAL";
+
+export interface WatchdogHealthState extends JsonObject {
+  consecutiveFailures: number;
+  cause: WatchdogFailureCause | null;
+  severity: WatchdogHealthSeverity | null;
+  incidentStartedAt: string | null;
+  lastFailureAt: string | null;
+  lastSuccessAt: string | null;
 }
 
 export type WatchdogChangeKind = "added" | "removed" | "modified" | "document_added" | "document_removed";
@@ -82,4 +103,5 @@ export interface WatchdogTelemetry extends JsonObject {
   lastError: string | null;
   configuredExpedientes: string[];
   results: JsonObject;
+  health: WatchdogHealthState;
 }

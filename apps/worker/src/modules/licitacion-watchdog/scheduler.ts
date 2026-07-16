@@ -19,9 +19,12 @@ export function startLicitacionWatchdogScheduler(): void {
       return;
     }
     const intervalMs = config.WATCHDOG_INTERVAL_MINUTES * 60_000;
-    const runSafely = () => {
-      runLicitacionWatchdog(expedientes).catch((err) => {
-        log.error({ err }, "Fallo contenido en scheduler watchdog");
+    const runSafely = (): void => {
+      void runLicitacionWatchdog(expedientes).catch((err) => {
+        log.error(
+          { err, suppressTelegram: true },
+          "Fallo contenido en scheduler watchdog; sin propagación a unhandledRejection",
+        );
       });
     };
     setTimeout(runSafely, 20_000);
@@ -31,6 +34,9 @@ export function startLicitacionWatchdogScheduler(): void {
       "Scheduler watchdog independiente iniciado",
     );
   } catch (err) {
-    log.error({ err }, "No se pudo iniciar watchdog; scheduler principal continúa");
+    log.error(
+      { err, suppressTelegram: true },
+      "No se pudo iniciar watchdog; scheduler principal continúa",
+    );
   }
 }

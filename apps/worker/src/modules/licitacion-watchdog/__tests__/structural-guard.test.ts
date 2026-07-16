@@ -20,6 +20,7 @@ function documents(count: number): WatchdogDocument[] {
 function baseline(): WatchdogSnapshot {
   return {
     partial: false,
+    extractionFailure: null,
     deploymentSha: "sha-baseline",
     tableSignatures: [],
     documentSignature: "documents-30",

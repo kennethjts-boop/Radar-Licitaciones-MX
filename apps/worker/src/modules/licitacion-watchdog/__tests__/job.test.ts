@@ -1,5 +1,7 @@
-import { setState } from "../../../core/system-state";
+import { getState, setState } from "../../../core/system-state";
+import { shouldDeferWatchdogForCollector } from "../collector-guard";
 import { extractWatchdogSnapshot } from "../extractor";
+import { notifyWatchdogHealthIfNeeded } from "../health";
 import { resetWatchdogLockForTests, runLicitacionWatchdog } from "../job";
 import {
   getLatestSnapshot,
@@ -12,10 +14,32 @@ import { sendPendingNotification } from "../telegram";
 import type { WatchdogDocument, WatchdogSnapshot, WatchdogSnapshotRow } from "../types";
 
 jest.mock("../../../core/system-state", () => ({
-  STATE_KEYS: { WATCHDOG_TELEMETRY: "licitacion_watchdog_telemetry" },
+  STATE_KEYS: {
+    WATCHDOG_TELEMETRY: "licitacion_watchdog_telemetry",
+    COMPRASMX_TELEMETRY: "comprasmx_telemetry",
+  },
+  getState: jest.fn().mockResolvedValue(null),
   setState: jest.fn().mockResolvedValue(undefined),
 }));
-jest.mock("../extractor", () => ({ extractWatchdogSnapshot: jest.fn() }));
+jest.mock("../collector-guard", () => ({
+  shouldDeferWatchdogForCollector: jest.fn().mockResolvedValue({ defer: false, reason: null }),
+}));
+jest.mock("../extractor", () => ({
+  classifyWatchdogFailure: jest.fn().mockReturnValue("NETWORK_INFRA"),
+  extractWatchdogSnapshot: jest.fn(),
+}));
+jest.mock("../health", () => ({
+  EMPTY_WATCHDOG_HEALTH: {
+    consecutiveFailures: 0,
+    cause: null,
+    severity: null,
+    incidentStartedAt: null,
+    lastFailureAt: null,
+    lastSuccessAt: null,
+  },
+  notifyWatchdogHealthIfNeeded: jest.fn().mockResolvedValue(false),
+  transitionWatchdogHealth: jest.fn((previous) => previous),
+}));
 jest.mock("../repository", () => ({
   getLatestSnapshot: jest.fn(),
   insertSnapshot: jest.fn(),
@@ -31,6 +55,9 @@ const mockedMarkSent = jest.mocked(markNotificationSent);
 const mockedResolve = jest.mocked(resolveExpediente);
 const mockedSend = jest.mocked(sendPendingNotification);
 const mockedSetState = jest.mocked(setState);
+const mockedGetState = jest.mocked(getState);
+const mockedGuard = jest.mocked(shouldDeferWatchdogForCollector);
+const mockedNotifyHealth = jest.mocked(notifyWatchdogHealthIfNeeded);
 
 function documents(count: number): WatchdogDocument[] {
   return Array.from({ length: count }, (_, index) => ({
@@ -49,6 +76,7 @@ function documents(count: number): WatchdogDocument[] {
 function snapshot(partidas = 12, documentCount = 30): WatchdogSnapshot {
   return {
     partial: false,
+    extractionFailure: null,
     deploymentSha: "test-sha",
     tableSignatures: [],
     documentSignature: "test-documents",
@@ -85,6 +113,8 @@ function row(value: WatchdogSnapshot): WatchdogSnapshotRow {
 describe("licitacion-watchdog job structural guard", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedGetState.mockResolvedValue(null);
+    mockedGuard.mockResolvedValue({ defer: false, reason: null });
     resetWatchdogLockForTests();
     mockedResolve.mockResolvedValue({
       expedienteUrl: "https://comprasmx.example/detalle/uuid/procedimiento",
@@ -148,6 +178,19 @@ describe("licitacion-watchdog job structural guard", () => {
           "PROC-1": expect.objectContaining({ status: "unchanged", hashMigrated: true }),
         }),
       }),
+    );
+  });
+
+  it("si una dependencia inesperada rechaza, el job siempre resuelve y contiene Telegram global", async () => {
+    mockedGuard.mockRejectedValueOnce(new Error("guard inesperadamente rechazó"));
+
+    await expect(runLicitacionWatchdog(["PROC-1"])).resolves.toBeUndefined();
+
+    expect(mockedExtract).not.toHaveBeenCalled();
+    expect(mockedNotifyHealth).toHaveBeenCalledTimes(1);
+    expect(mockedSetState).toHaveBeenLastCalledWith(
+      "licitacion_watchdog_telemetry",
+      expect.objectContaining({ status: "error" }),
     );
   });
 });

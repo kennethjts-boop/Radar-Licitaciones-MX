@@ -86,6 +86,7 @@ export function snapshotStructureSignature(snapshot: WatchdogSnapshot): string {
 function comparableSnapshot(snapshot: WatchdogSnapshot): JsonObject {
   const {
     partial: _partial,
+    extractionFailure: _extractionFailure,
     deploymentSha: _deploymentSha,
     tableSignatures: _tableSignatures,
     documentSignature: _documentSignature,

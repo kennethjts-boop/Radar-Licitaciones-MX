@@ -36,6 +36,7 @@ function snapshotRow(
     snapshot_hash: "hash",
     snapshot_json: {
       partial: false,
+      extractionFailure: null,
       deploymentSha: "962840fed1f23cf7c00fe12487cd01030f28e926",
       tableSignatures: [],
       documentSignature: "document-signature",

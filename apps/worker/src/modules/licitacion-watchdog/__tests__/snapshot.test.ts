@@ -9,6 +9,7 @@ import type { WatchdogSnapshot } from "../types";
 function snapshot(): WatchdogSnapshot {
   return normalizeSnapshot({
     partial: false,
+    extractionFailure: null,
     deploymentSha: "962840fed1f23cf7c00fe12487cd01030f28e926",
     tableSignatures: [],
     documentSignature: "doc-signature",
@@ -33,6 +34,20 @@ function snapshot(): WatchdogSnapshot {
 }
 
 describe("licitacion-watchdog snapshot diff", () => {
+  it("metadatos de fallo parcial no alteran el hash comparable", () => {
+    const complete = snapshot();
+    const failed = structuredClone(complete);
+    failed.partial = true;
+    failed.extractionFailure = {
+      cause: "NETWORK_INFRA",
+      stage: "navigation",
+      message: "net::ERR_ABORTED",
+      attempts: 2,
+    };
+
+    expect(hashSnapshot(failed)).toBe(hashSnapshot(complete));
+  });
+
   it("snapshot idéntico no genera alerta", () => {
     const previous = snapshot();
     const current = snapshot();

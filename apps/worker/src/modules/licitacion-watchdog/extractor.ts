@@ -6,6 +6,8 @@ import type {
   JsonObject,
   VisibleTableSnapshot,
   WatchdogDocument,
+  WatchdogExtractionFailure,
+  WatchdogFailureCause,
   WatchdogSnapshot,
 } from "./types";
 import {
@@ -16,7 +18,11 @@ import {
 
 const log = createModuleLogger("licitacion-watchdog:extractor");
 const API_ORIGIN = "https://upcp-cnetservicios.buengobierno.gob.mx";
-const DETAIL_TIMEOUT_MS = 90_000;
+const GOTO_TIMEOUT_MS = 45_000;
+const GOTO_RETRY_BACKOFF_MS = 5_000;
+const API_RESPONSE_TIMEOUT_MS = 115_000;
+const DATA_CONTAINER_TIMEOUT_MS = 20_000;
+const DETAIL_DATA_SELECTOR = "app-sitiopublico-detalle-content .card label";
 const DOM_STABILITY_POLL_MS = 500;
 const DOM_STABILITY_TIMEOUT_MS = 15_000;
 
@@ -149,6 +155,118 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function classifyWatchdogFailure(error: unknown): WatchdogFailureCause {
+  const message = errorMessage(error);
+  if (
+    /net::ERR_ABORTED|timeout|timed out|Target page, context or browser has been closed|zygote|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|socket|network|browserType\.launch/i.test(message)
+  ) {
+    return "NETWORK_INFRA";
+  }
+  if (/selector|container|DOM|hydrate|table/i.test(message)) return "SITE_STRUCTURE";
+  return "UNKNOWN";
+}
+
+function isRetryableNavigationError(error: unknown): boolean {
+  return /net::ERR_ABORTED|timeout|timed out/i.test(errorMessage(error));
+}
+
+export interface NavigationResult {
+  ok: boolean;
+  attempts: number;
+  error: unknown | null;
+}
+
+export async function navigateWatchdogPage(
+  page: Page,
+  url: string,
+  wait: (ms: number) => Promise<void> = sleep,
+): Promise<NavigationResult> {
+  let lastError: unknown = null;
+  let attempts = 0;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    attempts = attempt;
+    try {
+      await page.goto(url, { waitUntil: "commit", timeout: GOTO_TIMEOUT_MS });
+      return { ok: true, attempts: attempt, error: null };
+    } catch (error) {
+      lastError = error;
+      log.warn(
+        { err: error, attempt, url },
+        "Navegación watchdog falló de forma contenida",
+      );
+      if (attempt === 2 || !isRetryableNavigationError(error)) break;
+      await wait(GOTO_RETRY_BACKOFF_MS);
+    }
+  }
+  return { ok: false, attempts, error: lastError };
+}
+
+function deploymentSha(): string | null {
+  try {
+    return getConfig().RAILWAY_GIT_COMMIT_SHA ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function buildSnapshot(input: {
+  numeroProcedimiento: string;
+  expedienteUrl: string;
+  uuidProcedimiento: string;
+}, data: {
+  partial: boolean;
+  extractionFailure: WatchdogExtractionFailure | null;
+  detail?: JsonObject;
+  documents?: WatchdogDocument[];
+  visibleFields?: JsonObject;
+  visibleTables?: VisibleTableSnapshot[];
+}): WatchdogSnapshot {
+  const snapshotWithoutSignatures = normalizeSnapshot({
+    partial: data.partial,
+    extractionFailure: data.extractionFailure,
+    deploymentSha: deploymentSha(),
+    tableSignatures: [],
+    documentSignature: "",
+    numeroProcedimiento: input.numeroProcedimiento,
+    expedienteUrl: input.expedienteUrl,
+    uuidProcedimiento: input.uuidProcedimiento,
+    detail: data.detail ?? {},
+    documents: data.documents ?? [],
+    visibleFields: data.visibleFields ?? {},
+    visibleTables: data.visibleTables ?? [],
+  });
+  return normalizeSnapshot({
+    ...snapshotWithoutSignatures,
+    tableSignatures: tableContentSignatures(snapshotWithoutSignatures.visibleTables),
+    documentSignature: documentContentSignature(snapshotWithoutSignatures.documents),
+  });
+}
+
+function partialSnapshot(
+  input: {
+    numeroProcedimiento: string;
+    expedienteUrl: string;
+    uuidProcedimiento: string;
+  },
+  failure: WatchdogExtractionFailure,
+  visible?: { fields: JsonObject; tables: VisibleTableSnapshot[] },
+): WatchdogSnapshot {
+  log.warn(
+    { numeroProcedimiento: input.numeroProcedimiento, failure },
+    "Snapshot parcial del watchdog; no se comparará ni persistirá",
+  );
+  return buildSnapshot(input, {
+    partial: true,
+    extractionFailure: failure,
+    visibleFields: visible?.fields,
+    visibleTables: visible?.tables,
+  });
+}
+
 export interface VisibleSnapshotStabilityOptions {
   pollIntervalMs?: number;
   timeoutMs?: number;
@@ -196,68 +314,127 @@ export async function extractWatchdogSnapshot(input: {
   expedienteUrl: string;
   uuidProcedimiento: string;
 }): Promise<WatchdogSnapshot> {
-  return BrowserManager.withContext(async (page) => {
-    const detailPath = `/whitney/sitiopublico/expedientes/${input.uuidProcedimiento}`;
-    const detailResponsePromise = page.waitForResponse((response) => {
-      const parsed = new URL(response.url());
-      return parsed.pathname === detailPath && parsed.searchParams.get("id_proceso") === "procedimiento";
-    }, { timeout: DETAIL_TIMEOUT_MS });
-    const annexResponsePromise = page.waitForResponse((response) =>
-      response.url().includes(`${detailPath}/anexos`),
-    { timeout: DETAIL_TIMEOUT_MS });
+  try {
+    // El watchdog usa timeouts explícitos por etapa. Desactivar el timeout global
+    // evita que BrowserManager cierre el browser mientras quedan waiters pendientes.
+    return await BrowserManager.withContext(async (page) => {
+      const detailPath = `/whitney/sitiopublico/expedientes/${input.uuidProcedimiento}`;
+      const detailResponsePromise = page.waitForResponse((response) => {
+        const parsed = new URL(response.url());
+        return parsed.pathname === detailPath && parsed.searchParams.get("id_proceso") === "procedimiento";
+      }, { timeout: API_RESPONSE_TIMEOUT_MS });
+      const annexResponsePromise = page.waitForResponse((response) =>
+        response.url().includes(`${detailPath}/anexos`),
+      { timeout: API_RESPONSE_TIMEOUT_MS });
 
-    await page.goto(input.expedienteUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: DETAIL_TIMEOUT_MS,
+      // Registrar handlers inmediatamente: aunque goto falle, ningún waiter podrá
+      // convertirse después en un unhandledRejection al cerrar el contexto.
+      void detailResponsePromise.catch(() => undefined);
+      void annexResponsePromise.catch(() => undefined);
+
+      const navigation = await navigateWatchdogPage(page, input.expedienteUrl);
+      if (!navigation.ok) {
+        await page.close().catch((error) => {
+          log.warn({ err: error }, "No se pudo cerrar page tras fallo de navegación watchdog");
+        });
+        await Promise.allSettled([detailResponsePromise, annexResponsePromise]);
+        return partialSnapshot(input, {
+          cause: classifyWatchdogFailure(navigation.error),
+          stage: "navigation",
+          message: errorMessage(navigation.error),
+          attempts: navigation.attempts,
+        });
+      }
+
+      let containerError: unknown = null;
+      try {
+        await page.waitForSelector(DETAIL_DATA_SELECTOR, { timeout: DATA_CONTAINER_TIMEOUT_MS });
+      } catch (error) {
+        containerError = error;
+        log.warn(
+          { err: error, selector: DETAIL_DATA_SELECTOR },
+          "Contenedor real de datos no apareció dentro del timeout",
+        );
+      }
+
+      const [detailResult, annexResult] = await Promise.allSettled([
+        detailResponsePromise,
+        annexResponsePromise,
+      ]);
+      if (detailResult.status === "rejected" || annexResult.status === "rejected") {
+        const failure = detailResult.status === "rejected"
+          ? detailResult.reason
+          : annexResult.status === "rejected"
+            ? annexResult.reason
+            : new Error("Respuesta API watchdog incompleta");
+        return partialSnapshot(input, {
+          cause: classifyWatchdogFailure(failure),
+          stage: "api_responses",
+          message: errorMessage(failure),
+          attempts: navigation.attempts,
+        });
+      }
+
+      const detailEnvelope = await detailResult.value.json() as ComprasMxEnvelope<JsonObject>;
+      const annexEnvelope = await annexResult.value.json() as ComprasMxEnvelope<AnexosPage[]>;
+      const detail = assertSuccessful(detailEnvelope, "detalle ComprasMX");
+      const annexPages = assertSuccessful(annexEnvelope, "anexos ComprasMX");
+      const visible = await waitForStableVisibleSnapshot(page);
+      const annexGroups = await fetchAllAnnexGroups(page, annexResult.value, annexPages);
+      const documents = buildDocuments(annexGroups);
+
+      const extractionFailure: WatchdogExtractionFailure | null = containerError
+        ? {
+            cause: "SITE_STRUCTURE",
+            stage: "data_container",
+            message: errorMessage(containerError),
+            attempts: navigation.attempts,
+          }
+        : visible.partial
+          ? {
+              cause: "SITE_STRUCTURE",
+              stage: "dom_stability",
+              message: "DOM no hidrató tablas estables dentro de 15s",
+              attempts: navigation.attempts,
+            }
+          : null;
+      const snapshot = buildSnapshot(input, {
+        partial: extractionFailure !== null,
+        extractionFailure,
+        detail,
+        documents,
+        visibleFields: visible.fields,
+        visibleTables: visible.tables,
+      });
+
+      if (snapshot.partial) {
+        log.warn(
+          {
+            numeroProcedimiento: input.numeroProcedimiento,
+            deploymentSha: snapshot.deploymentSha,
+            rowCounts: snapshot.visibleTables.map((table) => table.rows.length),
+            extractionFailure,
+          },
+          "Snapshot parcial de ComprasMX descartable",
+        );
+      } else {
+        log.info(
+          {
+            numeroProcedimiento: input.numeroProcedimiento,
+            deploymentSha: snapshot.deploymentSha,
+            documents: documents.length,
+          },
+          "Snapshot completo y estable de ComprasMX extraído",
+        );
+      }
+      return snapshot;
+    }, { timeoutMs: 0 });
+  } catch (error) {
+    return partialSnapshot(input, {
+      cause: classifyWatchdogFailure(error),
+      stage: "browser_session",
+      message: errorMessage(error),
+      attempts: 1,
     });
-
-    const [detailResponse, annexResponse] = await Promise.all([
-      detailResponsePromise,
-      annexResponsePromise,
-    ]);
-    const detailEnvelope = await detailResponse.json() as ComprasMxEnvelope<JsonObject>;
-    const annexEnvelope = await annexResponse.json() as ComprasMxEnvelope<AnexosPage[]>;
-    const detail = assertSuccessful(detailEnvelope, "detalle ComprasMX");
-    const annexPages = assertSuccessful(annexEnvelope, "anexos ComprasMX");
-
-    const visible = await waitForStableVisibleSnapshot(page);
-    const annexGroups = await fetchAllAnnexGroups(page, annexResponse, annexPages);
-    const documents = buildDocuments(annexGroups);
-    const deploymentSha = getConfig().RAILWAY_GIT_COMMIT_SHA ?? null;
-    const snapshotWithoutSignatures = normalizeSnapshot({
-      partial: visible.partial,
-      deploymentSha,
-      tableSignatures: [],
-      documentSignature: "",
-      numeroProcedimiento: input.numeroProcedimiento,
-      expedienteUrl: input.expedienteUrl,
-      uuidProcedimiento: input.uuidProcedimiento,
-      detail,
-      documents,
-      visibleFields: visible.fields,
-      visibleTables: visible.tables,
-    });
-    const snapshot = normalizeSnapshot({
-      ...snapshotWithoutSignatures,
-      tableSignatures: tableContentSignatures(snapshotWithoutSignatures.visibleTables),
-      documentSignature: documentContentSignature(snapshotWithoutSignatures.documents),
-    });
-
-    if (snapshot.partial) {
-      log.warn(
-        {
-          numeroProcedimiento: input.numeroProcedimiento,
-          deploymentSha,
-          rowCounts: snapshot.visibleTables.map((table) => table.rows.length),
-        },
-        "Snapshot parcial de ComprasMX descartable: DOM no hidrató tablas en 15s",
-      );
-    } else {
-      log.info(
-        { numeroProcedimiento: input.numeroProcedimiento, deploymentSha, documents: documents.length },
-        "Snapshot completo y estable de ComprasMX extraído",
-      );
-    }
-    return snapshot;
-  }, { timeoutMs: DETAIL_TIMEOUT_MS + 30_000 });
+  }
 }

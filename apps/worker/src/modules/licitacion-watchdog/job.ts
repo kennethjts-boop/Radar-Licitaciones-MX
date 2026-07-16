@@ -1,8 +1,14 @@
 import { getConfig } from "../../config/env";
 import { createModuleLogger } from "../../core/logger";
 import { nowISO } from "../../core/time";
-import { setState, STATE_KEYS } from "../../core/system-state";
-import { extractWatchdogSnapshot } from "./extractor";
+import { getState, setState, STATE_KEYS } from "../../core/system-state";
+import { shouldDeferWatchdogForCollector } from "./collector-guard";
+import { classifyWatchdogFailure, extractWatchdogSnapshot } from "./extractor";
+import {
+  EMPTY_WATCHDOG_HEALTH,
+  notifyWatchdogHealthIfNeeded,
+  transitionWatchdogHealth,
+} from "./health";
 import {
   getLatestSnapshot,
   insertSnapshot,
@@ -12,7 +18,14 @@ import {
 import { diffSnapshots, hashSnapshot } from "./snapshot";
 import { structuralChangeGuard } from "./structural-guard";
 import { sendPendingNotification } from "./telegram";
-import type { JsonObject, StructuralConfirmation, WatchdogSnapshotRow } from "./types";
+import type {
+  JsonObject,
+  StructuralConfirmation,
+  WatchdogFailureCause,
+  WatchdogHealthState,
+  WatchdogSnapshotRow,
+  WatchdogTelemetry,
+} from "./types";
 
 const log = createModuleLogger("licitacion-watchdog:job");
 let inFlight = false;
@@ -33,6 +46,9 @@ async function processExpediente(numeroProcedimiento: string): Promise<JsonObjec
     return {
       status: "partial",
       changes: 0,
+      cause: snapshot.extractionFailure?.cause ?? "UNKNOWN",
+      stage: snapshot.extractionFailure?.stage ?? "browser_session",
+      error: snapshot.extractionFailure?.message ?? "Snapshot parcial sin causa disponible",
       deploymentSha: snapshot.deploymentSha ?? null,
     };
   }
@@ -154,32 +170,56 @@ async function processExpediente(numeroProcedimiento: string): Promise<JsonObjec
 }
 
 export async function runLicitacionWatchdog(expedientes: string[]): Promise<void> {
-  if (inFlight) {
-    log.warn("Ciclo watchdog omitido porque el anterior sigue en ejecución");
-    return;
-  }
-  inFlight = true;
-  const startedAt = nowISO();
-  const deploymentSha = getConfig().RAILWAY_GIT_COMMIT_SHA ?? null;
+  let ownsInFlight = false;
+  let currentHealth: WatchdogHealthState = EMPTY_WATCHDOG_HEALTH;
+  let deploymentSha: string | null = null;
   const results: JsonObject = {};
-  await setState(STATE_KEYS.WATCHDOG_TELEMETRY, {
-    status: "running",
-    lastCheckedAt: startedAt,
-    lastSuccessfulCheckAt: null,
-    lastError: null,
-    configuredExpedientes: expedientes,
-    deploymentSha,
-    results,
-  });
-
   try {
+    if (inFlight) {
+      log.warn("Ciclo watchdog omitido porque el anterior sigue en ejecución");
+      return;
+    }
+    inFlight = true;
+    ownsInFlight = true;
+    const guard = await shouldDeferWatchdogForCollector();
+    if (guard.defer) {
+      log.warn(
+        { reason: guard.reason },
+        "Ciclo watchdog pospuesto por prioridad del colector principal (guard solo-lectura)",
+      );
+      return;
+    }
+
+    const startedAt = nowISO();
+    deploymentSha = getConfig().RAILWAY_GIT_COMMIT_SHA ?? null;
+    const previousTelemetry = await getState<WatchdogTelemetry>(STATE_KEYS.WATCHDOG_TELEMETRY);
+    currentHealth = previousTelemetry?.health ?? EMPTY_WATCHDOG_HEALTH;
+    await setState(STATE_KEYS.WATCHDOG_TELEMETRY, {
+      status: "running",
+      lastCheckedAt: startedAt,
+      lastSuccessfulCheckAt: previousTelemetry?.lastSuccessfulCheckAt ?? null,
+      lastError: null,
+      configuredExpedientes: expedientes,
+      deploymentSha,
+      results,
+      health: currentHealth,
+    });
+
     for (const numeroProcedimiento of expedientes) {
       try {
         results[numeroProcedimiento] = await processExpediente(numeroProcedimiento);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        results[numeroProcedimiento] = { status: "error", error: message, deploymentSha };
-        log.error({ err, numeroProcedimiento }, "Watchdog falló para expediente; ciclo principal no afectado");
+        results[numeroProcedimiento] = {
+          status: "error",
+          error: message,
+          cause: classifyWatchdogFailure(err),
+          deploymentSha,
+        };
+        log.error(
+          { err, numeroProcedimiento, suppressTelegram: true },
+          "Watchdog falló para expediente; alerta consolidada gestionará Telegram",
+        );
       }
     }
     const failed = Object.values(results).filter((result) =>
@@ -190,6 +230,17 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
         ["partial", "structural_incomplete", "confirmation_pending"].includes(String(result.status)),
     );
     const incomplete = failed.length + incompleteResults.length;
+    const extractionFailures = Object.values(results).filter((result) =>
+      typeof result === "object" && result !== null && !Array.isArray(result) &&
+        ["error", "partial"].includes(String(result.status)) && typeof result.cause === "string",
+    ) as JsonObject[];
+    if (extractionFailures.length > 0) {
+      const causes = extractionFailures.map((result) => String(result.cause) as WatchdogFailureCause);
+      const cause = causes.includes("NETWORK_INFRA") ? "NETWORK_INFRA" : causes[0] ?? "UNKNOWN";
+      currentHealth = transitionWatchdogHealth(currentHealth, { success: false, cause });
+    } else {
+      currentHealth = transitionWatchdogHealth(currentHealth, { success: true });
+    }
     await setState(STATE_KEYS.WATCHDOG_TELEMETRY, {
       status: incomplete > 0 ? "error" : "ok",
       lastCheckedAt: nowISO(),
@@ -202,11 +253,39 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
       configuredExpedientes: expedientes,
       deploymentSha,
       results,
+      health: currentHealth,
     });
+    if (extractionFailures.length > 0) {
+      await notifyWatchdogHealthIfNeeded(currentHealth);
+    }
   } catch (err) {
-    log.error({ err }, "Error no manejado contenido dentro del watchdog");
+    // Última frontera: esta función siempre resuelve. Así el scheduler y el handler
+    // global de unhandledRejection nunca reciben una promesa rechazada del watchdog.
+    log.error(
+      { err, suppressTelegram: true },
+      "Error no manejado contenido dentro del watchdog; Telegram queda consolidado",
+    );
+    currentHealth = transitionWatchdogHealth(
+      currentHealth,
+      { success: false, cause: classifyWatchdogFailure(err) },
+    );
+    await setState(STATE_KEYS.WATCHDOG_TELEMETRY, {
+      status: "error",
+      lastCheckedAt: nowISO(),
+      lastSuccessfulCheckAt: null,
+      lastError: err instanceof Error ? err.message : String(err),
+      configuredExpedientes: expedientes,
+      deploymentSha,
+      results,
+      health: currentHealth,
+    }).catch((stateError) => {
+      log.warn({ err: stateError }, "Fallo contenido persistiendo error final watchdog");
+    });
+    await notifyWatchdogHealthIfNeeded(currentHealth).catch((alertError) => {
+      log.warn({ err: alertError }, "Fallo contenido notificando salud watchdog");
+    });
   } finally {
-    inFlight = false;
+    if (ownsInFlight) inFlight = false;
   }
 }
 

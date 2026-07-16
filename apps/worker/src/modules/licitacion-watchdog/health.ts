@@ -1,0 +1,163 @@
+import { sendTelegramMessage } from "../../alerts/telegram.alerts";
+import { createModuleLogger } from "../../core/logger";
+import {
+  createPendingWatchdogHealthAlert,
+  getRecentWatchdogHealthAlerts,
+  markWatchdogHealthAlertFailed,
+  markWatchdogHealthAlertSent,
+  type WatchdogHealthAlertRow,
+} from "./repository";
+import type {
+  WatchdogFailureCause,
+  WatchdogHealthSeverity,
+  WatchdogHealthState,
+} from "./types";
+
+const log = createModuleLogger("licitacion-watchdog:health");
+const CRITICAL_AFTER_FAILURES = 4;
+const SEVERITY_COOLDOWN_MS = 30 * 60 * 1000;
+const CRITICAL_REPEAT_AFTER_MS = 2 * 60 * 60 * 1000;
+
+export const EMPTY_WATCHDOG_HEALTH: WatchdogHealthState = {
+  consecutiveFailures: 0,
+  cause: null,
+  severity: null,
+  incidentStartedAt: null,
+  lastFailureAt: null,
+  lastSuccessAt: null,
+};
+
+export interface WatchdogHealthAlertHistory {
+  severity: WatchdogHealthSeverity;
+  cause: WatchdogFailureCause;
+  consecutiveFailures: number;
+  sentAt: string;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function parseCause(alertType: string): WatchdogFailureCause | null {
+  if (alertType.endsWith("_network_infra")) return "NETWORK_INFRA";
+  if (alertType.endsWith("_site_structure")) return "SITE_STRUCTURE";
+  if (alertType.endsWith("_unknown")) return "UNKNOWN";
+  return null;
+}
+
+function parseHistory(
+  rows: WatchdogHealthAlertRow[],
+  severity: WatchdogHealthSeverity,
+): WatchdogHealthAlertHistory[] {
+  return rows.flatMap((row) => {
+    const cause = parseCause(row.alert_type);
+    const count = row.telegram_message.match(/Fallos consecutivos:\s*(\d+)/i)?.[1];
+    const sentAt = row.sent_at ?? row.created_at;
+    if (!cause || !count || !Number.isFinite(Date.parse(sentAt))) return [];
+    return [{ severity, cause, consecutiveFailures: Number(count), sentAt }];
+  });
+}
+
+export function transitionWatchdogHealth(
+  previous: WatchdogHealthState | null | undefined,
+  outcome: { success: true } | { success: false; cause: WatchdogFailureCause },
+  now = new Date(),
+): WatchdogHealthState {
+  const prior = { ...EMPTY_WATCHDOG_HEALTH, ...(previous ?? {}) };
+  const nowIso = now.toISOString();
+  if (outcome.success) {
+    return {
+      ...prior,
+      consecutiveFailures: 0,
+      cause: null,
+      severity: null,
+      incidentStartedAt: null,
+      lastSuccessAt: nowIso,
+    };
+  }
+
+  const sameIncident = prior.cause === outcome.cause && prior.consecutiveFailures > 0;
+  const consecutiveFailures = sameIncident ? prior.consecutiveFailures + 1 : 1;
+  return {
+    ...prior,
+    consecutiveFailures,
+    cause: outcome.cause,
+    severity: consecutiveFailures >= CRITICAL_AFTER_FAILURES ? "CRITICAL" : "DEGRADED",
+    incidentStartedAt: sameIncident && prior.incidentStartedAt ? prior.incidentStartedAt : nowIso,
+    lastFailureAt: nowIso,
+  };
+}
+
+export function shouldSendWatchdogHealthAlert(input: {
+  health: WatchdogHealthState;
+  history: WatchdogHealthAlertHistory[];
+  now?: Date;
+}): boolean {
+  const { health, history } = input;
+  if (!health.severity || !health.cause || !health.incidentStartedAt) return false;
+  const nowMs = (input.now ?? new Date()).getTime();
+  const sameSeverity = history
+    .filter((item) => item.severity === health.severity)
+    .sort((a, b) => Date.parse(b.sentAt) - Date.parse(a.sentAt));
+  const latestSeverity = sameSeverity[0];
+  if (latestSeverity && nowMs - Date.parse(latestSeverity.sentAt) < SEVERITY_COOLDOWN_MS) {
+    return false;
+  }
+
+  const sameCause = sameSeverity.find((item) => item.cause === health.cause);
+  if (!sameCause || Date.parse(sameCause.sentAt) < Date.parse(health.incidentStartedAt)) {
+    return true;
+  }
+  if (health.severity === "DEGRADED") {
+    // Un solo aviso degradado por causa dentro del mismo incidente.
+    return false;
+  }
+  const criticalAgeMs = nowMs - Date.parse(sameCause.sentAt);
+  return sameCause.consecutiveFailures !== health.consecutiveFailures ||
+    criticalAgeMs > CRITICAL_REPEAT_AFTER_MS;
+}
+
+export function formatWatchdogHealthAlert(health: WatchdogHealthState): string {
+  const critical = health.severity === "CRITICAL";
+  return [
+    `${critical ? "🔴" : "🟡"} <b>[${health.severity}] Licitación Watchdog</b>`,
+    "",
+    `🧭 Causa consolidada: <code>${escapeHtml(health.cause ?? "UNKNOWN")}</code>`,
+    `📊 Fallos consecutivos: ${health.consecutiveFailures}`,
+    `⏱ Incidente iniciado: ${escapeHtml(health.incidentStartedAt ?? "N/D")}`,
+    critical
+      ? "📌 El fallo permanece aislado; el colector principal conserva prioridad."
+      : "📌 Se reintentará automáticamente sin comparar snapshots parciales.",
+  ].join("\n");
+}
+
+export async function notifyWatchdogHealthIfNeeded(health: WatchdogHealthState): Promise<boolean> {
+  if (!health.severity || !health.cause) return false;
+  try {
+    const rows = await getRecentWatchdogHealthAlerts(health.severity);
+    const history = parseHistory(rows, health.severity);
+    if (!shouldSendWatchdogHealthAlert({ health, history })) return false;
+
+    const message = formatWatchdogHealthAlert(health);
+    const alertId = await createPendingWatchdogHealthAlert({
+      severity: health.severity,
+      cause: health.cause,
+      message,
+    });
+    try {
+      const messageId = await sendTelegramMessage(message, "HTML");
+      await markWatchdogHealthAlertSent(alertId, messageId);
+      return true;
+    } catch (error) {
+      await markWatchdogHealthAlertFailed(alertId).catch((markError) => {
+        log.warn({ err: markError, alertId }, "No se pudo marcar alerta watchdog fallida");
+      });
+      log.warn({ err: error, alertId }, "No se pudo enviar alerta de salud watchdog");
+      return false;
+    }
+  } catch (error) {
+    // No enviar sin persistencia: evita duplicados si no se puede verificar cooldown.
+    log.warn({ err: error }, "No se pudo evaluar/persistir cooldown watchdog; alerta contenida");
+    return false;
+  }
+}
