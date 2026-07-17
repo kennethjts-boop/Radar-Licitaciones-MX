@@ -7,6 +7,8 @@ import {
 import {
   EMPTY_WATCHDOG_HEALTH,
   notifyWatchdogHealthIfNeeded,
+  formatWatchdogHealthAlert,
+  sanitizeFailureMessage,
   shouldSendWatchdogHealthAlert,
   transitionWatchdogHealth,
   type WatchdogHealthAlertHistory,
@@ -83,7 +85,7 @@ describe("salud y cooldown persistente watchdog", () => {
   it("aplica cooldown de 30 minutos por severidad aunque cambie la causa", () => {
     expect(shouldSendWatchdogHealthAlert({
       health: critical(),
-      history: [history({ cause: "UNKNOWN", sentAt: "2026-07-16T05:45:00.000Z" })],
+      history: [history({ cause: "SITE_STRUCTURE", sentAt: "2026-07-16T05:45:00.000Z" })],
       now: new Date("2026-07-16T06:00:00.000Z"),
     })).toBe(false);
   });
@@ -125,5 +127,26 @@ describe("salud y cooldown persistente watchdog", () => {
     mockedRecent.mockRejectedValue(new Error("alerts no disponible"));
     await expect(notifyWatchdogHealthIfNeeded(critical())).resolves.toBe(false);
     expect(mockedSend).not.toHaveBeenCalled();
+  });
+
+  it("incluye etapa, tipo y mensaje sanitizado sin secretos", () => {
+    const health = transitionWatchdogHealth(EMPTY_WATCHDOG_HEALTH, {
+      success: false,
+      cause: "SITE_STRUCTURE",
+      stage: "annex_pagination",
+      errorType: "TypeError<script>",
+      message: "HTTP 401 https://api.example/x?token=secreto Authorization=abc\nfalló",
+    });
+    const alert = formatWatchdogHealthAlert(health);
+
+    expect(alert).toContain("annex_pagination");
+    expect(alert).toContain("TypeError_script_");
+    expect(alert).toContain("?…");
+    expect(alert).not.toContain("secreto");
+    expect(alert).not.toContain("Authorization=abc");
+  });
+
+  it("limita mensajes de fallo para Telegram", () => {
+    expect(sanitizeFailureMessage("x".repeat(500))).toHaveLength(221);
   });
 });

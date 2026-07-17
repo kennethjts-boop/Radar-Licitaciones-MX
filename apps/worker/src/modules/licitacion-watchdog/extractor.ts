@@ -25,6 +25,9 @@ const DATA_CONTAINER_TIMEOUT_MS = 20_000;
 const DETAIL_DATA_SELECTOR = "app-sitiopublico-detalle-content .card label";
 const DOM_STABILITY_POLL_MS = 500;
 const DOM_STABILITY_TIMEOUT_MS = 15_000;
+const ANNEX_PAGE_TIMEOUT_MS = 20_000;
+const ANNEX_PAGINATOR_NEXT_SELECTOR =
+  "app-sitiopublico-detalle-anexos .p-paginator-next:not(.p-disabled)";
 
 interface ComprasMxEnvelope<T> {
   success?: boolean;
@@ -94,13 +97,21 @@ async function fetchAllAnnexGroups(
   const totalPages = firstPages[0]?.paginacion?.[0]?.total_paginas ?? 1;
   if (totalPages <= 1) return groups;
 
-  const headers = await firstResponse.request().allHeaders();
-  delete headers.host;
-  delete headers["content-length"];
+  // La API firma cada petición con headers anti-replay (grc/xgrc) que genera un
+  // interceptor de la propia app Angular; replicar la petición fuera del navegador
+  // devuelve HTTP 401. Las páginas siguientes se obtienen accionando el paginador
+  // real de anexos y capturando la respuesta que emite la aplicación.
+  const annexPathname = new URL(firstResponse.url()).pathname;
   for (let pageNumber = 2; pageNumber <= totalPages; pageNumber++) {
-    const url = new URL(firstResponse.url());
-    url.searchParams.set("page", String(pageNumber));
-    const response = await page.context().request.get(url.toString(), { headers });
+    const responsePromise = page.waitForResponse((response) => {
+      const parsed = new URL(response.url());
+      return parsed.pathname === annexPathname &&
+        parsed.searchParams.get("page") === String(pageNumber);
+    }, { timeout: ANNEX_PAGE_TIMEOUT_MS });
+    void responsePromise.catch(() => undefined);
+    await page.locator(ANNEX_PAGINATOR_NEXT_SELECTOR).first()
+      .click({ timeout: ANNEX_PAGE_TIMEOUT_MS });
+    const response = await responsePromise;
     if (!response.ok()) {
       throw new Error(`anexos ComprasMX página ${pageNumber}: HTTP ${response.status()}`);
     }
@@ -155,23 +166,42 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+export function watchdogErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message || "Error sin mensaje";
+  if (typeof error === "string") return error || "String vacío lanzado como error";
+  return "Valor no Error lanzado sin mensaje seguro";
+}
+
+export function watchdogErrorType(error: unknown): string {
+  if (error instanceof Error) return error.name?.trim() || "Error";
+  return typeof error === "string" ? "StringThrown" : "NonErrorThrown";
 }
 
 export function classifyWatchdogFailure(error: unknown): WatchdogFailureCause {
-  const message = errorMessage(error);
+  const message = watchdogErrorMessage(error);
+  const httpStatus = Number(message.match(/HTTP (\d{3})/)?.[1]);
+  if (Number.isFinite(httpStatus)) {
+    // 5xx y saturación son infraestructura del sitio; el resto de 4xx implica que
+    // cambió el contrato del sitio (auth, rutas, firma de peticiones).
+    return httpStatus >= 500 || httpStatus === 408 || httpStatus === 429
+      ? "NETWORK_INFRA"
+      : "SITE_STRUCTURE";
+  }
   if (
-    /net::ERR_ABORTED|timeout|timed out|Target page, context or browser has been closed|zygote|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|socket|network|browserType\.launch/i.test(message)
+    /net::ERR_ABORTED|timeout|timed out|Target page, context or browser has been closed|zygote|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|socket|network|fetch failed|browserType\.launch/i.test(message)
   ) {
     return "NETWORK_INFRA";
   }
-  if (/selector|container|DOM|hydrate|table/i.test(message)) return "SITE_STRUCTURE";
-  return "UNKNOWN";
+  if (
+    /selector|container|DOM|hydrate|table|paginator|Unauthorized|Acceso no permitido|respuesta sin data/i.test(message)
+  ) {
+    return "SITE_STRUCTURE";
+  }
+  return "APPLICATION_ERROR";
 }
 
 function isRetryableNavigationError(error: unknown): boolean {
-  return /net::ERR_ABORTED|timeout|timed out/i.test(errorMessage(error));
+  return /net::ERR_ABORTED|timeout|timed out/i.test(watchdogErrorMessage(error));
 }
 
 export interface NavigationResult {
@@ -341,7 +371,8 @@ export async function extractWatchdogSnapshot(input: {
         return partialSnapshot(input, {
           cause: classifyWatchdogFailure(navigation.error),
           stage: "navigation",
-          message: errorMessage(navigation.error),
+          errorType: watchdogErrorType(navigation.error),
+          message: watchdogErrorMessage(navigation.error),
           attempts: navigation.attempts,
         });
       }
@@ -370,7 +401,8 @@ export async function extractWatchdogSnapshot(input: {
         return partialSnapshot(input, {
           cause: classifyWatchdogFailure(failure),
           stage: "api_responses",
-          message: errorMessage(failure),
+          errorType: watchdogErrorType(failure),
+          message: watchdogErrorMessage(failure),
           attempts: navigation.attempts,
         });
       }
@@ -380,20 +412,33 @@ export async function extractWatchdogSnapshot(input: {
       const detail = assertSuccessful(detailEnvelope, "detalle ComprasMX");
       const annexPages = assertSuccessful(annexEnvelope, "anexos ComprasMX");
       const visible = await waitForStableVisibleSnapshot(page);
-      const annexGroups = await fetchAllAnnexGroups(page, annexResult.value, annexPages);
+      let annexGroups: AnexoGroup[];
+      try {
+        annexGroups = await fetchAllAnnexGroups(page, annexResult.value, annexPages);
+      } catch (error) {
+        return partialSnapshot(input, {
+          cause: classifyWatchdogFailure(error),
+          stage: "annex_pagination",
+          errorType: watchdogErrorType(error),
+          message: watchdogErrorMessage(error),
+          attempts: navigation.attempts,
+        }, visible);
+      }
       const documents = buildDocuments(annexGroups);
 
       const extractionFailure: WatchdogExtractionFailure | null = containerError
         ? {
             cause: "SITE_STRUCTURE",
             stage: "data_container",
-            message: errorMessage(containerError),
+            errorType: watchdogErrorType(containerError),
+            message: watchdogErrorMessage(containerError),
             attempts: navigation.attempts,
           }
         : visible.partial
           ? {
               cause: "SITE_STRUCTURE",
               stage: "dom_stability",
+              errorType: "DomStabilityError",
               message: "DOM no hidrató tablas estables dentro de 15s",
               attempts: navigation.attempts,
             }
@@ -433,7 +478,8 @@ export async function extractWatchdogSnapshot(input: {
     return partialSnapshot(input, {
       cause: classifyWatchdogFailure(error),
       stage: "browser_session",
-      message: errorMessage(error),
+      errorType: watchdogErrorType(error),
+      message: watchdogErrorMessage(error),
       attempts: 1,
     });
   }

@@ -41,6 +41,7 @@ describe("licitacion-watchdog snapshot diff", () => {
     failed.extractionFailure = {
       cause: "NETWORK_INFRA",
       stage: "navigation",
+      errorType: "Error",
       message: "net::ERR_ABORTED",
       attempts: 2,
     };

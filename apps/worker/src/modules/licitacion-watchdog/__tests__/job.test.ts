@@ -27,6 +27,10 @@ jest.mock("../collector-guard", () => ({
 jest.mock("../extractor", () => ({
   classifyWatchdogFailure: jest.fn().mockReturnValue("NETWORK_INFRA"),
   extractWatchdogSnapshot: jest.fn(),
+  watchdogErrorMessage: jest.fn((error: unknown) =>
+    error instanceof Error ? error.message : "Valor no Error lanzado sin mensaje seguro"),
+  watchdogErrorType: jest.fn((error: unknown) =>
+    error instanceof Error ? error.name : "NonErrorThrown"),
 }));
 jest.mock("../health", () => ({
   EMPTY_WATCHDOG_HEALTH: {
@@ -36,6 +40,9 @@ jest.mock("../health", () => ({
     incidentStartedAt: null,
     lastFailureAt: null,
     lastSuccessAt: null,
+    lastFailureStage: null,
+    lastFailureType: null,
+    lastFailureMessage: null,
   },
   notifyWatchdogHealthIfNeeded: jest.fn().mockResolvedValue(false),
   transitionWatchdogHealth: jest.fn((previous) => previous),
@@ -176,6 +183,39 @@ describe("licitacion-watchdog job structural guard", () => {
         status: "ok",
         results: expect.objectContaining({
           "PROC-1": expect.objectContaining({ status: "unchanged", hashMigrated: true }),
+        }),
+      }),
+    );
+  });
+
+  it("no compara ni persiste un snapshot parcial", async () => {
+    const partial = snapshot();
+    partial.partial = true;
+    partial.extractionFailure = {
+      cause: "SITE_STRUCTURE",
+      stage: "annex_pagination",
+      errorType: "Error",
+      message: "anexos ComprasMX página 2: HTTP 401",
+      attempts: 1,
+    };
+    mockedExtract.mockResolvedValue(partial);
+
+    await runLicitacionWatchdog(["PROC-1"]);
+
+    expect(mockedLatest).not.toHaveBeenCalled();
+    expect(mockedInsert).not.toHaveBeenCalled();
+    expect(mockedSend).not.toHaveBeenCalled();
+    expect(mockedSetState).toHaveBeenLastCalledWith(
+      "licitacion_watchdog_telemetry",
+      expect.objectContaining({
+        status: "error",
+        results: expect.objectContaining({
+          "PROC-1": expect.objectContaining({
+            status: "partial",
+            cause: "SITE_STRUCTURE",
+            stage: "annex_pagination",
+            errorType: "Error",
+          }),
         }),
       }),
     );

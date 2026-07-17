@@ -126,6 +126,28 @@ describe("navegación watchdog resiliente", () => {
       .toBe("NETWORK_INFRA");
   });
 
+  it("clasifica errores HTTP: 4xx como SITE_STRUCTURE y 5xx/408/429 como NETWORK_INFRA", () => {
+    expect(classifyWatchdogFailure(new Error("anexos ComprasMX página 2: HTTP 401")))
+      .toBe("SITE_STRUCTURE");
+    expect(classifyWatchdogFailure(new Error("anexos ComprasMX página 2: HTTP 403")))
+      .toBe("SITE_STRUCTURE");
+    expect(classifyWatchdogFailure(new Error("anexos ComprasMX página 3: HTTP 503")))
+      .toBe("NETWORK_INFRA");
+    expect(classifyWatchdogFailure(new Error("detalle ComprasMX: HTTP 429")))
+      .toBe("NETWORK_INFRA");
+  });
+
+  it("clasifica rechazos de auth del sitio como SITE_STRUCTURE, nunca UNKNOWN", () => {
+    expect(classifyWatchdogFailure(new Error("detalle ComprasMX: Unauthorized"))).toBe("SITE_STRUCTURE");
+    expect(classifyWatchdogFailure(new Error("Acceso no permitido."))).toBe("SITE_STRUCTURE");
+    expect(classifyWatchdogFailure(new Error("anexos ComprasMX página 2: respuesta sin data")))
+      .toBe("SITE_STRUCTURE");
+  });
+
+  it("clasifica errores imprevistos como APPLICATION_ERROR, nunca UNKNOWN", () => {
+    expect(classifyWatchdogFailure(new TypeError("fallo inesperado"))).toBe("APPLICATION_ERROR");
+  });
+
   it("cierra y liquida los waiters si la sesión falla antes de hidratar datos", async () => {
     const rejectWaiters: Array<(reason: Error) => void> = [];
     const waitForResponse = jest.fn(() => new Promise<never>((_resolve, reject) => {
@@ -150,6 +172,7 @@ describe("navegación watchdog resiliente", () => {
     expect(result.extractionFailure).toEqual(expect.objectContaining({
       cause: "NETWORK_INFRA",
       stage: "navigation",
+      errorType: "Error",
       attempts: 1,
     }));
     expect(page.close).toHaveBeenCalledTimes(1);

@@ -3,7 +3,12 @@ import { createModuleLogger } from "../../core/logger";
 import { nowISO } from "../../core/time";
 import { getState, setState, STATE_KEYS } from "../../core/system-state";
 import { shouldDeferWatchdogForCollector } from "./collector-guard";
-import { classifyWatchdogFailure, extractWatchdogSnapshot } from "./extractor";
+import {
+  classifyWatchdogFailure,
+  extractWatchdogSnapshot,
+  watchdogErrorMessage,
+  watchdogErrorType,
+} from "./extractor";
 import {
   EMPTY_WATCHDOG_HEALTH,
   notifyWatchdogHealthIfNeeded,
@@ -46,8 +51,9 @@ async function processExpediente(numeroProcedimiento: string): Promise<JsonObjec
     return {
       status: "partial",
       changes: 0,
-      cause: snapshot.extractionFailure?.cause ?? "UNKNOWN",
+      cause: snapshot.extractionFailure?.cause ?? "APPLICATION_ERROR",
       stage: snapshot.extractionFailure?.stage ?? "browser_session",
+      errorType: snapshot.extractionFailure?.errorType ?? "Error",
       error: snapshot.extractionFailure?.message ?? "Snapshot parcial sin causa disponible",
       deploymentSha: snapshot.deploymentSha ?? null,
     };
@@ -209,11 +215,13 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
       try {
         results[numeroProcedimiento] = await processExpediente(numeroProcedimiento);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = watchdogErrorMessage(err);
         results[numeroProcedimiento] = {
           status: "error",
           error: message,
           cause: classifyWatchdogFailure(err),
+          stage: "expediente_processing",
+          errorType: watchdogErrorType(err),
           deploymentSha,
         };
         log.error(
@@ -236,8 +244,18 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
     ) as JsonObject[];
     if (extractionFailures.length > 0) {
       const causes = extractionFailures.map((result) => String(result.cause) as WatchdogFailureCause);
-      const cause = causes.includes("NETWORK_INFRA") ? "NETWORK_INFRA" : causes[0] ?? "UNKNOWN";
-      currentHealth = transitionWatchdogHealth(currentHealth, { success: false, cause });
+      const cause = causes.includes("NETWORK_INFRA")
+        ? "NETWORK_INFRA"
+        : causes[0] ?? "APPLICATION_ERROR";
+      const primaryFailure = extractionFailures.find((result) => result.cause === cause) ??
+        extractionFailures[0];
+      currentHealth = transitionWatchdogHealth(currentHealth, {
+        success: false,
+        cause,
+        stage: typeof primaryFailure?.stage === "string" ? primaryFailure.stage : null,
+        errorType: typeof primaryFailure?.errorType === "string" ? primaryFailure.errorType : null,
+        message: typeof primaryFailure?.error === "string" ? primaryFailure.error : null,
+      });
     } else {
       currentHealth = transitionWatchdogHealth(currentHealth, { success: true });
     }
@@ -267,13 +285,19 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
     );
     currentHealth = transitionWatchdogHealth(
       currentHealth,
-      { success: false, cause: classifyWatchdogFailure(err) },
+      {
+        success: false,
+        cause: classifyWatchdogFailure(err),
+        stage: "watchdog_job",
+        errorType: watchdogErrorType(err),
+        message: watchdogErrorMessage(err),
+      },
     );
     await setState(STATE_KEYS.WATCHDOG_TELEMETRY, {
       status: "error",
       lastCheckedAt: nowISO(),
       lastSuccessfulCheckAt: null,
-      lastError: err instanceof Error ? err.message : String(err),
+      lastError: watchdogErrorMessage(err),
       configuredExpedientes: expedientes,
       deploymentSha,
       results,

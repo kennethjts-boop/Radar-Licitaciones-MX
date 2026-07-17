@@ -25,7 +25,33 @@ export const EMPTY_WATCHDOG_HEALTH: WatchdogHealthState = {
   incidentStartedAt: null,
   lastFailureAt: null,
   lastSuccessAt: null,
+  lastFailureStage: null,
+  lastFailureType: null,
+  lastFailureMessage: null,
 };
+
+const FAILURE_MESSAGE_MAX_LENGTH = 220;
+
+export function sanitizeFailureMessage(message: string | null | undefined): string | null {
+  if (!message) return null;
+  // Sin query strings (pueden llevar tokens/firmas) y sin saltos de línea.
+  const clean = message
+    .replace(/\?[^\s"']*/g, "?…")
+    .replace(/\b(Bearer)\s+\S+/gi, "$1 […]")
+    .replace(/\b(token|secret|password|authorization|api[_-]?key)\s*[=:]\s*[^\s,;]+/gi, "$1=[…]")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!clean) return null;
+  return clean.length > FAILURE_MESSAGE_MAX_LENGTH
+    ? `${clean.slice(0, FAILURE_MESSAGE_MAX_LENGTH)}…`
+    : clean;
+}
+
+function sanitizeFailureType(errorType: string | null | undefined): string | null {
+  if (!errorType) return null;
+  const clean = errorType.replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 80);
+  return clean || null;
+}
 
 export interface WatchdogHealthAlertHistory {
   severity: WatchdogHealthSeverity;
@@ -41,7 +67,8 @@ function escapeHtml(value: string): string {
 function parseCause(alertType: string): WatchdogFailureCause | null {
   if (alertType.endsWith("_network_infra")) return "NETWORK_INFRA";
   if (alertType.endsWith("_site_structure")) return "SITE_STRUCTURE";
-  if (alertType.endsWith("_unknown")) return "UNKNOWN";
+  // Compatibilidad con alertas previas; las nuevas nunca persisten UNKNOWN.
+  if (alertType.endsWith("_unknown")) return "APPLICATION_ERROR";
   return null;
 }
 
@@ -60,7 +87,15 @@ function parseHistory(
 
 export function transitionWatchdogHealth(
   previous: WatchdogHealthState | null | undefined,
-  outcome: { success: true } | { success: false; cause: WatchdogFailureCause },
+  outcome:
+    | { success: true }
+    | {
+        success: false;
+        cause: WatchdogFailureCause;
+        stage?: string | null;
+        errorType?: string | null;
+        message?: string | null;
+      },
   now = new Date(),
 ): WatchdogHealthState {
   const prior = { ...EMPTY_WATCHDOG_HEALTH, ...(previous ?? {}) };
@@ -73,6 +108,9 @@ export function transitionWatchdogHealth(
       severity: null,
       incidentStartedAt: null,
       lastSuccessAt: nowIso,
+      lastFailureStage: null,
+      lastFailureType: null,
+      lastFailureMessage: null,
     };
   }
 
@@ -85,6 +123,9 @@ export function transitionWatchdogHealth(
     severity: consecutiveFailures >= CRITICAL_AFTER_FAILURES ? "CRITICAL" : "DEGRADED",
     incidentStartedAt: sameIncident && prior.incidentStartedAt ? prior.incidentStartedAt : nowIso,
     lastFailureAt: nowIso,
+    lastFailureStage: outcome.stage ?? null,
+    lastFailureType: sanitizeFailureType(outcome.errorType),
+    lastFailureMessage: sanitizeFailureMessage(outcome.message),
   };
 }
 
@@ -122,7 +163,10 @@ export function formatWatchdogHealthAlert(health: WatchdogHealthState): string {
   return [
     `${critical ? "🔴" : "🟡"} <b>[${health.severity}] Licitación Watchdog</b>`,
     "",
-    `🧭 Causa consolidada: <code>${escapeHtml(health.cause ?? "UNKNOWN")}</code>`,
+    `🧭 Causa consolidada: <code>${escapeHtml(health.cause ?? "APPLICATION_ERROR")}</code>`,
+    `🧩 Etapa: <code>${escapeHtml(health.lastFailureStage ?? "N/D")}</code>`,
+    `🏷 Tipo: <code>${escapeHtml(health.lastFailureType ?? "Error")}</code>`,
+    `📝 Detalle: ${escapeHtml(health.lastFailureMessage ?? "N/D")}`,
     `📊 Fallos consecutivos: ${health.consecutiveFailures}`,
     `⏱ Incidente iniciado: ${escapeHtml(health.incidentStartedAt ?? "N/D")}`,
     critical

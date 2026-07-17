@@ -36,11 +36,18 @@ export interface WatchdogSnapshot extends JsonObject {
   visibleTables: VisibleTableSnapshot[];
 }
 
-export type WatchdogFailureCause = "NETWORK_INFRA" | "SITE_STRUCTURE" | "UNKNOWN";
+export type WatchdogFailureCause = "NETWORK_INFRA" | "SITE_STRUCTURE" | "APPLICATION_ERROR";
 
 export interface WatchdogExtractionFailure extends JsonObject {
   cause: WatchdogFailureCause;
-  stage: "browser_session" | "navigation" | "data_container" | "api_responses" | "dom_stability";
+  stage:
+    | "browser_session"
+    | "navigation"
+    | "data_container"
+    | "api_responses"
+    | "dom_stability"
+    | "annex_pagination";
+  errorType: string;
   message: string;
   attempts: number;
 }
@@ -54,6 +61,9 @@ export interface WatchdogHealthState extends JsonObject {
   incidentStartedAt: string | null;
   lastFailureAt: string | null;
   lastSuccessAt: string | null;
+  lastFailureStage: string | null;
+  lastFailureType: string | null;
+  lastFailureMessage: string | null;
 }
 
 export type WatchdogChangeKind = "added" | "removed" | "modified" | "document_added" | "document_removed";
