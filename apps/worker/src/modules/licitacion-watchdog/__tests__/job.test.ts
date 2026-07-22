@@ -5,6 +5,7 @@ import { notifyWatchdogHealthIfNeeded } from "../health";
 import { resetWatchdogLockForTests, runLicitacionWatchdog } from "../job";
 import {
   getLatestSnapshot,
+  getPendingSnapshots,
   insertSnapshot,
   markNotificationSent,
   resolveExpediente,
@@ -49,6 +50,7 @@ jest.mock("../health", () => ({
 }));
 jest.mock("../repository", () => ({
   getLatestSnapshot: jest.fn(),
+  getPendingSnapshots: jest.fn().mockResolvedValue([]),
   insertSnapshot: jest.fn(),
   markNotificationSent: jest.fn().mockResolvedValue(undefined),
   resolveExpediente: jest.fn(),
@@ -57,6 +59,7 @@ jest.mock("../telegram", () => ({ sendPendingNotification: jest.fn() }));
 
 const mockedExtract = jest.mocked(extractWatchdogSnapshot);
 const mockedLatest = jest.mocked(getLatestSnapshot);
+const mockedPending = jest.mocked(getPendingSnapshots);
 const mockedInsert = jest.mocked(insertSnapshot);
 const mockedMarkSent = jest.mocked(markNotificationSent);
 const mockedResolve = jest.mocked(resolveExpediente);
@@ -121,6 +124,7 @@ describe("licitacion-watchdog job structural guard", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockedGetState.mockResolvedValue(null);
+    mockedPending.mockResolvedValue([]);
     mockedGuard.mockResolvedValue({ defer: false, reason: null });
     resetWatchdogLockForTests();
     mockedResolve.mockResolvedValue({
@@ -139,7 +143,14 @@ describe("licitacion-watchdog job structural guard", () => {
     inserted.id = "confirmed-id";
     inserted.detected_changes.notification = { kind: "change", status: "pending" };
     mockedInsert.mockResolvedValue(inserted);
-    mockedSend.mockResolvedValue(321);
+    const receipt = {
+      messageId: 321,
+      chatId: "-100123",
+      chatType: "supergroup",
+      chatTitle: "Radar",
+      chatUsername: null,
+    };
+    mockedSend.mockResolvedValue(receipt);
 
     await runLicitacionWatchdog(["PROC-1"]);
 
@@ -163,7 +174,32 @@ describe("licitacion-watchdog job structural guard", () => {
       structuralConfirmation: expect.objectContaining({ captures: 2 }),
     }));
     expect(mockedSend).toHaveBeenCalledWith(inserted);
-    expect(mockedMarkSent).toHaveBeenCalledWith(inserted, 321);
+    expect(mockedMarkSent).toHaveBeenCalledWith(inserted, receipt);
+  });
+
+  it("reintenta notificaciones históricas pendientes antes de extraer", async () => {
+    const pending = row(snapshot());
+    pending.id = "pending-old";
+    pending.detected_changes.notification = { kind: "change", status: "pending" };
+    const receipt = {
+      messageId: 654,
+      chatId: "-100123",
+      chatType: "supergroup",
+      chatTitle: "Radar",
+      chatUsername: null,
+    };
+    mockedPending.mockResolvedValue([pending]);
+    mockedSend.mockResolvedValue(receipt);
+    mockedExtract.mockResolvedValue(snapshot());
+    mockedLatest.mockResolvedValue(row(snapshot()));
+
+    await runLicitacionWatchdog(["PROC-1"]);
+
+    expect(mockedSend).toHaveBeenNthCalledWith(1, pending);
+    expect(mockedMarkSent).toHaveBeenCalledWith(pending, receipt);
+    expect(mockedSend.mock.invocationCallOrder[0]).toBeLessThan(
+      mockedExtract.mock.invocationCallOrder[0],
+    );
   });
 
   it("trata como unchanged un baseline válido con hash de la versión anterior", async () => {

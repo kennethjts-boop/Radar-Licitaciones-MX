@@ -16,6 +16,7 @@ import {
 } from "./health";
 import {
   getLatestSnapshot,
+  getPendingSnapshots,
   insertSnapshot,
   markNotificationSent,
   resolveExpediente,
@@ -36,11 +37,17 @@ const log = createModuleLogger("licitacion-watchdog:job");
 let inFlight = false;
 
 async function notifyPending(row: WatchdogSnapshotRow): Promise<void> {
-  const messageId = await sendPendingNotification(row);
-  await markNotificationSent(row, messageId);
+  const receipt = await sendPendingNotification(row);
+  await markNotificationSent(row, receipt);
 }
 
 async function processExpediente(numeroProcedimiento: string): Promise<JsonObject> {
+  // Drenar primero toda la cola histórica en orden. Antes solo se reintentaba el
+  // snapshot más reciente; si aparecía otro cambio entre intentos, el anterior
+  // podía quedar pendiente para siempre.
+  const pending = await getPendingSnapshots(numeroProcedimiento);
+  for (const row of pending) await notifyPending(row);
+
   const resolved = await resolveExpediente(numeroProcedimiento);
   const snapshot = await extractWatchdogSnapshot({ numeroProcedimiento, ...resolved });
   if (snapshot.partial !== false) {

@@ -44,6 +44,14 @@ export interface TelegramSendErrorDetails {
   summary: string;
 }
 
+export interface TelegramDeliveryReceipt {
+  messageId: number;
+  chatId: string;
+  chatType: string | null;
+  chatTitle: string | null;
+  chatUsername: string | null;
+}
+
 function toErrorSummary(err: unknown): string {
   if (err instanceof AggregateError) {
     const parts = err.errors
@@ -326,18 +334,20 @@ export function formatAiVipAlertMessage(payload: AiVipAlertPayload): string | nu
 
 // ─── Envío base ──────────────────────────────────────────────────────────────
 
-export async function sendTelegramMessage(
+export async function sendTelegramMessageWithReceipt(
   text: string,
   parseMode: "Markdown" | "HTML" = "HTML",
-): Promise<number | null> {
+  destinationChatId?: string,
+): Promise<TelegramDeliveryReceipt> {
   const config = getConfig();
   const bot = getBot();
+  const chatId = destinationChatId ?? config.TELEGRAM_CHAT_ID;
 
   try {
     const msg = await withRetries(
       () =>
         withTimeout(
-          bot.sendMessage(config.TELEGRAM_CHAT_ID, text, {
+          bot.sendMessage(chatId, text, {
             parse_mode: parseMode,
             disable_web_page_preview: true,
           } as TelegramBot.SendMessageOptions),
@@ -371,15 +381,22 @@ export async function sendTelegramMessage(
         "No se pudo registrar telemetría de Telegram sendMessage exitoso",
       );
     });
+    const receipt: TelegramDeliveryReceipt = {
+      messageId: msg.message_id,
+      chatId: String(msg.chat?.id ?? chatId),
+      chatType: msg.chat?.type ?? null,
+      chatTitle: "title" in msg.chat ? msg.chat.title ?? null : null,
+      chatUsername: "username" in msg.chat ? msg.chat.username ?? null : null,
+    };
     void writeTelegramLog({
       command: "sendMessage",
       requestPayload: { parseMode, textLength: text.length },
-      responsePayload: { messageId: msg.message_id },
+      responsePayload: { ...receipt },
       status: "ok",
     }).catch((telemetryError) => {
       log.warn({ err: telemetryError }, "No se pudo escribir éxito en telegram_logs");
     });
-    return msg.message_id;
+    return receipt;
   } catch (err) {
     const details = describeTelegramSendError(err);
     await recordTelegramSendFailure(err).catch((telemetryError) => {
@@ -416,6 +433,15 @@ export async function sendTelegramMessage(
     });
     throw new TelegramError(formatTelegramFailureMessage(details), { ...details });
   }
+}
+
+export async function sendTelegramMessage(
+  text: string,
+  parseMode: "Markdown" | "HTML" = "HTML",
+  destinationChatId?: string,
+): Promise<number | null> {
+  const receipt = await sendTelegramMessageWithReceipt(text, parseMode, destinationChatId);
+  return receipt.messageId;
 }
 
 export async function sendTelegramDocument(

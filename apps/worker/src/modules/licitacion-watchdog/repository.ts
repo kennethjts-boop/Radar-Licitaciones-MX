@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { getSupabaseClient } from "../../storage/client";
 import { nowISO } from "../../core/time";
+import type { TelegramDeliveryReceipt } from "../../alerts/telegram.alerts";
 import type {
   StoredDetectedChanges,
   StructuralConfirmation,
@@ -62,6 +63,19 @@ export async function getLatestSnapshot(numeroProcedimiento: string): Promise<Wa
   return data as WatchdogSnapshotRow | null;
 }
 
+export async function getPendingSnapshots(numeroProcedimiento: string): Promise<WatchdogSnapshotRow[]> {
+  const { data, error } = await getSupabaseClient()
+    .from("watchdog_snapshots")
+    .select("*")
+    .eq("numero_procedimiento", numeroProcedimiento)
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) throw new Error(`No se pudieron leer notificaciones watchdog pendientes: ${error.message}`);
+  return ((data ?? []) as WatchdogSnapshotRow[])
+    .filter((row) => row.detected_changes?.notification?.status === "pending")
+    .reverse();
+}
+
 export async function getLastChangedSnapshot(numeroProcedimiento: string): Promise<WatchdogSnapshotRow | null> {
   const { data, error } = await getSupabaseClient()
     .from("watchdog_snapshots")
@@ -108,13 +122,20 @@ export async function insertSnapshot(input: {
   return data as WatchdogSnapshotRow;
 }
 
-export async function markNotificationSent(row: WatchdogSnapshotRow, messageId: number | null): Promise<void> {
+export async function markNotificationSent(
+  row: WatchdogSnapshotRow,
+  receipt: TelegramDeliveryReceipt,
+): Promise<void> {
   const detectedChanges: StoredDetectedChanges = {
     ...row.detected_changes,
     notification: {
       ...row.detected_changes.notification,
       status: "sent",
-      messageId,
+      messageId: receipt.messageId,
+      chatId: receipt.chatId,
+      chatType: receipt.chatType,
+      chatTitle: receipt.chatTitle,
+      chatUsername: receipt.chatUsername,
       sentAt: nowISO(),
     },
   };

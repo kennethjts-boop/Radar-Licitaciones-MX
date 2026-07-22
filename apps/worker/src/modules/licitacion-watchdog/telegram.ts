@@ -1,4 +1,7 @@
-import { sendTelegramMessage } from "../../alerts/telegram.alerts";
+import {
+  sendTelegramMessageWithReceipt,
+  type TelegramDeliveryReceipt,
+} from "../../alerts/telegram.alerts";
 import { formatMexicoDate } from "../../core/time";
 import type { JsonValue, WatchdogChange, WatchdogSnapshotRow } from "./types";
 
@@ -197,13 +200,14 @@ export function formatChangeMessages(row: WatchdogSnapshotRow): string[] {
   ].join("\n"));
 }
 
-export async function sendPendingNotification(row: WatchdogSnapshotRow): Promise<number | null> {
+export async function sendPendingNotification(row: WatchdogSnapshotRow): Promise<TelegramDeliveryReceipt> {
   const messages = row.detected_changes.notification.kind === "baseline"
     ? [formatBaselineMessage(row)]
     : formatChangeMessages(row);
-  let lastMessageId: number | null = null;
+  let lastReceipt: TelegramDeliveryReceipt | null = null;
   for (const message of messages) {
-    lastMessageId = await sendTelegramMessage(message, "HTML");
+    lastReceipt = await sendTelegramMessageWithReceipt(message, "HTML");
   }
-  return lastMessageId;
+  if (!lastReceipt) throw new Error("Notificación watchdog vacía; no existe comprobante de entrega");
+  return lastReceipt;
 }

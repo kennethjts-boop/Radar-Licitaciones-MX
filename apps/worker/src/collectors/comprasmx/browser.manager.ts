@@ -40,6 +40,8 @@ export class BrowserManager {
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
+        "--no-zygote",
+        "--single-process",
         "--disable-dev-shm-usage", // Crucial para evitar OOM crashes en Docker
         "--disable-gpu",
         "--disable-blink-features=AutomationControlled",

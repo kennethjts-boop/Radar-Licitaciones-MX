@@ -80,6 +80,10 @@ export interface NotificationState {
   kind: "baseline" | "baseline_completed" | "change";
   status: "pending" | "sent";
   messageId?: number | null;
+  chatId?: string | null;
+  chatType?: string | null;
+  chatTitle?: string | null;
+  chatUsername?: string | null;
   sentAt?: string;
   deploymentSha?: string | null;
 }
