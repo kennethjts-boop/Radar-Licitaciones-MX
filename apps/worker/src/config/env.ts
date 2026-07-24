@@ -107,6 +107,22 @@ const envSchema = z.object({
     .default("0.25")
     .transform(Number)
     .pipe(z.number().min(0).max(1)),
+  TELEGRAM_ADMIN_CHAT_IDS: z.string().default(""),
+  PAUSE_DEFAULT_MINUTES: z
+    .string()
+    .default("60")
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(10_080)),
+  SATURATION_WINDOW_DAYS: z
+    .string()
+    .default("7")
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(90)),
+  SATURATION_MIN_SAMPLES: z
+    .string()
+    .default("20")
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(10_000)),
 
   // Watchdog de expedientes específicos (módulo aislado del colector principal)
   WATCHDOG_EXPEDIENTES: z
@@ -306,6 +322,11 @@ export function getConfig(): AppConfig {
       TELEGRAM_COMMAND_BOT_ENABLED: result.data.TELEGRAM_COMMAND_BOT_ENABLED,
       TELEGRAM_COMMANDS_ENABLED: result.data.TELEGRAM_COMMANDS_ENABLED,
       TELEGRAM_POLLING_ENABLED: result.data.TELEGRAM_POLLING_ENABLED,
+      TELEGRAM_ADMIN_COMMANDS_ENABLED:
+        result.data.TELEGRAM_ADMIN_CHAT_IDS.trim().length > 0,
+      PAUSE_DEFAULT_MINUTES: result.data.PAUSE_DEFAULT_MINUTES,
+      SATURATION_WINDOW_DAYS: result.data.SATURATION_WINDOW_DAYS,
+      SATURATION_MIN_SAMPLES: result.data.SATURATION_MIN_SAMPLES,
       WATCHDOG_EXPEDIENTES: result.data.WATCHDOG_EXPEDIENTES,
       WATCHDOG_INTERVAL_MINUTES: result.data.WATCHDOG_INTERVAL_MINUTES,
       CIRCUIT_FAILURE_THRESHOLD: result.data.CIRCUIT_FAILURE_THRESHOLD,

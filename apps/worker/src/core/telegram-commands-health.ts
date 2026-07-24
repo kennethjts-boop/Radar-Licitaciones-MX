@@ -1,4 +1,9 @@
-import type { AppConfig } from "../config/env";
+import { getConfig, type AppConfig } from "../config/env";
+import { adminCommandsEnabled } from "../modules/control/authorization";
+import {
+  appendVerdict,
+  determineVerdict,
+} from "../modules/alerting/verdict";
 import { healthTracker } from "./healthcheck";
 import { createModuleLogger } from "./logger";
 import { getState, setState, STATE_KEYS } from "./system-state";
@@ -293,7 +298,7 @@ function alertMessage(
   failures: number,
 ): string {
   const windowMinutes = Math.round(getTelegramPollingTuning().failureWindowMs / 60_000);
-  return [
+  const base = [
     "🟡 <b>[DEGRADADO] Telegram commands</b>",
     "",
     "📌 El módulo de comandos tuvo errores de polling.",
@@ -304,6 +309,20 @@ function alertMessage(
     `📊 Fallos en ventana de ${windowMinutes} min: ${failures}`,
     `📌 Acción sugerida: ${escapeHtml(diagnosis.recommendedAction)}`,
   ].join("\n");
+  const config = getConfig();
+  const verdict = determineVerdict({
+    source: "telegram_polling",
+    consecutiveFailures: failures,
+    message: diagnosis.technicalReason,
+    httpStatus: diagnosis.statusCode,
+    telegramConflict: diagnosis.kind === "telegram_conflict",
+    defaultPauseMinutes: config.PAUSE_DEFAULT_MINUTES,
+  });
+  return appendVerdict(
+    base,
+    verdict,
+    adminCommandsEnabled(config.TELEGRAM_ADMIN_CHAT_IDS),
+  );
 }
 
 function recoveryMessage(): string {

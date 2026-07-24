@@ -14,6 +14,7 @@ import {
   type WatchdogHealthAlertHistory,
 } from "../health";
 import type { WatchdogHealthState } from "../types";
+import { getSaturationAnalysis } from "../../alerting/saturation";
 
 jest.mock("../../../alerts/telegram.alerts", () => ({
   sendTelegramMessage: jest.fn(),
@@ -24,11 +25,15 @@ jest.mock("../repository", () => ({
   markWatchdogHealthAlertFailed: jest.fn(),
   markWatchdogHealthAlertSent: jest.fn(),
 }));
+jest.mock("../../alerting/saturation", () => ({
+  getSaturationAnalysis: jest.fn(),
+}));
 
 const mockedSend = jest.mocked(sendTelegramMessage);
 const mockedCreate = jest.mocked(createPendingWatchdogHealthAlert);
 const mockedRecent = jest.mocked(getRecentWatchdogHealthAlerts);
 const mockedMarkSent = jest.mocked(markWatchdogHealthAlertSent);
+const mockedSaturation = jest.mocked(getSaturationAnalysis);
 
 function critical(overrides: Partial<WatchdogHealthState> = {}): WatchdogHealthState {
   return {
@@ -59,6 +64,15 @@ describe("salud y cooldown persistente watchdog", () => {
     mockedCreate.mockResolvedValue("alert-1");
     mockedSend.mockResolvedValue(42);
     mockedMarkSent.mockResolvedValue(undefined);
+    mockedSaturation.mockResolvedValue({
+      currentHour: 10,
+      sampleCount: 0,
+      sufficient: false,
+      peakHours: [],
+      isPeakHour: false,
+      isAnomalous: false,
+      message: "Sin patrón histórico suficiente.",
+    });
   });
 
   it("eleva a CRITICAL exactamente en el cuarto fallo consecutivo", () => {
@@ -119,6 +133,7 @@ describe("salud y cooldown persistente watchdog", () => {
       cause: "NETWORK_INFRA",
     }));
     expect(mockedSend).toHaveBeenCalledWith(expect.stringContaining("Fallos consecutivos: 4"), "HTML");
+    expect(mockedSend).toHaveBeenCalledWith(expect.stringContaining("🎯 VEREDICTO:"), "HTML");
     expect(mockedMarkSent).toHaveBeenCalledWith("alert-1", 42);
     expect(mockedCreate.mock.invocationCallOrder[0]).toBeLessThan(mockedSend.mock.invocationCallOrder[0]);
   });

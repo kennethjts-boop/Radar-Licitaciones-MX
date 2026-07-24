@@ -26,6 +26,7 @@ import {
   isTelegramCommandsPollingEnabled,
   recordTelegramCommandsStartup,
 } from "./core/telegram-commands-health";
+import { getEffectivePause } from "./modules/control/pause-state";
 
 async function main(): Promise<void> {
   // ── 1. Configuración y logger ─────────────────────────────────────────────
@@ -154,13 +155,36 @@ async function main(): Promise<void> {
 
   // ── 6. FORCE_COLLECT: ciclo inmediato pre-scheduler ──────────────────────
   if (process.env.FORCE_COLLECT === "true") {
-    log.info("⚡ FORCE_COLLECT=true — ejecutando ciclo de colección inmediato...");
+    let forceCollectAllowed = false;
     try {
-      const { runCollectJob } = await import("./jobs/collect.job");
-      await runCollectJob();
-      log.info("✅ FORCE_COLLECT ciclo completado");
+      const pause = await getEffectivePause("collector");
+      if (pause.paused) {
+        log.info(
+          {
+            effectiveScope: pause.effectiveScope,
+            resumeAt: pause.entry?.resumeAt ?? null,
+          },
+          "[PAUSA] FORCE_COLLECT omitido por pausa manual",
+        );
+      } else {
+        forceCollectAllowed = true;
+      }
     } catch (err) {
-      log.error({ err }, "❌ Error en FORCE_COLLECT ciclo");
+      log.error(
+        { err },
+        "[PAUSA] No se pudo verificar la pausa; FORCE_COLLECT omitido por seguridad",
+      );
+    }
+
+    if (forceCollectAllowed) {
+      log.info("⚡ FORCE_COLLECT=true — ejecutando ciclo de colección inmediato...");
+      try {
+        const { runCollectJob } = await import("./jobs/collect.job");
+        await runCollectJob();
+        log.info("✅ FORCE_COLLECT ciclo completado");
+      } catch (err) {
+        log.error({ err }, "❌ Error en FORCE_COLLECT ciclo");
+      }
     }
   }
 

@@ -32,6 +32,27 @@ import {
   recordTelegramPollingSuccess,
 } from "../core/telegram-commands-health";
 import { telegramBotConstructorOptions } from "../core/telegram-client-options";
+import {
+  getEffectivePause,
+  getPauseState,
+  pauseScope,
+  resumeScopes,
+  type PauseEntry,
+  type PauseScope,
+  type RadarPauseState,
+} from "../modules/control/pause-state";
+import {
+  adminCommandsEnabled,
+  isAuthorizedAdmin,
+} from "../modules/control/authorization";
+import {
+  allCircuits,
+  resetEndpointCircuits,
+} from "../modules/resilience/circuit-breaker";
+import { comprasMxCB } from "../core/circuit-breaker";
+import { getSaturationAnalysis } from "../modules/alerting/saturation";
+import { formatPausedInformation } from "../modules/alerting/verdict";
+import type { WatchdogTelemetry } from "../modules/licitacion-watchdog/types";
 
 const log = createModuleLogger("commands");
 const MANUAL_SCAN_TIMEOUT_MS = 30 * 60 * 1000;
@@ -446,6 +467,115 @@ export function isManualScanOkStatus(status: string): boolean {
   return status === "success" || status === "empty_result";
 }
 
+function pauseDeadline(entry: PauseEntry): string {
+  if (!entry.resumeAt) return "indefinidamente";
+  return formatMexicoDate(entry.resumeAt, "dd/MM HH:mm");
+}
+
+function pauseMinutesRemaining(entry: PauseEntry, now = new Date()): string {
+  if (!entry.resumeAt) return "indefinida";
+  const minutes = Math.max(
+    0,
+    Math.ceil((Date.parse(entry.resumeAt) - now.getTime()) / 60_000),
+  );
+  return `${minutes} min`;
+}
+
+function pauseStatusLines(state: RadarPauseState): string[] {
+  const entries = (["all", "watchdog", "collector"] as const)
+    .flatMap((scope) => {
+      const entry = state.scopes[scope];
+      return entry
+        ? [
+            `  • <b>${scope}</b>: pausado ${pauseMinutesRemaining(entry)} | hasta ${pauseDeadline(entry)}`,
+          ]
+        : [];
+    });
+  return entries.length > 0
+    ? ["⏸ <b>Pausas manuales:</b>", ...entries]
+    : ["▶️ <b>Pausas manuales:</b> ninguna"];
+}
+
+function circuitStatusLines(): string[] {
+  const circuits = allCircuits();
+  if (circuits.length === 0) {
+    return ["⚡ <b>Circuitos watchdog:</b> sin endpoints registrados"];
+  }
+  return [
+    "⚡ <b>Circuitos watchdog:</b>",
+    ...circuits.map((circuit) => {
+      const remaining = circuit.state === "OPEN"
+        ? ` | reintento ${Math.ceil(circuit.msUntilRetry / 60_000)} min`
+        : "";
+      const reopened = circuit.reopenedFromHalfOpen
+        ? " | reabierto tras sondeo"
+        : "";
+      return `  • <code>${escapeHtml(circuit.key)}</code>: <b>${circuit.state}</b> | fallos ${circuit.consecutiveFailures} | aperturas ${circuit.openCount}${remaining}${reopened}`;
+    }),
+  ];
+}
+
+async function authorizeWriteCommand(
+  bot: TelegramBot,
+  msg: TelegramBot.Message,
+): Promise<boolean> {
+  const config = getConfig();
+  const responseChatId = String(msg.chat.id);
+  if (!adminCommandsEnabled(config.TELEGRAM_ADMIN_CHAT_IDS)) {
+    log.warn(
+      { command: msg.text, userId: msg.from?.id ?? null },
+      "Comando de escritura rechazado: TELEGRAM_ADMIN_CHAT_IDS vacío",
+    );
+    await bot.sendMessage(
+      responseChatId,
+      "🔒 Los comandos de escritura están deshabilitados. Configura TELEGRAM_ADMIN_CHAT_IDS para habilitarlos.",
+    ).catch(() => {});
+    return false;
+  }
+  if (!isAuthorizedAdmin(msg.from?.id, config.TELEGRAM_ADMIN_CHAT_IDS)) {
+    log.warn(
+      {
+        command: msg.text,
+        userId: msg.from?.id ?? null,
+        chatId: msg.chat.id,
+      },
+      "Intento de comando de escritura por remitente no autorizado",
+    );
+    await bot.sendMessage(
+      responseChatId,
+      "⛔ No estás autorizado para pausar, reanudar o forzar ejecuciones del radar.",
+    ).catch(() => {});
+    return false;
+  }
+  return true;
+}
+
+function resetCircuitsForScope(scope: PauseScope | undefined): void {
+  if (scope === undefined || scope === "all" || scope === "watchdog") {
+    resetEndpointCircuits();
+  }
+  if (scope === undefined || scope === "all" || scope === "collector") {
+    comprasMxCB.recordSuccess();
+  }
+}
+
+async function pausedConfirmationPrompt(
+  bot: TelegramBot,
+  msg: TelegramBot.Message,
+  command: "scan" | "recuperar",
+): Promise<boolean> {
+  const state = await getPauseState();
+  const entry = state.scopes.all ??
+    state.scopes.collector ??
+    state.scopes.watchdog;
+  if (!entry) return false;
+  await bot.sendMessage(
+    String(msg.chat.id),
+    `⚠️ El radar está pausado hasta ${pauseDeadline(entry)}. ¿Ejecutar de todos modos?\nEnvía /${command} confirmar`,
+  ).catch(() => {});
+  return true;
+}
+
 // ─── Registro de comandos ─────────────────────────────────────────────────────
 
 function registerCommands(bot: TelegramBot, chatId: string): void {
@@ -474,6 +604,11 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       const telegramCommandsState = await getState<Record<string, unknown>>(
         STATE_KEYS.TELEGRAM_COMMANDS_TELEMETRY,
       );
+      const watchdogTelemetry = await getState<WatchdogTelemetry>(
+        STATE_KEYS.WATCHDOG_TELEMETRY,
+      );
+      const pauseState = await getPauseState();
+      const saturation = await getSaturationAnalysis();
       const lastAlert = await getLastSentAlert().catch((err) => {
         log.warn({ err }, "No se pudo leer última alerta enviada");
         return null;
@@ -568,6 +703,10 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `📡 Scheduler: <b>${status.schedulerStatus === "active" || schedulerState?.status === "active" ? "✅ Activo" : "⏳ Iniciando"}</b>`,
         `🧾 Resumen 7am: <b>${escapeHtml(dailySummaryDisplay)}</b>`,
         `🛰 Radares: <b>${radars.length} activos</b>`,
+        ...pauseStatusLines(pauseState),
+        ...circuitStatusLines(),
+        `🐕 Watchdog: <b>${escapeHtml(watchdogTelemetry?.status ?? "sin ejecución")}</b> | Último: <b>${formatTelemetryDate(watchdogTelemetry?.lastCheckedAt)}</b>`,
+        `📈 Saturación: <b>${escapeHtml(saturation.message)}</b> | Muestras: <b>${saturation.sampleCount}</b>${saturation.sufficient ? ` | Horas pico: <b>${saturation.peakHours.map((hour) => `${String(hour).padStart(2, "0")}:00`).join(", ")}</b>` : ""}`,
         `💼 Motor comercial: <b>${config.COMMERCIAL_MATCHING_ENABLED ? "activo" : "inactivo"}</b> | Candidatos: <b>${numberField(commercialState, "commercialCandidates")}</b> | Matches perfiles: <b>${numberField(commercialState, "matchedProfiles")}</b>`,
         ...externalStatusLines,
         "",
@@ -806,17 +945,99 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     }
   });
 
+  // ── /pausa ─────────────────────────────────────────────────────────────
+  bot.onText(
+    /\/pausa(?:\s+(all|watchdog|collector))?(?:\s+(\d+))?\s*$/i,
+    async (msg, match) => {
+      if (!(await authorizeWriteCommand(bot, msg))) return;
+      const scope = (match?.[1]?.toLowerCase() ?? "all") as PauseScope;
+      const rawMinutes = match?.[2];
+      const minutes = rawMinutes ? Number(rawMinutes) : null;
+      const responseChatId = String(msg.chat.id);
+      if (
+        minutes !== null &&
+        (!Number.isInteger(minutes) || minutes < 1 || minutes > 10_080)
+      ) {
+        await bot.sendMessage(
+          responseChatId,
+          "❌ Los minutos deben ser un entero entre 1 y 10080.",
+        ).catch(() => {});
+        return;
+      }
+
+      try {
+        const state = await pauseScope({
+          scope,
+          minutes,
+          reason: "Pausa solicitada desde Telegram",
+          pausedBy: String(msg.from?.id),
+        });
+        const entry = state.scopes[scope];
+        if (!entry) throw new Error("La pausa persistida no contiene el scope solicitado");
+        await bot.sendMessage(
+          responseChatId,
+          formatPausedInformation({
+            scope,
+            resumeAt: entry.resumeAt,
+            reason: entry.reason,
+            adminCommandsAreEnabled: true,
+          }),
+        ).catch(() => {});
+      } catch (err) {
+        log.error(
+          { err, scope, userId: msg.from?.id ?? null, suppressTelegram: true },
+          "No se pudo persistir pausa solicitada por Telegram",
+        );
+        await bot.sendMessage(
+          responseChatId,
+          "❌ No se pudo persistir la pausa. El radar SIGUE ACTIVO. Reintenta.",
+        ).catch(() => {});
+      }
+    },
+  );
+
+  // ── /reanudar ──────────────────────────────────────────────────────────
+  bot.onText(/\/reanudar(?:\s+(all|watchdog|collector))?\s*$/i, async (msg, match) => {
+    if (!(await authorizeWriteCommand(bot, msg))) return;
+    const scope = match?.[1]?.toLowerCase() as PauseScope | undefined;
+    const responseChatId = String(msg.chat.id);
+    try {
+      await resumeScopes(scope);
+      resetCircuitsForScope(scope);
+      await bot.sendMessage(
+        responseChatId,
+        [
+          `▶️ Radar reanudado: ${scope ?? "todos los scopes"}.`,
+          "Los circuitos y contadores del scope reanudado quedaron limpios.",
+          "Para volver a detenerlo: /pausa 60",
+        ].join("\n"),
+      ).catch(() => {});
+    } catch (err) {
+      log.error(
+        { err, scope: scope ?? "all", userId: msg.from?.id ?? null, suppressTelegram: true },
+        "No se pudo persistir reanudación solicitada por Telegram",
+      );
+      await bot.sendMessage(
+        responseChatId,
+        "❌ No se pudo persistir la reanudación. La pausa SIGUE ACTIVA. Reintenta.",
+      ).catch(() => {});
+    }
+  });
+
   // ── /scan ──────────────────────────────────────────────────────────────
-  bot.onText(/\/scan/, async (msg) => {
+  bot.onText(/\/scan(?:\s+(confirmar))?\s*$/i, async (msg, match) => {
     const chatIdPartial = String(msg.chat.id).slice(-4);
     log.info({ command: "/scan", chatIdPartial, from: msg.from?.username }, "command_received");
-    if (String(msg.chat.id) !== chatId) return;
+    if (!(await authorizeWriteCommand(bot, msg))) return;
+    const responseChatId = String(msg.chat.id);
+    const confirmed = match?.[1]?.toLowerCase() === "confirmar";
+    if (!confirmed && await pausedConfirmationPrompt(bot, msg, "scan")) return;
     log.info({ from: msg.from?.username }, "📥 /scan");
 
     try {
       if (manualScanInFlight) {
         await bot.sendMessage(
-          chatId,
+          responseChatId,
           "⏳ Ya hay un escaneo manual en curso. Usa /debug_resumen para ver el último estado registrado.",
         ).catch(() => {});
         return;
@@ -824,7 +1045,7 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
 
       const { runCollectJob } = await import("../jobs/collect.job");
       await bot.sendMessage(
-        chatId,
+        responseChatId,
         "🚀 Escaneo manual de ComprasMX iniciado. Te aviso al terminar o si se bloquea.",
       ).catch(() => {});
 
@@ -838,7 +1059,7 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
 
           if (result.status === "skipped") {
             await bot.sendMessage(
-              chatId,
+              responseChatId,
               `⏳ <b>Escaneo no iniciado</b>\nMotivo: <code>${escapeHtml(result.reason ?? result.stopReason ?? "ciclo activo")}</code>`,
               { parse_mode: "HTML" },
             ).catch(() => {});
@@ -859,7 +1080,7 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
             result.errorMessage ? `⚠️ Error: <code>${escapeHtml(result.errorMessage).slice(0, 240)}</code>` : "",
           ];
 
-          await bot.sendMessage(chatId, lines.filter(Boolean).join("\n"), {
+          await bot.sendMessage(responseChatId, lines.filter(Boolean).join("\n"), {
             parse_mode: "HTML",
             disable_web_page_preview: true,
           }).catch(() => {});
@@ -867,7 +1088,7 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
           const message = err instanceof Error ? err.message : String(err);
           log.error({ err }, "Error en ejecución de /scan");
           await bot.sendMessage(
-            chatId,
+            responseChatId,
             `❌ <b>Escaneo manual bloqueado o fallido</b>\n<code>${escapeHtml(message).slice(0, 240)}</code>`,
             { parse_mode: "HTML" },
           ).catch(() => {});
@@ -878,15 +1099,18 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     } catch (err) {
       log.error({ err }, "❌ Error inicializando /scan");
       manualScanInFlight = null;
-      await bot.sendMessage(chatId, "❌ Error iniciando escaneo manual").catch(() => {});
+      await bot.sendMessage(responseChatId, "❌ Error iniciando escaneo manual").catch(() => {});
     }
   });
 
   // ── /recuperar ──────────────────────────────────────────────────────────
-  bot.onText(/\/recuperar/, async (msg) => {
+  bot.onText(/\/recuperar(?:\s+(confirmar))?\s*$/i, async (msg, match) => {
     const chatIdPartial = String(msg.chat.id).slice(-4);
     log.info({ command: "/recuperar", chatIdPartial, from: msg.from?.username }, "command_received");
-    if (String(msg.chat.id) !== chatId) return;
+    if (!(await authorizeWriteCommand(bot, msg))) return;
+    const responseChatId = String(msg.chat.id);
+    const confirmed = match?.[1]?.toLowerCase() === "confirmar";
+    if (!confirmed && await pausedConfirmationPrompt(bot, msg, "recuperar")) return;
     log.info({ from: msg.from?.username }, "📥 /recuperar");
 
     try {
@@ -898,7 +1122,7 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       });
     } catch (err) {
       log.error({ err }, "❌ Error inicializando /recuperar");
-      await bot.sendMessage(chatId, "❌ Error iniciando recuperación de datos").catch(() => {});
+      await bot.sendMessage(responseChatId, "❌ Error iniciando recuperación de datos").catch(() => {});
     }
   });
 
@@ -914,6 +1138,14 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
 
     // Importación dinámica — el módulo no se carga hasta que se pide
     try {
+      const pause = await getEffectivePause("all");
+      if (pause.paused && pause.entry) {
+        await bot.sendMessage(
+          chatId,
+          `⏸ /techo no se ejecutó porque el scope all está pausado hasta ${pauseDeadline(pause.entry)}.`,
+        ).catch(() => {});
+        return;
+      }
       const { handleTechoCommand } = await import("../modules/financial-ceiling-radar/telegram-handler");
       await handleTechoCommand(bot, chatId, query);
     } catch (err) {
@@ -945,8 +1177,21 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
 
     try {
       const radars = getActiveRadars();
+      const status = healthTracker.getStatus();
+      const rawLastRunState = await getState<Record<string, unknown>>(
+        STATE_KEYS.LAST_COLLECT_RUN,
+      );
+      const lastRunState = await resolveLastRunState(
+        rawLastRunState,
+        status.lastCycleAt,
+      );
+      const lastRun = formatTelemetryDate(
+        getLastRunTimestamp(lastRunState, status.lastCycleAt),
+      );
       const lines = [
         `📡 <b>Radares Activos (${radars.length})</b>`,
+        `⏰ Última ejecución global del collector: <b>${lastRun}</b>`,
+        "<i>Todos los radares se evalúan dentro del mismo ciclo global.</i>",
         "",
         ...radars.map(r => `• <b>${r.name}</b> [<code>${r.key}</code>] (Prio: ${r.priority})`)
       ];
@@ -1169,5 +1414,5 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
   });
 
   log.info("telegram_handlers_registered");
-  log.info("✅ Comandos registrados: /prueba, /estado, /watchdog, /radares, /buscar, /monto, /debug_resumen, /scan, /recuperar, /techo, /noticias_comerciales, /perdidas");
+  log.info("✅ Comandos registrados: /prueba, /estado, /pausa, /reanudar, /watchdog, /radares, /buscar, /monto, /debug_resumen, /scan, /recuperar, /techo, /noticias_comerciales, /perdidas");
 }

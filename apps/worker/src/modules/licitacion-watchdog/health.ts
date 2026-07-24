@@ -1,5 +1,16 @@
 import { sendTelegramMessage } from "../../alerts/telegram.alerts";
+import { getConfig } from "../../config/env";
 import { createModuleLogger } from "../../core/logger";
+import { adminCommandsEnabled } from "../control/authorization";
+import {
+  allCircuits,
+  type CircuitSnapshot,
+} from "../resilience/circuit-breaker";
+import { getSaturationAnalysis } from "../alerting/saturation";
+import {
+  appendVerdict,
+  determineVerdict,
+} from "../alerting/verdict";
 import {
   createPendingWatchdogHealthAlert,
   getRecentWatchdogHealthAlerts,
@@ -175,6 +186,48 @@ export function formatWatchdogHealthAlert(health: WatchdogHealthState): string {
   ].join("\n");
 }
 
+function statusFromMessage(message: string | null): number | undefined {
+  const rawStatus = message?.match(/\bHTTP\s+(\d{3})\b/i)?.[1];
+  if (!rawStatus) return undefined;
+  const status = Number(rawStatus);
+  return Number.isFinite(status) ? status : undefined;
+}
+
+function relevantCircuit(circuits: CircuitSnapshot[]): CircuitSnapshot | null {
+  return circuits.find((circuit) => circuit.reopenedFromHalfOpen) ??
+    circuits.find((circuit) => circuit.state === "OPEN") ??
+    null;
+}
+
+export async function formatActionableWatchdogHealthAlert(
+  health: WatchdogHealthState,
+): Promise<string> {
+  const config = getConfig();
+  const saturation = health.cause === "NETWORK_INFRA"
+    ? await getSaturationAnalysis(
+        health.lastFailureAt ? new Date(health.lastFailureAt) : new Date(),
+      )
+    : null;
+  const circuit = relevantCircuit(allCircuits());
+  const verdict = determineVerdict({
+    source: "watchdog",
+    consecutiveFailures: health.consecutiveFailures,
+    cause: health.cause,
+    errorType: health.lastFailureType,
+    message: health.lastFailureMessage,
+    httpStatus: statusFromMessage(health.lastFailureMessage),
+    circuit,
+    saturation,
+    defaultPauseMinutes: config.PAUSE_DEFAULT_MINUTES,
+  });
+  const base = formatWatchdogHealthAlert(health);
+  return appendVerdict(
+    base,
+    verdict,
+    adminCommandsEnabled(config.TELEGRAM_ADMIN_CHAT_IDS),
+  );
+}
+
 export async function notifyWatchdogHealthIfNeeded(health: WatchdogHealthState): Promise<boolean> {
   if (!health.severity || !health.cause) return false;
   try {
@@ -182,7 +235,7 @@ export async function notifyWatchdogHealthIfNeeded(health: WatchdogHealthState):
     const history = parseHistory(rows, health.severity);
     if (!shouldSendWatchdogHealthAlert({ health, history })) return false;
 
-    const message = formatWatchdogHealthAlert(health);
+    const message = await formatActionableWatchdogHealthAlert(health);
     const alertId = await createPendingWatchdogHealthAlert({
       severity: health.severity,
       cause: health.cause,

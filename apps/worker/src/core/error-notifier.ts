@@ -9,6 +9,13 @@
  *  - Deduplica mensajes idénticos dentro de una ventana de 2 minutos.
  */
 
+import { getConfig } from "../config/env";
+import { adminCommandsEnabled } from "../modules/control/authorization";
+import {
+  appendVerdict,
+  determineVerdict,
+} from "../modules/alerting/verdict";
+
 type SendFn = (text: string) => void;
 
 let _send: SendFn | null = null;
@@ -107,5 +114,19 @@ export function handlePinoEntry(line: string): void {
     parts.push("", `<pre>${escapeHtml(stackExcerpt)}</pre>`);
   }
 
-  _send(parts.join("\n"));
+  const config = getConfig();
+  const base = parts.join("\n");
+  const verdict = determineVerdict({
+    source: "generic",
+    errorType: errCode || null,
+    message: `${entry.msg} ${errMessage}`,
+    defaultPauseMinutes: config.PAUSE_DEFAULT_MINUTES,
+  });
+  _send(
+    appendVerdict(
+      base,
+      verdict,
+      adminCommandsEnabled(config.TELEGRAM_ADMIN_CHAT_IDS),
+    ),
+  );
 }

@@ -1,6 +1,7 @@
 import { getConfig } from "../../config/env";
 import { createModuleLogger } from "../../core/logger";
 import { runLicitacionWatchdog } from "./job";
+import { getEffectivePause } from "../control/pause-state";
 
 const log = createModuleLogger("licitacion-watchdog:scheduler");
 
@@ -20,7 +21,20 @@ export function startLicitacionWatchdogScheduler(): void {
     }
     const intervalMs = config.WATCHDOG_INTERVAL_MINUTES * 60_000;
     const runSafely = (): void => {
-      void runLicitacionWatchdog(expedientes).catch((err) => {
+      void (async () => {
+        const pause = await getEffectivePause("watchdog");
+        if (pause.paused) {
+          log.info(
+            {
+              effectiveScope: pause.effectiveScope,
+              resumeAt: pause.entry?.resumeAt ?? null,
+            },
+            "[PAUSA] Ciclo watchdog omitido por pausa manual",
+          );
+          return;
+        }
+        await runLicitacionWatchdog(expedientes);
+      })().catch((err) => {
         log.error(
           { err, suppressTelegram: true },
           "Fallo contenido en scheduler watchdog; sin propagación a unhandledRejection",

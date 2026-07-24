@@ -193,6 +193,9 @@ describe("Telegram commands polling health", () => {
     );
 
     expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toContain("🎯 VEREDICTO: INTERVENIR");
+    expect(send.mock.calls[0][0]).toContain("réplicas en Railway");
+    expect(send.mock.calls[0][0]).toContain("🎮 COMANDOS");
   });
 
   it("sendMessage OK con polling degradado no marca Telegram global DOWN", async () => {
@@ -240,5 +243,6 @@ describe("Telegram commands polling health", () => {
     expect(send.mock.calls[0][0]).toContain(
       "Telegram commands recuperado",
     );
+    expect(send.mock.calls[0][0]).not.toContain("VEREDICTO");
   });
 });

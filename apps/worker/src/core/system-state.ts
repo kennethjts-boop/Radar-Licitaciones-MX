@@ -3,9 +3,11 @@
  * Usa la tabla system_state (key-value JSONB) para registrar
  * eventos importantes del ciclo de vida del worker.
  *
- * No lanza excepciones — falla silenciosamente con log.warn.
- * El worker NO debe caerse por un fallo de system_state.
+ * Los helpers históricos fallan silenciosamente con log.warn. Las escrituras
+ * críticas pueden usar setStateStrict() para exigir persistencia verificable.
  */
+import { isDeepStrictEqual } from "node:util";
+
 import { createModuleLogger } from "./logger";
 import { nowISO } from "./time";
 
@@ -29,6 +31,8 @@ export const STATE_KEYS = {
   LAST_EXTERNAL_LEADS_RUN: "last_external_leads_run",
   LAST_DAILY_SUMMARY: "last_daily_summary",
   WATCHDOG_TELEMETRY: "licitacion_watchdog_telemetry",
+  RADAR_PAUSE_STATE: "radar_pause_state",
+  NETWORK_FAILURE_HISTOGRAM: "network_failure_histogram",
   WORKER_VERSION: "worker_version",
 } as const;
 
@@ -77,6 +81,47 @@ export async function setState(
     }
   } catch (err) {
     log.warn({ key, err }, "Error escribiendo system_state");
+  }
+}
+
+/**
+ * Persiste estado crítico y comprueba mediante una lectura independiente que
+ * Supabase guardó exactamente el valor solicitado. A diferencia de setState(),
+ * cualquier fallo se propaga al caller.
+ */
+export async function setStateStrict(
+  key: StateKey,
+  value: object,
+): Promise<void> {
+  const db = await getDb();
+  const { error: writeError } = await db
+    .from("system_state")
+    .upsert(
+      { key, value_json: value, updated_at: nowISO() },
+      { onConflict: "key" },
+    );
+
+  if (writeError) {
+    throw new Error(
+      `No se pudo persistir system_state[${key}]: ${writeError.message}`,
+    );
+  }
+
+  const { data, error: readError } = await db
+    .from("system_state")
+    .select("value_json")
+    .eq("key", key)
+    .single();
+
+  if (readError) {
+    throw new Error(
+      `No se pudo verificar system_state[${key}]: ${readError.message}`,
+    );
+  }
+  if (!isDeepStrictEqual(data?.value_json, value)) {
+    throw new Error(
+      `La verificación de system_state[${key}] no coincide con el valor solicitado`,
+    );
   }
 }
 

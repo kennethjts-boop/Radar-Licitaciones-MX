@@ -31,10 +31,20 @@ import { healthTracker } from "../core/healthcheck";
 import { runExternalLeadsOsintJob } from "../modules/external-opportunity-discovery";
 import { nowInMexico, todayMexicoStr } from "../core/time";
 import { startLicitacionWatchdogScheduler } from "../modules/licitacion-watchdog";
+import {
+  getEffectivePause,
+  type PauseScope,
+} from "../modules/control/pause-state";
+import { adminCommandsEnabled } from "../modules/control/authorization";
+import {
+  appendVerdict,
+  determineVerdict,
+} from "../modules/alerting/verdict";
 
 const log = createModuleLogger("scheduler");
 
 const JITTER_MS = 3 * 60 * 1000; // ±3 min
+const MAIN_CIRCUIT_OPEN_MS = 60 * 60 * 1000;
 
 function jitter(): number {
   return (Math.random() * 2 - 1) * JITTER_MS;
@@ -62,6 +72,46 @@ export function isCriticalCollectFailure(result: CollectJobResult): boolean {
 
 export function resetComprasMxIncidentStateForTests(): void {
   // La deduplicación ahora se persiste en system_state desde collect.job.
+}
+
+async function cycleIsPaused(
+  scope: PauseScope,
+  cycle: string,
+): Promise<boolean> {
+  try {
+    const pause = await getEffectivePause(scope);
+    if (!pause.paused) return false;
+    log.info(
+      {
+        scope,
+        effectiveScope: pause.effectiveScope,
+        resumeAt: pause.entry?.resumeAt ?? null,
+        cycle,
+      },
+      "[PAUSA] Ciclo omitido por pausa manual",
+    );
+    return true;
+  } catch (err) {
+    log.error(
+      { err, scope, cycle, suppressTelegram: true },
+      "[PAUSA] No se pudo verificar estado persistido; ciclo omitido por seguridad",
+    );
+    return true;
+  }
+}
+
+function actionableMainCircuitMessage(message: string): string {
+  const config = getConfig();
+  return appendVerdict(
+    message,
+    determineVerdict({
+      source: "main_circuit",
+      consecutiveFailures: 5,
+      backoffMs: MAIN_CIRCUIT_OPEN_MS,
+      defaultPauseMinutes: config.PAUSE_DEFAULT_MINUTES,
+    }),
+    adminCommandsEnabled(config.TELEGRAM_ADMIN_CHAT_IDS),
+  );
 }
 
 export function recordCollectResultForCircuitBreaker(result: CollectJobResult): string | null {
@@ -110,6 +160,7 @@ export async function runExternalLeadsIfEnabled(
   runner: typeof runExternalLeadsOsintJob = runExternalLeadsOsintJob,
 ): Promise<void> {
   try {
+    if (await cycleIsPaused("all", "external_osint")) return;
     const result = await runner();
     log.info(
       {
@@ -134,6 +185,12 @@ export async function runExternalLeadsIfEnabled(
 }
 
 async function scheduledCollect(baseIntervalMs: number): Promise<void> {
+  if (await cycleIsPaused("collector", "listing_scan")) {
+    await runExternalLeadsIfEnabled();
+    const nextDelay = baseIntervalMs + jitter();
+    setTimeout(() => scheduledCollect(baseIntervalMs), nextDelay);
+    return;
+  }
   if (comprasMxCB.shouldSkip()) {
     // Circuit breaker OPEN — saltar y reagendar sin correr
     const nextDelay = baseIntervalMs + jitter();
@@ -145,7 +202,7 @@ async function scheduledCollect(baseIntervalMs: number): Promise<void> {
     const result = await runCollectJob();
     const alertMsg = recordCollectResultForCircuitBreaker(result);
     if (alertMsg) {
-      sendTelegramMessage(alertMsg, "HTML").catch((e) =>
+      sendTelegramMessage(actionableMainCircuitMessage(alertMsg), "HTML").catch((e) =>
         log.warn({ err: e }, "No se pudo enviar alerta circuit breaker"),
       );
     }
@@ -153,7 +210,7 @@ async function scheduledCollect(baseIntervalMs: number): Promise<void> {
     log.error({ err, mode: "listing_scan" }, "❌ Error no manejado en MODO 1 (Listing Scan)");
     const alertMsg = comprasMxCB.recordFailure();
     if (alertMsg) {
-      sendTelegramMessage(alertMsg, "HTML").catch((e) =>
+      sendTelegramMessage(actionableMainCircuitMessage(alertMsg), "HTML").catch((e) =>
         log.warn({ err: e }, "No se pudo enviar alerta circuit breaker"),
       );
     }
@@ -178,6 +235,7 @@ async function scheduledCollect(baseIntervalMs: number): Promise<void> {
  */
 async function catchUpDailySummaryIfMissed(summaryHour: number): Promise<void> {
   try {
+    if (await cycleIsPaused("all", "daily_summary_catchup")) return;
     const now = nowInMexico();
     const dayOfWeek = now.getDay(); // 0=Dom, 1=Lun … 5=Vie, 6=Sáb
     const currentHour = now.getHours();
@@ -227,6 +285,7 @@ export function startScheduler(): void {
   cron.schedule(
     recheckCron,
     async () => {
+      if (await cycleIsPaused("collector", "daily_recheck")) return;
       log.info(
         { cron: recheckCron, hour: recheckHour, mode: "daily_recheck" },
         "🔍 [MODO 2] Disparando Daily Direct Recheck de expedientes activos/en_proceso",
@@ -249,6 +308,7 @@ export function startScheduler(): void {
   cron.schedule(
     summaryCron,
     async () => {
+      if (await cycleIsPaused("all", "daily_summary")) return;
       log.info({ cron: summaryCron }, "📊 Disparando resumen diario");
       try {
         await runDailySummaryJob();
@@ -271,17 +331,19 @@ export function startScheduler(): void {
   // Primer ciclo inmediato post-deploy — 10 s para que bootstrap termine
   setTimeout(async () => {
     log.info("🚀 Ejecutando primer ciclo inmediato post-deploy...");
-    try {
-      const result = await runCollectJob();
-      const alertMsg = recordCollectResultForCircuitBreaker(result);
-      if (alertMsg) {
-        sendTelegramMessage(alertMsg, "HTML").catch(() => {});
-      }
-    } catch (err) {
-      log.error({ err }, "❌ Error en primer ciclo inmediato");
-      const alertMsg = comprasMxCB.recordFailure();
-      if (alertMsg) {
-        sendTelegramMessage(alertMsg, "HTML").catch(() => {});
+    if (!(await cycleIsPaused("collector", "initial_listing_scan"))) {
+      try {
+        const result = await runCollectJob();
+        const alertMsg = recordCollectResultForCircuitBreaker(result);
+        if (alertMsg) {
+          sendTelegramMessage(actionableMainCircuitMessage(alertMsg), "HTML").catch(() => {});
+        }
+      } catch (err) {
+        log.error({ err }, "❌ Error en primer ciclo inmediato");
+        const alertMsg = comprasMxCB.recordFailure();
+        if (alertMsg) {
+          sendTelegramMessage(actionableMainCircuitMessage(alertMsg), "HTML").catch(() => {});
+        }
       }
     }
     await runExternalLeadsIfEnabled();

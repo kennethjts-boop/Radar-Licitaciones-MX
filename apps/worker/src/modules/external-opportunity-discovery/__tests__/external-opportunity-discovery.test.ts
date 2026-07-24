@@ -1,3 +1,13 @@
+jest.mock("../../control/pause-state", () => ({
+  getEffectivePause: jest.fn().mockResolvedValue({
+    paused: false,
+    requestedScope: "all",
+    effectiveScope: null,
+    entry: null,
+    msUntilResume: null,
+  }),
+}));
+
 import {
   buildExternalLeadFingerprint,
   buildExternalLead,

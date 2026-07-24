@@ -4,6 +4,27 @@ import { getConfig } from "../../config/env";
 
 let mockExternalState: Record<string, unknown> | null = null;
 let mockTelegramCommandsState: Record<string, unknown> | null = null;
+let mockPauseState: Record<string, unknown> | null = null;
+let mockHistogramState: Record<string, unknown> | null = null;
+let mockStrictFailure = false;
+
+type TestTextHandler = (...args: unknown[]) => unknown;
+
+function findTextHandler(bot: TelegramBot, pattern: string): TestTextHandler {
+  const callbacks = (
+    bot as unknown as {
+      _textRegexpCallbacks?: Array<{
+        regexp?: RegExp;
+        callback: TestTextHandler;
+      }>;
+    }
+  )._textRegexpCallbacks ?? [];
+  const handler = callbacks.find((callback) =>
+    callback.regexp?.toString().includes(pattern)
+  )?.callback;
+  if (!handler) throw new Error(`Handler no registrado para ${pattern}`);
+  return handler;
+}
 
 // Mock Supabase
 const mockSelect = jest.fn();
@@ -25,6 +46,10 @@ jest.mock("../../config/env", () => {
     TELEGRAM_COMMAND_BOT_ENABLED: true,
     TELEGRAM_COMMANDS_ENABLED: true,
     TELEGRAM_POLLING_ENABLED: true,
+    TELEGRAM_ADMIN_CHAT_IDS: "999",
+    PAUSE_DEFAULT_MINUTES: 60,
+    SATURATION_WINDOW_DAYS: 7,
+    SATURATION_MIN_SAMPLES: 20,
     COLLECT_INTERVAL_MINUTES: 30,
     NODE_ENV: "test",
     RAILWAY_ENVIRONMENT: "local",
@@ -50,9 +75,19 @@ jest.mock("../../core/system-state", () => ({
         telegram_commands_consecutive_failures: 0,
       };
     }
+    if (key === "radar_pause_state") return mockPauseState;
+    if (key === "network_failure_histogram") return mockHistogramState;
+    if (key === "licitacion_watchdog_telemetry") return null;
     return null;
   }),
   setState: jest.fn().mockResolvedValue(undefined),
+  setStateStrict: jest.fn(async (key: string, value: Record<string, unknown>) => {
+    if (mockStrictFailure) throw new Error("strict write failed");
+    if (key === "radar_pause_state") mockPauseState = structuredClone(value);
+    if (key === "network_failure_histogram") {
+      mockHistogramState = structuredClone(value);
+    }
+  }),
   STATE_KEYS: {
     LAST_COLLECT_RUN: "last_collect_run",
     LAST_EXTERNAL_LEADS_RUN: "last_external_leads_run",
@@ -61,6 +96,9 @@ jest.mock("../../core/system-state", () => ({
     SCHEDULER_STATUS: "scheduler_status",
     LAST_HEALTHCHECK_AT: "last_healthcheck_at",
     LAST_DAILY_SUMMARY: "last_daily_summary",
+    WATCHDOG_TELEMETRY: "licitacion_watchdog_telemetry",
+    RADAR_PAUSE_STATE: "radar_pause_state",
+    NETWORK_FAILURE_HISTOGRAM: "network_failure_histogram",
   },
 }));
 
@@ -123,6 +161,9 @@ describe("Telegram Commands - /noticias_comerciales", () => {
     mockConfig.EXTERNAL_LEADS_DISCOVERY_MODE = true;
     mockExternalState = null;
     mockTelegramCommandsState = null;
+    mockPauseState = null;
+    mockHistogramState = null;
+    mockStrictFailure = false;
   });
 
   it("/estado muestra External OSINT deshabilitado y contadores actuales en cero", async () => {
@@ -154,6 +195,10 @@ describe("Telegram Commands - /noticias_comerciales", () => {
     expect(message).toContain("Fuentes: <b>0</b> | Raw: <b>0</b>");
     expect(message).not.toContain("certificate error");
     expect(message).not.toContain("Discovery: <b>true</b>");
+    expect(message).toContain("Pausas manuales:");
+    expect(message).toContain("Circuitos watchdog:");
+    expect(message).toContain("Watchdog:");
+    expect(message).toContain("Saturación:");
   });
 
   it("/estado separa sendMessage de polling y muestra fallos/recovery", async () => {
@@ -237,6 +282,124 @@ describe("Telegram Commands - /noticias_comerciales", () => {
     expect(isManualScanOkStatus("empty_result")).toBe(true);
     expect(isManualScanOkStatus("degraded")).toBe(false);
     expect(isManualScanOkStatus("error")).toBe(false);
+  });
+
+  it("rechaza /pausa por user id no autorizado aunque llegue del chat configurado", async () => {
+    const handler = findTextHandler(botInstance, "\\/pausa");
+
+    await handler(
+      {
+        chat: { id: 123456 },
+        from: { id: 123, username: "intruso" },
+        text: "/pausa 60",
+      },
+      ["/pausa 60", undefined, "60"],
+    );
+
+    expect(mockPauseState).toBeNull();
+    expect(mockSendMessage.mock.calls.at(-1)?.[1]).toContain(
+      "No estás autorizado",
+    );
+  });
+
+  it("persiste y confirma /pausa 60 para un usuario autorizado", async () => {
+    const handler = findTextHandler(botInstance, "\\/pausa");
+
+    await handler(
+      {
+        chat: { id: -9999 },
+        from: { id: 999, username: "admin" },
+        text: "/pausa 60",
+      },
+      ["/pausa 60", undefined, "60"],
+    );
+
+    expect(mockPauseState).toEqual(expect.objectContaining({
+      scopes: expect.objectContaining({
+        all: expect.objectContaining({ pausedBy: "999" }),
+      }),
+    }));
+    expect(mockSendMessage.mock.calls.at(-1)?.[1]).toContain(
+      "Radar pausado manualmente: all",
+    );
+    expect(mockSendMessage.mock.calls.at(-1)?.[1]).toContain("🎮 COMANDOS");
+    expect(mockSendMessage.mock.calls.at(-1)?.[1]).toContain("/reanudar");
+  });
+
+  it("persiste /reanudar y confirma la limpieza de circuitos y contadores", async () => {
+    mockPauseState = {
+      scopes: {
+        watchdog: {
+          pausedAt: "2026-07-23T16:00:00.000Z",
+          resumeAt: null,
+          reason: "test",
+          pausedBy: "999",
+        },
+      },
+    };
+    const handler = findTextHandler(botInstance, "\\/reanudar");
+
+    await handler(
+      {
+        chat: { id: -9999 },
+        from: { id: 999, username: "admin" },
+        text: "/reanudar watchdog",
+      },
+      ["/reanudar watchdog", "watchdog"],
+    );
+
+    expect(mockPauseState).toEqual({ scopes: {} });
+    expect(mockSendMessage.mock.calls.at(-1)?.[1]).toContain(
+      "Radar reanudado: watchdog",
+    );
+    expect(mockSendMessage.mock.calls.at(-1)?.[1]).toContain(
+      "circuitos y contadores",
+    );
+  });
+
+  it("no confirma una pausa si la escritura estricta falla", async () => {
+    mockStrictFailure = true;
+    const handler = findTextHandler(botInstance, "\\/pausa");
+
+    await handler(
+      {
+        chat: { id: 123456 },
+        from: { id: 999, username: "admin" },
+        text: "/pausa watchdog 60",
+      },
+      ["/pausa watchdog 60", "watchdog", "60"],
+    );
+
+    expect(mockSendMessage.mock.calls.at(-1)?.[1]).toBe(
+      "❌ No se pudo persistir la pausa. El radar SIGUE ACTIVO. Reintenta.",
+    );
+  });
+
+  it("/scan pide confirmación cuando existe una pausa activa", async () => {
+    mockPauseState = {
+      scopes: {
+        watchdog: {
+          pausedAt: "2026-07-23T16:00:00.000Z",
+          resumeAt: "2099-07-23T17:00:00.000Z",
+          reason: "test",
+          pausedBy: "999",
+        },
+      },
+    };
+    const handler = findTextHandler(botInstance, "\\/scan");
+
+    await handler(
+      {
+        chat: { id: 123456 },
+        from: { id: 999, username: "admin" },
+        text: "/scan",
+      },
+      ["/scan", undefined],
+    );
+
+    expect(mockSendMessage.mock.calls.at(-1)?.[1]).toContain(
+      "Envía /scan confirmar",
+    );
   });
 
   it("/noticias_comerciales no consulta fuentes guardadas si OSINT está disabled", async () => {

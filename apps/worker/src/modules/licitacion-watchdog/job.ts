@@ -24,6 +24,7 @@ import {
 import { diffSnapshots, hashSnapshot } from "./snapshot";
 import { structuralChangeGuard } from "./structural-guard";
 import { sendPendingNotification } from "./telegram";
+import { recordNetworkFailure } from "../alerting/saturation";
 import type {
   JsonObject,
   StructuralConfirmation,
@@ -315,6 +316,18 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
       health: currentHealth,
     });
     if (extractionFailures.length > 0) {
+      if (currentHealth.cause === "NETWORK_INFRA") {
+        await recordNetworkFailure(
+          currentHealth.lastFailureAt
+            ? new Date(currentHealth.lastFailureAt)
+            : new Date(),
+        ).catch((histogramError) => {
+          log.warn(
+            { err: histogramError },
+            "No se pudo registrar muestra de saturación NETWORK_INFRA",
+          );
+        });
+      }
       await notifyWatchdogHealthIfNeeded(currentHealth);
     }
   } catch (err) {

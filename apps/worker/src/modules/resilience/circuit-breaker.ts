@@ -10,6 +10,8 @@ export interface CircuitSnapshot {
   state: CircuitState;
   consecutiveFailures: number;
   msUntilRetry: number;
+  reopenedFromHalfOpen: boolean;
+  openCount: number;
 }
 
 export interface CircuitPermit {
@@ -42,6 +44,8 @@ export class EndpointCircuitBreaker {
   private consecutiveFailures = 0;
   private openedAt: number | null = null;
   private halfOpenProbeInFlight = false;
+  private reopenedFromHalfOpen = false;
+  private openCount = 0;
 
   constructor(
     readonly key: string,
@@ -56,6 +60,7 @@ export class EndpointCircuitBreaker {
     ) {
       this.state = "HALF_OPEN";
       this.halfOpenProbeInFlight = false;
+      this.reopenedFromHalfOpen = false;
       log.info(
         { key: this.key },
         "[CIRCUIT] OPEN → HALF_OPEN; habilitando un sondeo",
@@ -83,12 +88,14 @@ export class EndpointCircuitBreaker {
     this.consecutiveFailures = 0;
     this.openedAt = null;
     this.halfOpenProbeInFlight = false;
+    this.reopenedFromHalfOpen = false;
     if (recovered) {
       log.info({ key: this.key }, "[CIRCUIT] Circuito cerrado tras respuesta exitosa");
     }
   }
 
   recordFailure(nowMs = Date.now()): void {
+    const wasHalfOpen = this.state === "HALF_OPEN";
     this.consecutiveFailures += 1;
     if (
       this.state === "HALF_OPEN" ||
@@ -97,6 +104,8 @@ export class EndpointCircuitBreaker {
       this.state = "OPEN";
       this.openedAt = nowMs;
       this.halfOpenProbeInFlight = false;
+      this.reopenedFromHalfOpen = wasHalfOpen;
+      this.openCount += 1;
       log.warn(
         {
           key: this.key,
@@ -127,6 +136,8 @@ export class EndpointCircuitBreaker {
       state: this.state,
       consecutiveFailures: this.consecutiveFailures,
       msUntilRetry,
+      reopenedFromHalfOpen: this.reopenedFromHalfOpen,
+      openCount: this.openCount,
     };
   }
 }
@@ -150,6 +161,10 @@ export function allCircuits(nowMs = Date.now()): CircuitSnapshot[] {
     .sort((left, right) => left.key.localeCompare(right.key));
 }
 
-export function resetEndpointCircuitsForTests(): void {
+export function resetEndpointCircuits(): void {
   circuits.clear();
+}
+
+export function resetEndpointCircuitsForTests(): void {
+  resetEndpointCircuits();
 }

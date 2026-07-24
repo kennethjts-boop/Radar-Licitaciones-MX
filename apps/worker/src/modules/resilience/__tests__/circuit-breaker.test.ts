@@ -39,6 +39,8 @@ describe("EndpointCircuitBreaker", () => {
       state: "CLOSED",
       consecutiveFailures: 2,
       msUntilRetry: 0,
+      reopenedFromHalfOpen: false,
+      openCount: 0,
     });
 
     circuit.recordFailure(0);
@@ -47,6 +49,8 @@ describe("EndpointCircuitBreaker", () => {
       state: "OPEN",
       consecutiveFailures: 3,
       msUntilRetry: 1_000,
+      reopenedFromHalfOpen: false,
+      openCount: 1,
     });
     expect(circuit.tryAcquire(999).allowed).toBe(false);
 
@@ -57,6 +61,8 @@ describe("EndpointCircuitBreaker", () => {
         state: "HALF_OPEN",
         consecutiveFailures: 3,
         msUntilRetry: 0,
+        reopenedFromHalfOpen: false,
+        openCount: 1,
       },
     });
     expect(circuit.tryAcquire(1_000).allowed).toBe(false);
@@ -67,6 +73,8 @@ describe("EndpointCircuitBreaker", () => {
       state: "CLOSED",
       consecutiveFailures: 0,
       msUntilRetry: 0,
+      reopenedFromHalfOpen: false,
+      openCount: 1,
     });
   });
 
@@ -85,6 +93,8 @@ describe("EndpointCircuitBreaker", () => {
       state: "OPEN",
       consecutiveFailures: 2,
       msUntilRetry: 1_000,
+      reopenedFromHalfOpen: true,
+      openCount: 2,
     });
     expect(circuit.snapshot(1_700).msUntilRetry).toBe(500);
   });

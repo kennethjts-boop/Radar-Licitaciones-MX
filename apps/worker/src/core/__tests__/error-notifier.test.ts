@@ -32,5 +32,7 @@ describe("error notifier suppression", () => {
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0][0]).toContain("[ERROR] unhandled-module");
+    expect(send.mock.calls[0][0]).toContain("🎯 VEREDICTO:");
+    expect(send.mock.calls[0][0]).toContain("🎮 COMANDOS");
   });
 });
