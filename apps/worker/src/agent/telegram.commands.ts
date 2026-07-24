@@ -27,11 +27,15 @@ import {
   classifyTelegramPollingError,
   getTelegramConflictRetryDelayMs,
   getTelegramPollingRetryDelayMs,
+  isTelegramPollingFailureRecordingPaused,
   isTelegramCommandsPollingEnabled,
   recordTelegramCommandsStartup,
   recordTelegramPollingFailure,
   recordTelegramPollingSuccess,
+  setTelegramPollingFailureRecordingPaused,
+  TELEGRAM_STARTUP_CONFLICT_RETRY_DELAY_MS,
 } from "../core/telegram-commands-health";
+import { setTelegramPollingRuntimeStatus } from "../core/runtime-health";
 import { telegramBotConstructorOptions } from "../core/telegram-client-options";
 import {
   getEffectivePause,
@@ -64,6 +68,8 @@ let manualScanInFlight: Promise<void> | null = null;
 let pollingRetryTimer: NodeJS.Timeout | null = null;
 let pollingRetryInProgress = false;
 let pollingRetryAttempt = 0;
+let startupConflictRetryAttempt = 0;
+let processStartedAtMs = Date.now();
 let shuttingDown = false;
 let shutdownPromise: Promise<void> | null = null;
 
@@ -82,6 +88,11 @@ function deleteWebhookDroppingUpdates(bot: TelegramBot): Promise<boolean> {
 }
 
 export function initCommandBot(): Promise<TelegramBot> {
+  if (shuttingDown) {
+    return Promise.reject(
+      new Error("Telegram commands no iniciará durante el shutdown"),
+    );
+  }
   if (botInitializationPromise) return botInitializationPromise;
   botInitializationPromise = initializeCommandBot().catch((error) => {
     _bot = null;
@@ -99,6 +110,7 @@ async function initializeCommandBot(): Promise<TelegramBot> {
     });
     throw new Error("Telegram commands polling is disabled by configuration");
   }
+  setTelegramPollingRuntimeStatus("starting");
 
   // Crear instancia sin polling primero para poder llamar deleteWebhook
   const bot = new TelegramBot(
@@ -115,23 +127,41 @@ async function initializeCommandBot(): Promise<TelegramBot> {
   // La definición local amplía los @types desactualizados: runtime sí acepta
   // drop_pending_updates en deleteWebHook().
   await deleteWebhookDroppingUpdates(bot);
+  if (shuttingDown) {
+    throw new Error(
+      "Inicialización Telegram commands cancelada durante shutdown",
+    );
+  }
   log.info("Webhook eliminado y updates pendientes descartados");
 
   // Registrar handlers de error antes de iniciar polling
   bot.on("polling_error", (err: Error) => {
-    const diagnosis = classifyTelegramPollingError(err);
-    schedulePollingRetry(bot, diagnosis);
-    void recordTelegramPollingFailure(
-      err,
-      sendOperationalMessage,
-    ).catch((recordError) => {
-      log.warn(
-        { err: recordError, diagnosis },
-        "No se pudo registrar Telegram polling_error",
-      );
+    const diagnosis = classifyTelegramPollingError(err, {
+      processUptimeMs: Date.now() - processStartedAtMs,
+      startupConflictAttempts: startupConflictRetryAttempt,
     });
+    if (diagnosis.kind !== "startup_conflict") {
+      if (!isTelegramPollingFailureRecordingPaused()) {
+        setTelegramPollingRuntimeStatus("degraded");
+      }
+      void recordTelegramPollingFailure(
+        err,
+        sendOperationalMessage,
+        new Date(),
+        diagnosis,
+      ).catch((recordError) => {
+        log.warn(
+          { err: recordError, diagnosis },
+          "No se pudo registrar Telegram polling_error",
+        );
+      });
+    }
+    schedulePollingRetry(bot, diagnosis);
   });
   bot.on("error", (err: Error) => {
+    if (!isTelegramPollingFailureRecordingPaused()) {
+      setTelegramPollingRuntimeStatus("degraded");
+    }
     void recordTelegramPollingFailure(
       err,
       sendOperationalMessage,
@@ -144,6 +174,9 @@ async function initializeCommandBot(): Promise<TelegramBot> {
   });
   bot.on("message", () => {
     pollingRetryAttempt = 0;
+    startupConflictRetryAttempt = 0;
+    setTelegramPollingFailureRecordingPaused(false);
+    setTelegramPollingRuntimeStatus("ok");
     void recordTelegramPollingSuccess(sendOperationalMessage).catch((err) => {
       log.warn(
         { err },
@@ -156,9 +189,27 @@ async function initializeCommandBot(): Promise<TelegramBot> {
 
   // Iniciar polling y confirmar que la promesa resolvió antes de anunciarlo.
   await bot.startPolling({ restart: true });
+  if (shuttingDown) {
+    throw new Error(
+      "Inicialización Telegram commands finalizó durante shutdown",
+    );
+  }
   await recordTelegramCommandsStartup("polling").catch((err) => {
     log.warn({ err }, "No se pudo registrar inicio de Telegram polling");
   });
+  if (isTelegramPollingFailureRecordingPaused()) {
+    log.info(
+      {
+        startupConflictRetryAttempt,
+        serviceName: process.env.RAILWAY_SERVICE_NAME ?? null,
+        deploymentId: process.env.RAILWAY_DEPLOYMENT_ID ?? null,
+        pid: process.pid,
+      },
+      "Telegram polling inicial pendiente de relevo Railway",
+    );
+    return bot;
+  }
+  setTelegramPollingRuntimeStatus("ok");
   log.info(
     {
       serviceName: process.env.RAILWAY_SERVICE_NAME ?? null,
@@ -192,6 +243,9 @@ export function resetCommandBotForTests(): void {
   pollingRetryTimer = null;
   pollingRetryInProgress = false;
   pollingRetryAttempt = 0;
+  startupConflictRetryAttempt = 0;
+  processStartedAtMs = Date.now();
+  setTelegramPollingFailureRecordingPaused(false);
   shuttingDown = false;
   shutdownPromise = null;
 }
@@ -199,6 +253,7 @@ export function resetCommandBotForTests(): void {
 export function shutdownCommandBot(): Promise<void> {
   if (shutdownPromise) return shutdownPromise;
   shuttingDown = true;
+  setTelegramPollingFailureRecordingPaused(true);
   if (pollingRetryTimer) {
     clearTimeout(pollingRetryTimer);
     pollingRetryTimer = null;
@@ -229,6 +284,7 @@ export function schedulePollingRetry(
 ): void {
   if (
     diagnosis.kind !== "transient_network" &&
+    diagnosis.kind !== "startup_conflict" &&
     diagnosis.kind !== "telegram_conflict"
   ) {
     return;
@@ -236,20 +292,47 @@ export function schedulePollingRetry(
   if (shuttingDown) return;
   if (pollingRetryTimer || pollingRetryInProgress) return;
 
-  pollingRetryAttempt += 1;
+  const startupConflict = diagnosis.kind === "startup_conflict";
+  if (startupConflict) {
+    startupConflictRetryAttempt += 1;
+  } else {
+    pollingRetryAttempt += 1;
+  }
   pollingRetryInProgress = true;
-  const conflict = diagnosis.kind === "telegram_conflict";
-  const delayMs = conflict
-    ? getTelegramConflictRetryDelayMs(pollingRetryAttempt)
-    : getTelegramPollingRetryDelayMs(pollingRetryAttempt);
-  log.warn(
-    { delayMs, attempt: pollingRetryAttempt, diagnosis },
-    "Telegram commands polling pausado; reinicio con backoff",
+  setTelegramPollingFailureRecordingPaused(true);
+  setTelegramPollingRuntimeStatus(
+    startupConflict ? "starting" : "degraded",
   );
+  const conflict =
+    diagnosis.kind === "telegram_conflict" || startupConflict;
+  const delayMs = startupConflict
+    ? TELEGRAM_STARTUP_CONFLICT_RETRY_DELAY_MS
+    : conflict
+      ? getTelegramConflictRetryDelayMs(pollingRetryAttempt)
+      : getTelegramPollingRetryDelayMs(pollingRetryAttempt);
+  const attempt = startupConflict
+    ? startupConflictRetryAttempt
+    : pollingRetryAttempt;
+  const logContext = { delayMs, attempt, diagnosis };
+  if (startupConflict) {
+    log.info(
+      logContext,
+      "startup_conflict esperado durante relevo Railway; reintento silencioso",
+    );
+  } else {
+    log.warn(
+      logContext,
+      "Telegram commands polling pausado; reinicio con backoff",
+    );
+  }
 
   void bot.stopPolling({
     cancel: true,
-    reason: conflict ? "telegram_conflict_backoff" : "transient_network_backoff",
+    reason: startupConflict
+      ? "startup_conflict_retry"
+      : conflict
+        ? "telegram_conflict_backoff"
+        : "transient_network_backoff",
   })
     .then(() => {
       if (shuttingDown) {
@@ -258,6 +341,7 @@ export function schedulePollingRetry(
       }
       pollingRetryTimer = setTimeout(() => {
         pollingRetryTimer = null;
+        pollingRetryInProgress = false;
         void (async () => {
           if (shuttingDown) return;
           if (conflict) {
@@ -266,14 +350,28 @@ export function schedulePollingRetry(
             await deleteWebhookDroppingUpdates(bot);
           }
           if (shuttingDown) return;
+          // Sólo el primer evento del nuevo intento puede afectar telemetría.
+          // Si falla, schedulePollingRetry() vuelve a pausar inmediatamente.
+          setTelegramPollingFailureRecordingPaused(false);
           await bot.startPolling({ restart: true });
         })()
           .then(() => {
             if (shuttingDown) return;
+            if (
+              pollingRetryInProgress ||
+              pollingRetryTimer ||
+              isTelegramPollingFailureRecordingPaused()
+            ) {
+              return;
+            }
+            pollingRetryAttempt = 0;
+            startupConflictRetryAttempt = 0;
+            setTelegramPollingRuntimeStatus("ok");
             log.info(
               {
-                attempt: pollingRetryAttempt,
+                attempt,
                 conflict,
+                startupConflict,
                 serviceName: process.env.RAILWAY_SERVICE_NAME ?? null,
                 instanceId:
                   process.env.RAILWAY_REPLICA_ID ??
@@ -283,22 +381,24 @@ export function schedulePollingRetry(
                 pid: process.pid,
                 restartedAt: new Date().toISOString(),
               },
-              "Telegram commands polling reiniciado tras backoff",
+              startupConflict
+                ? "telegram_polling_started_after_startup_conflict"
+                : "Telegram commands polling reiniciado tras backoff",
             );
           })
           .catch((err) => {
+            setTelegramPollingRuntimeStatus("degraded");
             log.warn(
-              { err, attempt: pollingRetryAttempt },
+              { err, attempt },
               "No se pudo reiniciar Telegram commands polling tras backoff",
             );
-          })
-          .finally(() => {
-            pollingRetryInProgress = false;
           });
       }, delayMs);
     })
     .catch((err) => {
       pollingRetryInProgress = false;
+      setTelegramPollingFailureRecordingPaused(false);
+      setTelegramPollingRuntimeStatus("degraded");
       log.warn(
         { err },
         "No se pudo pausar polling Telegram commands; reinicio cancelado",

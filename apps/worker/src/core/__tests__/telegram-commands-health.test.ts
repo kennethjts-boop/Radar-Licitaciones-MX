@@ -26,6 +26,7 @@ import {
   recordTelegramPollingFailure,
   recordTelegramPollingSuccess,
   resetTelegramCommandsHealthForTests,
+  setTelegramPollingFailureRecordingPaused,
 } from "../telegram-commands-health";
 
 function pollingError(
@@ -66,6 +67,30 @@ describe("Telegram commands polling health", () => {
       kind: "telegram_conflict",
       severity: "DEGRADED",
     });
+  });
+
+  it("clasifica 409 inicial como startup_conflict sólo dentro de la tolerancia", () => {
+    const conflict = pollingError(
+      "Conflict: terminated by other getUpdates request",
+      409,
+      "ETELEGRAM",
+    );
+
+    expect(classifyTelegramPollingError(conflict, {
+      processUptimeMs: 89_999,
+      startupConflictAttempts: 5,
+    })).toMatchObject({
+      kind: "startup_conflict",
+      severity: "WARN",
+    });
+    expect(classifyTelegramPollingError(conflict, {
+      processUptimeMs: 90_001,
+      startupConflictAttempts: 0,
+    })).toMatchObject({ kind: "telegram_conflict" });
+    expect(classifyTelegramPollingError(conflict, {
+      processUptimeMs: 10_000,
+      startupConflictAttempts: 6,
+    })).toMatchObject({ kind: "telegram_conflict" });
   });
 
   it("clasifica errores de red transitorios", () => {
@@ -140,6 +165,49 @@ describe("Telegram commands polling health", () => {
       last_telegram_commands_error_reason: "transient_network",
     });
     expect(mockSetTelegramHealth).not.toHaveBeenCalled();
+  });
+
+  it("no incrementa ni persiste errores mientras el poller espera backoff", async () => {
+    const send = jest.fn();
+    setTelegramPollingFailureRecordingPaused(true);
+
+    const result = await recordTelegramPollingFailure(
+      pollingError("Conflict: another bot instance", 409, "ETELEGRAM"),
+      send,
+      new Date("2026-06-10T00:00:00.000Z"),
+    );
+
+    expect(result).toMatchObject({ alerted: false, failures: 0 });
+    expect(send).not.toHaveBeenCalled();
+    expect(mockSetState).not.toHaveBeenCalled();
+  });
+
+  it("startup_conflict nunca incrementa ni alerta aunque se invoque defensivamente", async () => {
+    const send = jest.fn();
+    const error = pollingError(
+      "Conflict: terminated by other getUpdates request",
+      409,
+      "ETELEGRAM",
+    );
+    const diagnosis = classifyTelegramPollingError(error, {
+      processUptimeMs: 5_000,
+      startupConflictAttempts: 0,
+    });
+
+    const result = await recordTelegramPollingFailure(
+      error,
+      send,
+      new Date("2026-06-10T00:00:00.000Z"),
+      diagnosis,
+    );
+
+    expect(result).toMatchObject({
+      diagnosis: { kind: "startup_conflict" },
+      alerted: false,
+      failures: 0,
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(mockSetState).not.toHaveBeenCalled();
   });
 
   it("tercer error en diez minutos envía alerta amarilla una vez", async () => {

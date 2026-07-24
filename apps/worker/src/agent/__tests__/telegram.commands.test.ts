@@ -635,6 +635,45 @@ describe("Telegram Commands - ciclo de vida del polling", () => {
     expect(calls).toEqual(["stop", "delete", "start"]);
   });
 
+  it("reintenta startup_conflict a los 10s sin usar el backoff persistente", async () => {
+    const calls: string[] = [];
+    const bot = {
+      stopPolling: jest.fn(async () => {
+        calls.push("stop");
+      }),
+      deleteWebHook: jest.fn(async () => {
+        calls.push("delete");
+        return true;
+      }),
+      startPolling: jest.fn(async () => {
+        calls.push("start");
+      }),
+    } as unknown as TelegramBot;
+    const diagnosis = {
+      origin: "OUR_INFRA",
+      kind: "startup_conflict",
+      severity: "WARN",
+      userDiagnosis: "relevo Railway",
+      recommendedAction: "esperar",
+      statusCode: 409,
+      code: "ETELEGRAM",
+      technicalReason: "Conflict: terminated by other getUpdates request",
+    } as const;
+
+    schedulePollingRetry(bot, diagnosis);
+    await Promise.resolve();
+
+    expect(bot.stopPolling).toHaveBeenCalledWith({
+      cancel: true,
+      reason: "startup_conflict_retry",
+    });
+    await jest.advanceTimersByTimeAsync(9_999);
+    expect(calls).toEqual(["stop"]);
+    await jest.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
+    expect(calls).toEqual(["stop", "delete", "start"]);
+  });
+
   it("detiene polling con cancelación y el shutdown es idempotente", async () => {
     const stopPolling = jest
       .spyOn(TelegramBot.prototype, "stopPolling")
@@ -653,5 +692,35 @@ describe("Telegram Commands - ciclo de vida del polling", () => {
       cancel: true,
       reason: "worker_shutdown",
     });
+  });
+
+  it("detiene el bot aunque initCommandBot siga esperando deleteWebhook", async () => {
+    let resolveDeleteWebhook!: (value: boolean) => void;
+    jest.spyOn(TelegramBot.prototype, "deleteWebHook").mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveDeleteWebhook = resolve;
+        }),
+    );
+    const startPolling = jest
+      .spyOn(TelegramBot.prototype, "startPolling")
+      .mockResolvedValue(undefined);
+    const stopPolling = jest
+      .spyOn(TelegramBot.prototype, "stopPolling")
+      .mockResolvedValue(undefined);
+
+    const initialization = initCommandBot();
+    const shutdown = shutdownCommandBot();
+    await shutdown;
+    resolveDeleteWebhook(true);
+
+    await expect(initialization).rejects.toThrow(
+      "Inicialización Telegram commands cancelada durante shutdown",
+    );
+    expect(stopPolling).toHaveBeenCalledWith({
+      cancel: true,
+      reason: "worker_shutdown",
+    });
+    expect(startPolling).not.toHaveBeenCalled();
   });
 });

@@ -15,6 +15,7 @@ import { getConfig } from "../config/env";
 import { getSupabaseClient } from "../storage/client";
 import { consultarTopes, evaluarModalidad } from "../topes/topes.service";
 import type { TipoContratacion } from "../topes/topes.types";
+import { getRuntimeHealthSnapshot } from "./runtime-health";
 
 const log = createModuleLogger("http-server");
 
@@ -535,7 +536,9 @@ export function createHttpServer(): http.Server {
 
     try {
       if (req.method === "GET" && url.pathname === "/health") {
-        sendJson(res, 200, { status: "ok", ts: new Date().toISOString() });
+        // Liveness puro: Railway debe conservar el proceso mientras el bootstrap
+        // o Telegram siguen arrancando. Los demás campos son sólo informativos.
+        sendJson(res, 200, getRuntimeHealthSnapshot());
         return;
       }
 
@@ -590,14 +593,22 @@ export function createHttpServer(): http.Server {
   });
 }
 
-export function startHttpServer(): void {
+export function startHttpServer(): Promise<void> {
   const config = getConfig();
   const port = config.HEALTH_PORT;
   const server = createHttpServer();
-  server.listen(port, () => {
-    log.info({ port }, "🌐 HTTP server escuchando");
-  });
-  server.on("error", (err) => {
-    log.error({ err }, "Error fatal en HTTP server");
+  return new Promise((resolve, reject) => {
+    const handleStartupError = (err: Error): void => {
+      reject(err);
+    };
+    server.once("error", handleStartupError);
+    server.listen(port, () => {
+      server.off("error", handleStartupError);
+      server.on("error", (err) => {
+        log.error({ err }, "Error fatal en HTTP server");
+      });
+      log.info({ port }, "🌐 HTTP server escuchando; /health disponible");
+      resolve();
+    });
   });
 }

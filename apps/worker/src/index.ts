@@ -5,11 +5,12 @@
  * 1. Inicializar logger
  * 2. Cargar y validar config (Zod → crash si falta variable)
  * 3. Registrar signal handlers
- * 4. Bootstrap: verificar Supabase + Telegram + system_state
- * 5. Registrar notificador de errores a Telegram
- * 6. Inicializar bot de comandos Telegram (polling)
- * 7. Iniciar scheduler (30 min + daily summary)
- * 8. Worker en espera activa
+ * 4. Exponer /health antes de cualquier operación remota
+ * 5. Bootstrap: verificar Supabase + Telegram + system_state
+ * 6. Registrar notificador de errores a Telegram
+ * 7. Inicializar bot de comandos Telegram en background
+ * 8. Lanzar FORCE_COLLECT en background cuando corresponda
+ * 9. Iniciar scheduler (30 min + daily summary)
  */
 import { getConfig } from "./config/env";
 import { getLogger } from "./core/logger";
@@ -30,6 +31,11 @@ import {
   recordTelegramCommandsStartup,
 } from "./core/telegram-commands-health";
 import { getEffectivePause } from "./modules/control/pause-state";
+import {
+  setBootstrapRuntimeStatus,
+  setDatabaseRuntimeStatus,
+  setTelegramPollingRuntimeStatus,
+} from "./core/runtime-health";
 
 async function main(): Promise<void> {
   // ── 1. Configuración y logger ─────────────────────────────────────────────
@@ -38,22 +44,6 @@ async function main(): Promise<void> {
 
   log.info("Worker booting...");
   log.info("worker_started");
-
-
-  if (process.env.RUN_MAESTROS === "true") {
-    log.info("RUN_MAESTROS=true detectado: ejecutando scraper de maestros");
-    // Si estamos en local o el usuario lo pide explícitamente como tarea única
-    if (config.NODE_ENV === "development" || process.env.MAESTROS_ONLY === "true") {
-      await runMaestrosScraper();
-      log.info("Scraper de maestros finalizado (modo tarea única) — saliendo");
-      process.exit(0);
-    } else {
-      // En producción/worker, lo corremos en background o al inicio pero NO salimos
-      runMaestrosScraper()
-        .then(() => log.info("Scraper de maestros finalizado (background)"))
-        .catch((err) => log.error({ err }, "Error en scraper de maestros (background)"));
-    }
-  }
 
   log.info(
     {
@@ -126,11 +116,38 @@ async function main(): Promise<void> {
     // automáticamente si el notificador ya está registrado (post-bootstrap).
   });
 
-  // ── 3. Bootstrap: DB + Telegram + system_state ────────────────────────────
-  log.info("🔧 Iniciando bootstrap de servicios...");
-  const bootResult = await bootstrap();
+  // ── 3. HTTP liveness: antes de cualquier operación remota ────────────────
+  setTelegramPollingRuntimeStatus(
+    isTelegramCommandsPollingEnabled(config) ? "starting" : "disabled",
+  );
+  await startHttpServer();
 
-  // ── 4. Registrar notificador de errores a Telegram ────────────────────────
+  // Modo explícito de tarea única: aun aquí /health ya está escuchando.
+  if (
+    process.env.RUN_MAESTROS === "true" &&
+    (config.NODE_ENV === "development" ||
+      process.env.MAESTROS_ONLY === "true")
+  ) {
+    log.info("RUN_MAESTROS=true detectado: ejecutando scraper de maestros");
+    await runMaestrosScraper();
+    log.info("Scraper de maestros finalizado (modo tarea única) — saliendo");
+    process.exit(0);
+  }
+
+  // ── 4. Bootstrap: DB + Telegram + system_state ────────────────────────────
+  log.info("🔧 Iniciando bootstrap de servicios...");
+  let bootResult: Awaited<ReturnType<typeof bootstrap>>;
+  try {
+    bootResult = await bootstrap();
+    setDatabaseRuntimeStatus("ok");
+    setBootstrapRuntimeStatus("ok");
+  } catch (err) {
+    setDatabaseRuntimeStatus("error");
+    setBootstrapRuntimeStatus("failed");
+    throw err;
+  }
+
+  // ── 5. Registrar notificador de errores a Telegram ────────────────────────
   // A partir de aquí, cualquier log.error() o log.fatal() en cualquier módulo
   // enviará automáticamente un mensaje a Telegram con el error exacto.
   if (bootResult.telegramOk) {
@@ -157,20 +174,22 @@ async function main(): Promise<void> {
     );
   }
 
-  // ── 5. Bot de comandos Telegram ───────────────────────────────────────────
+  // ── 6. Bot de comandos Telegram (background, nunca bloquea /health) ───────
   if (bootResult.telegramOk && isTelegramCommandsPollingEnabled(config)) {
-    try {
-      await initCommandBot();
-      log.info("🤖 Bot Telegram iniciado con polling");
-    } catch (err) {
-      log.warn({ err }, "⚠️ Error iniciando bot — continuando sin comandos");
-    }
+    void initCommandBot()
+      .then(() => {
+        log.info(
+          "🤖 Inicialización Telegram commands despachada; estado disponible en /health",
+        );
+      })
+      .catch((err) => {
+        setTelegramPollingRuntimeStatus("degraded");
+        log.warn({ err }, "⚠️ Error iniciando bot — continuando sin comandos");
+      });
   } else if (bootResult.telegramOk) {
-    await recordTelegramCommandsStartup("disabled").catch((err) => {
-      log.warn(
-        { err },
-        "No se pudo registrar Telegram commands disabled",
-      );
+    setTelegramPollingRuntimeStatus("disabled");
+    void recordTelegramCommandsStartup("disabled").catch((err) => {
+      log.warn({ err }, "No se pudo registrar Telegram commands disabled");
     });
     log.warn(
       {
@@ -181,50 +200,63 @@ async function main(): Promise<void> {
       "⚠️ Bot Telegram de comandos desactivado por configuración",
     );
   } else {
+    setTelegramPollingRuntimeStatus("disabled");
     log.warn("⚠️ Bot Telegram desactivado — Telegram no disponible");
   }
 
-  // ── 6. FORCE_COLLECT: ciclo inmediato pre-scheduler ──────────────────────
+  // ── 7. FORCE_COLLECT: background, nunca bloquea /health ni scheduler ─────
   if (process.env.FORCE_COLLECT === "true") {
-    let forceCollectAllowed = false;
-    try {
-      const pause = await getEffectivePause("collector");
-      if (pause.paused) {
-        log.info(
-          {
-            effectiveScope: pause.effectiveScope,
-            resumeAt: pause.entry?.resumeAt ?? null,
-          },
-          "[PAUSA] FORCE_COLLECT omitido por pausa manual",
-        );
-      } else {
-        forceCollectAllowed = true;
-      }
-    } catch (err) {
-      log.error(
-        { err },
-        "[PAUSA] No se pudo verificar la pausa; FORCE_COLLECT omitido por seguridad",
-      );
-    }
-
-    if (forceCollectAllowed) {
-      log.info("⚡ FORCE_COLLECT=true — ejecutando ciclo de colección inmediato...");
+    void (async () => {
+      let forceCollectAllowed = false;
       try {
-        const { runCollectJob } = await import("./jobs/collect.job");
-        await runCollectJob();
-        log.info("✅ FORCE_COLLECT ciclo completado");
+        const pause = await getEffectivePause("collector");
+        if (pause.paused) {
+          log.info(
+            {
+              effectiveScope: pause.effectiveScope,
+              resumeAt: pause.entry?.resumeAt ?? null,
+            },
+            "[PAUSA] FORCE_COLLECT omitido por pausa manual",
+          );
+        } else {
+          forceCollectAllowed = true;
+        }
       } catch (err) {
-        log.error({ err }, "❌ Error en FORCE_COLLECT ciclo");
+        log.error(
+          { err },
+          "[PAUSA] No se pudo verificar la pausa; FORCE_COLLECT omitido por seguridad",
+        );
       }
-    }
-  }
 
-  // ── 7. HTTP Server ────────────────────────────────────────────────────────
-  startHttpServer();
+      if (forceCollectAllowed) {
+        log.info("⚡ FORCE_COLLECT=true — ejecutando ciclo de colección inmediato...");
+        try {
+          const { runCollectJob } = await import("./jobs/collect.job");
+          await runCollectJob();
+          log.info("✅ FORCE_COLLECT ciclo completado");
+        } catch (err) {
+          log.error({ err }, "❌ Error en FORCE_COLLECT ciclo");
+        }
+      }
+    })().catch((err) => {
+      log.error({ err }, "❌ Error no manejado en FORCE_COLLECT background");
+    });
+  }
 
   // ── 8. Scheduler ──────────────────────────────────────────────────────────
   startScheduler();
   log.info("✅ Scheduler iniciado");
+
+  if (process.env.RUN_MAESTROS === "true") {
+    log.info(
+      "RUN_MAESTROS=true detectado: ejecutando scraper de maestros en background",
+    );
+    void runMaestrosScraper()
+      .then(() => log.info("Scraper de maestros finalizado (background)"))
+      .catch((err) => {
+        log.error({ err }, "Error en scraper de maestros (background)");
+      });
+  }
 
   // ── 9. Resumen de arranque ────────────────────────────────────────────────
   log.info(

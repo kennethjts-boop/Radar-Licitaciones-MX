@@ -15,9 +15,13 @@ const TELEGRAM_CONFLICT_RETRY_DELAYS_MS = [
   45_000,
   120_000,
 ] as const;
+export const TELEGRAM_STARTUP_CONFLICT_WINDOW_MS = 90_000;
+export const TELEGRAM_STARTUP_CONFLICT_MAX_ATTEMPTS = 6;
+export const TELEGRAM_STARTUP_CONFLICT_RETRY_DELAY_MS = 10_000;
 
 export type TelegramPollingErrorKind =
   | "transient_network"
+  | "startup_conflict"
   | "telegram_conflict"
   | "telegram_auth"
   | "unknown";
@@ -91,6 +95,7 @@ let sendFailureCount = 0;
 let sendHealthRecorded = false;
 const recentAlerts = new Map<TelegramPollingErrorKind, number>();
 let recoveryInFlight = false;
+let pollingFailureRecordingPaused = false;
 
 function envNumber(name: string, fallback: number): number {
   const parsed = Number(process.env[name]);
@@ -202,6 +207,10 @@ function getTelegramErrorDetails(error: unknown): {
 
 export function classifyTelegramPollingError(
   error: unknown,
+  context?: {
+    processUptimeMs: number;
+    startupConflictAttempts: number;
+  },
 ): TelegramPollingDiagnosis {
   const details = getTelegramErrorDetails(error);
   const message = details.message.toLowerCase();
@@ -218,6 +227,25 @@ export function classifyTelegramPollingError(
     message.includes("duplicate polling") ||
     message.includes("conflict")
   ) {
+    if (
+      context &&
+      context.processUptimeMs <= TELEGRAM_STARTUP_CONFLICT_WINDOW_MS &&
+      context.startupConflictAttempts <
+        TELEGRAM_STARTUP_CONFLICT_MAX_ATTEMPTS
+    ) {
+      return {
+        origin: "OUR_INFRA",
+        kind: "startup_conflict",
+        severity: "WARN",
+        userDiagnosis:
+          "Conflicto esperado durante el relevo solapado de contenedores.",
+        recommendedAction:
+          "Esperar el retiro de la instancia anterior y reintentar silenciosamente.",
+        statusCode: details.statusCode,
+        code: details.code,
+        technicalReason,
+      };
+    }
     return {
       origin: "OUR_INFRA",
       kind: "telegram_conflict",
@@ -391,8 +419,29 @@ export async function recordTelegramPollingFailure(
   error: unknown,
   sendOperationalMessage: SendOperationalMessage,
   now = new Date(),
+  diagnosisOverride?: TelegramPollingDiagnosis,
 ): Promise<{ diagnosis: TelegramPollingDiagnosis; alerted: boolean; failures: number }> {
-  const diagnosis = classifyTelegramPollingError(error);
+  const diagnosis = diagnosisOverride ?? classifyTelegramPollingError(error);
+
+  if (
+    pollingFailureRecordingPaused ||
+    diagnosis.kind === "startup_conflict"
+  ) {
+    log.debug(
+      {
+        kind: diagnosis.kind,
+        failures: pendingPollingFailures,
+        paused: pollingFailureRecordingPaused,
+      },
+      "Telegram polling_error ignorado mientras espera reintento",
+    );
+    return {
+      diagnosis,
+      alerted: false,
+      failures: pendingPollingFailures,
+    };
+  }
+
   const tuning = getTelegramPollingTuning();
   const nowMs = now.getTime();
 
@@ -545,6 +594,16 @@ export async function recordTelegramPollingSuccess(
   });
 }
 
+export function setTelegramPollingFailureRecordingPaused(
+  paused: boolean,
+): void {
+  pollingFailureRecordingPaused = paused;
+}
+
+export function isTelegramPollingFailureRecordingPaused(): boolean {
+  return pollingFailureRecordingPaused;
+}
+
 export async function recordTelegramSendSuccess(
   now = new Date(),
 ): Promise<void> {
@@ -596,4 +655,5 @@ export function resetTelegramCommandsHealthForTests(): void {
   sendHealthRecorded = false;
   recentAlerts.clear();
   recoveryInFlight = false;
+  pollingFailureRecordingPaused = false;
 }
