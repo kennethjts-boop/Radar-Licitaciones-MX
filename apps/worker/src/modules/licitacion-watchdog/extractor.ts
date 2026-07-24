@@ -36,7 +36,6 @@ const DATA_CONTAINER_TIMEOUT_MS = 20_000;
 const DETAIL_DATA_SELECTOR = "app-sitiopublico-detalle-content .card label";
 const DOM_STABILITY_POLL_MS = 500;
 const DOM_STABILITY_TIMEOUT_MS = 15_000;
-const ANNEX_PAGE_TIMEOUT_MS = 20_000;
 const ANNEX_PAGINATOR_NEXT_SELECTOR =
   "app-sitiopublico-detalle-anexos .p-paginator-next:not(.p-disabled)";
 
@@ -111,6 +110,7 @@ async function fetchAllAnnexGroups(
   firstResponse: Response,
   firstPages: AnexosPage[],
 ): Promise<AnexoGroup[]> {
+  const timeoutMs = getConfig().WATCHDOG_TIMEOUT_MS;
   const groups = [...(firstPages[0]?.registros ?? [])];
   const totalPages = firstPages[0]?.paginacion?.[0]?.total_paginas ?? 1;
   if (totalPages <= 1) return groups;
@@ -133,14 +133,14 @@ async function fetchAllAnnexGroups(
           parsed.searchParams.get("page") === String(pageNumber);
       },
       {
-        timeoutMs: ANNEX_PAGE_TIMEOUT_MS,
+        timeoutMs,
         signal: waitAbortController.signal,
       },
     );
     void responsePromise.catch(() => undefined);
     try {
       await page.locator(ANNEX_PAGINATOR_NEXT_SELECTOR).first()
-        .click({ timeout: ANNEX_PAGE_TIMEOUT_MS });
+        .click({ timeout: timeoutMs });
     } catch (error) {
       waitAbortController.abort();
       await Promise.allSettled([responsePromise]);
@@ -421,6 +421,7 @@ export async function extractWatchdogSnapshot(input: {
   if (preflight) return skippedResult(preflight);
 
   try {
+    const timeoutMs = getConfig().WATCHDOG_TIMEOUT_MS;
     // Los timeouts explícitos por etapa se complementan con un techo exterior
     // configurable que contiene cualquier espera inesperada del contexto.
     return await BrowserManager.withContext(async (page) => {
@@ -433,13 +434,19 @@ export async function extractWatchdogSnapshot(input: {
           return parsed.pathname === detailPath &&
             parsed.searchParams.get("id_proceso") === "procedimiento";
         },
-        { signal: waitAbortController.signal },
+        {
+          signal: waitAbortController.signal,
+          timeoutMs,
+        },
       );
       const annexResponsePromise = waitForResponseResilient(
         page,
         annexPath,
         (response) => response.url().includes(annexPath),
-        { signal: waitAbortController.signal },
+        {
+          signal: waitAbortController.signal,
+          timeoutMs,
+        },
       );
 
       // Registrar handlers inmediatamente: aunque goto falle, ningún waiter podrá

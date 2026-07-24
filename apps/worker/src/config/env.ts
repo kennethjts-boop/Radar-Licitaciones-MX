@@ -143,9 +143,9 @@ const envSchema = z.object({
     .default("1800000")
     .transform(Number)
     .pipe(z.number().int().min(1000)),
-  FASTWAIT_TIMEOUT_MS: z
+  WATCHDOG_TIMEOUT_MS: z
     .string()
-    .default("25000")
+    .default("45000")
     .transform(Number)
     .pipe(z.number().int().min(1000)),
   WATCHDOG_CONTEXT_TIMEOUT_MS: z
@@ -331,7 +331,7 @@ export function getConfig(): AppConfig {
       WATCHDOG_INTERVAL_MINUTES: result.data.WATCHDOG_INTERVAL_MINUTES,
       CIRCUIT_FAILURE_THRESHOLD: result.data.CIRCUIT_FAILURE_THRESHOLD,
       CIRCUIT_OPEN_MS: result.data.CIRCUIT_OPEN_MS,
-      FASTWAIT_TIMEOUT_MS: result.data.FASTWAIT_TIMEOUT_MS,
+      WATCHDOG_TIMEOUT_MS: result.data.WATCHDOG_TIMEOUT_MS,
       WATCHDOG_CONTEXT_TIMEOUT_MS: result.data.WATCHDOG_CONTEXT_TIMEOUT_MS,
       PLAYWRIGHT_IGNORE_HTTPS_ERRORS: result.data.PLAYWRIGHT_IGNORE_HTTPS_ERRORS,
       ALERT_MAX_PER_CYCLE: result.data.ALERT_MAX_PER_CYCLE,

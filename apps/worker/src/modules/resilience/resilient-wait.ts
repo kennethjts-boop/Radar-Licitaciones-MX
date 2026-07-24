@@ -124,7 +124,7 @@ export async function waitForResponseResilient(
     return skipped;
   }
 
-  const timeoutMs = options.timeoutMs ?? getConfig().FASTWAIT_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? getConfig().WATCHDOG_TIMEOUT_MS;
   try {
     const response = await waitForResponseFailFast(
       page,

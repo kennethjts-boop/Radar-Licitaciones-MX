@@ -110,6 +110,25 @@ describe("waitForResponseFailFast", () => {
     expect(jest.getTimerCount()).toBe(0);
   });
 
+  it("usa WATCHDOG_TIMEOUT_MS=45000 por default", async () => {
+    jest.useFakeTimers();
+    const fakePage = new FakePage();
+    const waiting = waitForResponseFailFast(
+      fakePage as unknown as Page,
+      () => true,
+    );
+
+    jest.advanceTimersByTime(44_999);
+    expect(fakePage.responseListenerCount()).toBe(1);
+    jest.advanceTimersByTime(1);
+
+    await expect(waiting).rejects.toMatchObject({
+      name: "FastTimeoutError",
+      timeoutMs: 45_000,
+    });
+    expect(fakePage.responseListenerCount()).toBe(0);
+  });
+
   it("limpia también si el matcher lanza y el flag settled evita dobles salidas", async () => {
     const fakePage = new FakePage();
     const waiting = waitForResponseFailFast(

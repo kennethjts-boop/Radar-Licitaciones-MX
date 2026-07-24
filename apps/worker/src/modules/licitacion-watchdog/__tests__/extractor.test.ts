@@ -262,6 +262,20 @@ describe("navegación watchdog resiliente", () => {
     }));
     expect(page.close).toHaveBeenCalledTimes(1);
     expect(mockedResilientWait).toHaveBeenCalledTimes(2);
+    expect(mockedResilientWait).toHaveBeenNthCalledWith(
+      1,
+      page,
+      "/whitney/sitiopublico/expedientes/uuid",
+      expect.any(Function),
+      expect.objectContaining({ timeoutMs: 45_000 }),
+    );
+    expect(mockedResilientWait).toHaveBeenNthCalledWith(
+      2,
+      page,
+      "/whitney/sitiopublico/expedientes/uuid/anexos",
+      expect.any(Function),
+      expect.objectContaining({ timeoutMs: 45_000 }),
+    );
     expect(mockedWithContext).toHaveBeenCalledWith(
       expect.any(Function),
       { timeoutMs: 180_000 },

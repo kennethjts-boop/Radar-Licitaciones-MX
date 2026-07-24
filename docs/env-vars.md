@@ -49,6 +49,9 @@ TELEGRAM_POLLING_ENABLED=true
 # En servicios o réplicas secundarias de Railway, usar TELEGRAM_POLLING_ENABLED=false
 # para evitar 409 Conflict por múltiples getUpdates con el mismo token.
 
+WATCHDOG_TIMEOUT_MS=45000
+# Timeout compartido por detalle, anexos y fast-wait del watchdog.
+
 # ── Playwright ────────────────────────────────────────────────────────────────
 PLAYWRIGHT_HEADLESS=true
 # En Railway debe ser true (sin display)

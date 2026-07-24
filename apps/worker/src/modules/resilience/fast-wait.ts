@@ -1,4 +1,5 @@
 import type { Page, Response } from "playwright";
+import { getConfig } from "../../config/env";
 import { createModuleLogger } from "../../core/logger";
 
 const log = createModuleLogger("resilience:fast-wait");
@@ -34,7 +35,7 @@ export class FastWaitAbortedError extends Error {
 export function waitForResponseFailFast(
   page: Page,
   matcher: ResponseMatcher,
-  timeoutMs = 25_000,
+  timeoutMs = getConfig().WATCHDOG_TIMEOUT_MS,
   signal?: AbortSignal,
 ): Promise<Response> {
   return new Promise<Response>((resolve, reject) => {
