@@ -9,6 +9,12 @@ import { createModuleLogger } from "./logger";
 import { getState, setState, STATE_KEYS } from "./system-state";
 
 const log = createModuleLogger("telegram-commands-health");
+const TELEGRAM_CONFLICT_RETRY_DELAYS_MS = [
+  5_000,
+  15_000,
+  45_000,
+  120_000,
+] as const;
 
 export type TelegramPollingErrorKind =
   | "transient_network"
@@ -126,6 +132,14 @@ export function getTelegramPollingRetryDelayMs(
   const jitterRange = baseDelay * tuning.retryJitterRatio;
   const jitter = Math.floor((random() * 2 - 1) * jitterRange);
   return Math.max(250, baseDelay + jitter);
+}
+
+export function getTelegramConflictRetryDelayMs(attempt: number): number {
+  const index = Math.min(
+    Math.max(Math.trunc(attempt), 1),
+    TELEGRAM_CONFLICT_RETRY_DELAYS_MS.length,
+  ) - 1;
+  return TELEGRAM_CONFLICT_RETRY_DELAYS_MS[index];
 }
 
 function escapeHtml(value: string): string {

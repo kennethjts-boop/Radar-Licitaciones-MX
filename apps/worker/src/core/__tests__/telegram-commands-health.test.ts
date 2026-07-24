@@ -21,6 +21,7 @@ jest.mock("../system-state", () => ({
 
 import {
   classifyTelegramPollingError,
+  getTelegramConflictRetryDelayMs,
   getTelegramPollingRetryDelayMs,
   recordTelegramPollingFailure,
   recordTelegramPollingSuccess,
@@ -110,6 +111,16 @@ describe("Telegram commands polling health", () => {
     delete process.env.TELEGRAM_POLLING_RETRY_BACKOFF_MULTIPLIER;
     delete process.env.TELEGRAM_POLLING_RETRY_MAX_DELAY_MS;
     delete process.env.TELEGRAM_POLLING_RETRY_JITTER_RATIO;
+  });
+
+  it("calcula la secuencia obligatoria de backoff para conflictos 409", () => {
+    expect([
+      getTelegramConflictRetryDelayMs(1),
+      getTelegramConflictRetryDelayMs(2),
+      getTelegramConflictRetryDelayMs(3),
+      getTelegramConflictRetryDelayMs(4),
+      getTelegramConflictRetryDelayMs(5),
+    ]).toEqual([5_000, 15_000, 45_000, 120_000, 120_000]);
   });
 
   it("polling_error aislado registra telemetría pero no alerta ni contamina health global", async () => {

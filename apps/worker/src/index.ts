@@ -16,7 +16,10 @@ import { getLogger } from "./core/logger";
 import { bootstrap } from "./bootstrap";
 import { SchemaValidationError } from "./storage/schema-validator";
 import { startScheduler } from "./jobs/scheduler";
-import { initCommandBot } from "./agent/telegram.commands";
+import {
+  initCommandBot,
+  shutdownCommandBot,
+} from "./agent/telegram.commands";
 import { setComprasMxSourceId } from "./jobs/collect.job";
 import { runMaestrosScraper } from "./scripts/maestros-morelos";
 import { startHttpServer } from "./core/http-server";
@@ -64,14 +67,42 @@ async function main(): Promise<void> {
   );
 
   // ── 2. Signal handlers ────────────────────────────────────────────────────
+  let gracefulShutdownPromise: Promise<void> | null = null;
+  const gracefulShutdown = (signal: "SIGTERM" | "SIGINT"): Promise<void> => {
+    if (gracefulShutdownPromise) return gracefulShutdownPromise;
+    gracefulShutdownPromise = (async () => {
+      log.info({ signal }, `${signal} recibido — cerrando gracefulmente`);
+      let timeoutHandle: NodeJS.Timeout | null = null;
+      try {
+        await Promise.race([
+          shutdownCommandBot(),
+          new Promise<never>((_, reject) => {
+            timeoutHandle = setTimeout(
+              () => reject(new Error("Timeout de 8s deteniendo Telegram polling")),
+              8_000,
+            );
+          }),
+        ]);
+        log.info({ signal }, "Telegram polling detenido antes del shutdown");
+      } catch (err) {
+        log.warn(
+          { err, signal },
+          "Shutdown de Telegram agotó el tiempo; el proceso continuará cerrando",
+        );
+      } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        process.exit(0);
+      }
+    })();
+    return gracefulShutdownPromise;
+  };
+
   process.on("SIGTERM", () => {
-    log.info("SIGTERM recibido — cerrando gracefulmente");
-    process.exit(0);
+    void gracefulShutdown("SIGTERM");
   });
 
   process.on("SIGINT", () => {
-    log.info("SIGINT recibido — cerrando");
-    process.exit(0);
+    void gracefulShutdown("SIGINT");
   });
 
   process.on("uncaughtException", (err) => {

@@ -1,4 +1,10 @@
-import { initCommandBot, isManualScanOkStatus } from "../telegram.commands";
+import {
+  initCommandBot,
+  isManualScanOkStatus,
+  resetCommandBotForTests,
+  schedulePollingRetry,
+  shutdownCommandBot,
+} from "../telegram.commands";
 import TelegramBot from "node-telegram-bot-api";
 import { getConfig } from "../../config/env";
 
@@ -548,5 +554,104 @@ describe("Telegram Commands - /noticias_comerciales", () => {
     expect(sentText).not.toContain("5512345678");
     expect(sentText).toContain("[REDACTED_EMAIL]");
     expect(sentText).toContain("[REDACTED_PHONE]");
+  });
+});
+
+describe("Telegram Commands - ciclo de vida del polling", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    resetCommandBotForTests();
+    jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    resetCommandBotForTests();
+    jest.useRealTimers();
+  });
+
+  it("comparte la misma promesa y descarta updates antes de iniciar polling", async () => {
+    const deleteWebhook = jest
+      .spyOn(TelegramBot.prototype, "deleteWebHook")
+      .mockResolvedValue(true);
+    const startPolling = jest
+      .spyOn(TelegramBot.prototype, "startPolling")
+      .mockResolvedValue(undefined);
+
+    const first = initCommandBot();
+    const second = initCommandBot();
+
+    expect(first).toBe(second);
+    await expect(first).resolves.toBeInstanceOf(TelegramBot);
+    expect(deleteWebhook).toHaveBeenCalledWith({
+      drop_pending_updates: true,
+    });
+    expect(startPolling).toHaveBeenCalledWith({ restart: true });
+    expect(deleteWebhook.mock.invocationCallOrder[0])
+      .toBeLessThan(startPolling.mock.invocationCallOrder[0]);
+  });
+
+  it("recupera un 409 en orden stop, backoff, deleteWebhook y start", async () => {
+    const calls: string[] = [];
+    const bot = {
+      stopPolling: jest.fn(async () => {
+        calls.push("stop");
+      }),
+      deleteWebHook: jest.fn(async () => {
+        calls.push("delete");
+        return true;
+      }),
+      startPolling: jest.fn(async () => {
+        calls.push("start");
+      }),
+    } as unknown as TelegramBot;
+    const diagnosis = {
+      origin: "OUR_INFRA",
+      kind: "telegram_conflict",
+      severity: "DEGRADED",
+      userDiagnosis: "instancia duplicada",
+      recommendedAction: "revisar réplicas",
+      statusCode: 409,
+      code: "ETELEGRAM",
+      technicalReason: "Conflict: terminated by other getUpdates request",
+    } as const;
+
+    schedulePollingRetry(bot, diagnosis);
+    await Promise.resolve();
+
+    expect(bot.stopPolling).toHaveBeenCalledWith({
+      cancel: true,
+      reason: "telegram_conflict_backoff",
+    });
+    expect(calls).toEqual(["stop"]);
+
+    await jest.advanceTimersByTimeAsync(4_999);
+    expect(calls).toEqual(["stop"]);
+    await jest.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
+
+    expect(bot.deleteWebHook).toHaveBeenCalledWith({
+      drop_pending_updates: true,
+    });
+    expect(calls).toEqual(["stop", "delete", "start"]);
+  });
+
+  it("detiene polling con cancelación y el shutdown es idempotente", async () => {
+    const stopPolling = jest
+      .spyOn(TelegramBot.prototype, "stopPolling")
+      .mockResolvedValue(undefined);
+    jest.spyOn(TelegramBot.prototype, "deleteWebHook").mockResolvedValue(true);
+    jest.spyOn(TelegramBot.prototype, "startPolling").mockResolvedValue(undefined);
+    await initCommandBot();
+
+    const first = shutdownCommandBot();
+    const second = shutdownCommandBot();
+
+    expect(first).toBe(second);
+    await first;
+    expect(stopPolling).toHaveBeenCalledTimes(1);
+    expect(stopPolling).toHaveBeenCalledWith({
+      cancel: true,
+      reason: "worker_shutdown",
+    });
   });
 });
