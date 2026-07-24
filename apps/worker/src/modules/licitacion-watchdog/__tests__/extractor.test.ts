@@ -8,8 +8,14 @@ import {
   classifyWatchdogFailure,
   extractWatchdogSnapshot,
   navigateWatchdogPage,
+  watchdogErrorMessage,
   waitForStableVisibleSnapshot,
 } from "../extractor";
+import {
+  FastTimeoutError,
+  FastWaitAbortedError,
+  UpstreamError,
+} from "../../resilience/fast-wait";
 
 jest.mock("../../../collectors/comprasmx/browser.manager", () => ({
   BrowserManager: { withContext: jest.fn() },
@@ -139,6 +145,67 @@ describe("navegación watchdog resiliente", () => {
     expect(classifyWatchdogFailure(new Error("Failed to launch zygote process"))).toBe("NETWORK_INFRA");
     expect(classifyWatchdogFailure(new Error("Target page, context or browser has been closed")))
       .toBe("NETWORK_INFRA");
+  });
+
+  it("clasifica los errores tipados de resiliencia como NETWORK_INFRA", () => {
+    expect(classifyWatchdogFailure(new FastTimeoutError(25_000)))
+      .toBe("NETWORK_INFRA");
+    expect(classifyWatchdogFailure(
+      new UpstreamError(
+        503,
+        "https://comprasmx.example/whitney/sitiopublico/expedientes/uuid",
+      ),
+    )).toBe("NETWORK_INFRA");
+    expect(classifyWatchdogFailure(new FastWaitAbortedError()))
+      .toBe("NETWORK_INFRA");
+  });
+
+  it("conserva el status HTTP estructurado de UpstreamError en el mensaje de alerta", () => {
+    const error = new UpstreamError(
+      503,
+      "https://comprasmx.example/whitney/sitiopublico/expedientes/uuid",
+    );
+
+    expect(watchdogErrorMessage(error)).toContain("HTTP 503");
+    expect(watchdogErrorMessage(error)).toContain(error.url);
+  });
+
+  it("propaga UpstreamError 503 como fallo NETWORK_INFRA de api_responses", async () => {
+    const error = new UpstreamError(
+      503,
+      "https://comprasmx.example/whitney/sitiopublico/expedientes/uuid",
+    );
+    mockedResilientWait.mockRejectedValue(error);
+    const page = {
+      goto: jest.fn().mockResolvedValue(null),
+      waitForSelector: jest.fn().mockResolvedValue({}),
+    } as unknown as Page;
+    mockedWithContext.mockImplementation(async (operation) =>
+      operation(page, {} as never)
+    );
+
+    const result = await extractWatchdogSnapshot({
+      numeroProcedimiento: "PROC-503",
+      expedienteUrl: "https://comprasmx.example/#/detalle/uuid/procedimiento",
+      uuidProcedimiento: "uuid",
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      partial: true,
+      extractionFailure: expect.objectContaining({
+        cause: "NETWORK_INFRA",
+        stage: "api_responses",
+        errorType: "UpstreamError",
+        message: expect.stringContaining("HTTP 503"),
+      }),
+    }));
+  });
+
+  it("clasifica DomStabilityError como SITE_STRUCTURE por tipo", () => {
+    const error = new Error("Las tablas no se estabilizaron");
+    error.name = "DomStabilityError";
+
+    expect(classifyWatchdogFailure(error)).toBe("SITE_STRUCTURE");
   });
 
   it("clasifica errores HTTP: 4xx como SITE_STRUCTURE y 5xx/408/429 como NETWORK_INFRA", () => {

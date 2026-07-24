@@ -7,6 +7,11 @@ import {
   waitForResponseResilient,
   type ResilientWaitSkipped,
 } from "../resilience/resilient-wait";
+import {
+  FastTimeoutError,
+  FastWaitAbortedError,
+  UpstreamError,
+} from "../resilience/fast-wait";
 import type {
   JsonObject,
   VisibleTableSnapshot,
@@ -201,6 +206,9 @@ function sleep(ms: number): Promise<void> {
 }
 
 export function watchdogErrorMessage(error: unknown): string {
+  if (error instanceof UpstreamError) {
+    return `Upstream respondió HTTP ${error.status}: ${error.url}`;
+  }
   if (error instanceof Error) return error.message || "Error sin mensaje";
   if (typeof error === "string") return error || "String vacío lanzado como error";
   return "Valor no Error lanzado sin mensaje seguro";
@@ -212,6 +220,17 @@ export function watchdogErrorType(error: unknown): string {
 }
 
 export function classifyWatchdogFailure(error: unknown): WatchdogFailureCause {
+  if (
+    error instanceof FastTimeoutError ||
+    error instanceof UpstreamError ||
+    error instanceof FastWaitAbortedError
+  ) {
+    return "NETWORK_INFRA";
+  }
+  if (watchdogErrorType(error) === "DomStabilityError") {
+    return "SITE_STRUCTURE";
+  }
+
   const message = watchdogErrorMessage(error);
   const httpStatus = Number(message.match(/HTTP (\d{3})/)?.[1]);
   if (Number.isFinite(httpStatus)) {
