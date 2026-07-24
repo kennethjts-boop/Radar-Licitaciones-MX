@@ -7,6 +7,10 @@ import {
 } from "../telegram.commands";
 import TelegramBot from "node-telegram-bot-api";
 import { getConfig } from "../../config/env";
+import {
+  acquirePollingLock,
+  startHeartbeat,
+} from "../../modules/bot/instance-lock";
 
 let mockExternalState: Record<string, unknown> | null = null;
 let mockTelegramCommandsState: Record<string, unknown> | null = null;
@@ -31,6 +35,16 @@ function findTextHandler(bot: TelegramBot, pattern: string): TestTextHandler {
   if (!handler) throw new Error(`Handler no registrado para ${pattern}`);
   return handler;
 }
+
+jest.mock("../../modules/bot/instance-lock", () => ({
+  acquirePollingLock: jest.fn().mockResolvedValue(true),
+  startHeartbeat: jest.fn().mockReturnValue(jest.fn()),
+}));
+
+const mockAcquirePollingLock =
+  acquirePollingLock as jest.MockedFunction<typeof acquirePollingLock>;
+const mockStartHeartbeat =
+  startHeartbeat as jest.MockedFunction<typeof startHeartbeat>;
 
 // Mock Supabase
 const mockSelect = jest.fn();
@@ -151,7 +165,7 @@ describe("Telegram Commands - /noticias_comerciales", () => {
     // Override prototype methods on TelegramBot mock to avoid real API calls
     jest.spyOn(TelegramBot.prototype, "deleteWebHook").mockResolvedValue(true);
     jest.spyOn(TelegramBot.prototype, "sendMessage").mockImplementation(mockSendMessage);
-    jest.spyOn(TelegramBot.prototype, "startPolling").mockImplementation(jest.fn());
+    jest.spyOn(TelegramBot.prototype, "startPolling").mockResolvedValue(undefined);
 
     botInstance = await initCommandBot();
   });
@@ -555,6 +569,7 @@ describe("Telegram Commands - /noticias_comerciales", () => {
     expect(sentText).toContain("[REDACTED_EMAIL]");
     expect(sentText).toContain("[REDACTED_PHONE]");
   });
+
 });
 
 describe("Telegram Commands - ciclo de vida del polling", () => {
@@ -562,6 +577,8 @@ describe("Telegram Commands - ciclo de vida del polling", () => {
     jest.useFakeTimers();
     resetCommandBotForTests();
     jest.clearAllMocks();
+    mockAcquirePollingLock.mockResolvedValue(true);
+    mockStartHeartbeat.mockReturnValue(jest.fn());
   });
 
   afterEach(() => {
@@ -585,9 +602,29 @@ describe("Telegram Commands - ciclo de vida del polling", () => {
     expect(deleteWebhook).toHaveBeenCalledWith({
       drop_pending_updates: true,
     });
+    expect(mockAcquirePollingLock).toHaveBeenCalledTimes(1);
+    expect(mockStartHeartbeat).toHaveBeenCalledTimes(1);
     expect(startPolling).toHaveBeenCalledWith({ restart: true });
-    expect(deleteWebhook.mock.invocationCallOrder[0])
-      .toBeLessThan(startPolling.mock.invocationCallOrder[0]);
+    expect(deleteWebhook.mock.invocationCallOrder[0]).toBeLessThan(
+      mockAcquirePollingLock.mock.invocationCallOrder[0],
+    );
+    expect(mockAcquirePollingLock.mock.invocationCallOrder[0]).toBeLessThan(
+      startPolling.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("queda en standby y no inicia polling cuando otra instancia tiene el lock", async () => {
+    mockAcquirePollingLock.mockResolvedValue(false);
+    jest.spyOn(TelegramBot.prototype, "deleteWebHook").mockResolvedValue(true);
+    const startPolling = jest
+      .spyOn(TelegramBot.prototype, "startPolling")
+      .mockResolvedValue(undefined);
+
+    await expect(initCommandBot()).resolves.toBeInstanceOf(TelegramBot);
+
+    expect(mockAcquirePollingLock).toHaveBeenCalledTimes(1);
+    expect(mockStartHeartbeat).not.toHaveBeenCalled();
+    expect(startPolling).not.toHaveBeenCalled();
   });
 
   it("recupera un 409 en orden stop, backoff, deleteWebhook y start", async () => {
