@@ -61,7 +61,7 @@ export interface WatchdogExtractionFailure extends JsonObject {
   attempts: number;
 }
 
-export type WatchdogHealthSeverity = "DEGRADED" | "CRITICAL";
+export type WatchdogHealthSeverity = "WARN" | "CRITICAL";
 
 export interface WatchdogHealthState extends JsonObject {
   consecutiveFailures: number;

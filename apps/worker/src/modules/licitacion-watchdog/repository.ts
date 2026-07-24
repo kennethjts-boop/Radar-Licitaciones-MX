@@ -24,8 +24,13 @@ export interface WatchdogHealthAlertRow {
   created_at: string;
 }
 
-function healthAlertType(severity: WatchdogHealthSeverity, cause: WatchdogFailureCause): string {
-  return `${HEALTH_ALERT_PREFIX}_${severity.toLowerCase()}_${cause.toLowerCase()}`;
+function healthAlertType(
+  severity: WatchdogHealthSeverity,
+  cause: WatchdogFailureCause,
+  stage: string,
+): string {
+  const safeStage = stage.toLowerCase().replace(/[^a-z0-9_:-]+/g, "_").slice(0, 80) || "unknown";
+  return `${HEALTH_ALERT_PREFIX}_${severity.toLowerCase()}_${cause.toLowerCase()}_${safeStage}`;
 }
 
 export async function resolveExpediente(numeroProcedimiento: string): Promise<{
@@ -147,13 +152,12 @@ export async function markNotificationSent(
 }
 
 export async function getRecentWatchdogHealthAlerts(
-  severity: WatchdogHealthSeverity,
-  limit = 20,
+  limit = 50,
 ): Promise<WatchdogHealthAlertRow[]> {
   const { data, error } = await getSupabaseClient()
     .from("alerts")
     .select("id, alert_type, telegram_message, telegram_status, telegram_message_id, sent_at, created_at")
-    .like("alert_type", `${HEALTH_ALERT_PREFIX}_${severity.toLowerCase()}_%`)
+    .like("alert_type", `${HEALTH_ALERT_PREFIX}_%`)
     .eq("telegram_status", "sent")
     .order("sent_at", { ascending: false, nullsFirst: false })
     .limit(limit);
@@ -164,6 +168,7 @@ export async function getRecentWatchdogHealthAlerts(
 export async function createPendingWatchdogHealthAlert(input: {
   severity: WatchdogHealthSeverity;
   cause: WatchdogFailureCause;
+  stage: string;
   message: string;
 }): Promise<string> {
   const id = randomUUID();
@@ -171,7 +176,7 @@ export async function createPendingWatchdogHealthAlert(input: {
     id,
     radar_id: null,
     procurement_id: null,
-    alert_type: healthAlertType(input.severity, input.cause),
+    alert_type: healthAlertType(input.severity, input.cause, input.stage),
     telegram_message: input.message,
     telegram_status: "pending",
     telegram_message_id: null,

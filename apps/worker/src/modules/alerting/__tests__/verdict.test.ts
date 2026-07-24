@@ -21,16 +21,34 @@ function circuit(
 }
 
 describe("determineVerdict", () => {
-  it("cubre ESPERAR con minutos exactos para circuito abierto", () => {
+  it("cubre PAUSAR con minutos exactos para circuito watchdog abierto", () => {
     const verdict = determineVerdict({
       source: "watchdog",
       circuit: circuit({ state: "OPEN", msUntilRetry: 17 * 60_000 }),
     });
     expect(verdict).toMatchObject({
-      category: "ESPERAR",
+      category: "PAUSAR",
       suggestedPauseMinutes: 17,
     });
     expect(verdict.reason).toContain("17 minutos");
+  });
+
+  it("pausa watchdog tras diez fallos aunque el circuito siga CLOSED", () => {
+    expect(determineVerdict({
+      source: "watchdog",
+      cause: "NETWORK_INFRA",
+      consecutiveFailures: 10,
+      circuit: circuit({ state: "CLOSED", consecutiveFailures: 2 }),
+    }).category).toBe("PAUSAR");
+  });
+
+  it("interviene ante cualquier causa watchdog distinta de NETWORK_INFRA", () => {
+    expect(determineVerdict({
+      source: "watchdog",
+      cause: "APPLICATION_ERROR",
+      consecutiveFailures: 1,
+      circuit: circuit(),
+    }).category).toBe("INTERVENIR");
   });
 
   it("cubre VIGILAR por dos fallos consecutivos", () => {
@@ -65,7 +83,7 @@ describe("determineVerdict", () => {
     expect(verdict.action).toContain("réplicas en Railway");
   });
 
-  it("pausa después de tres ciclos degradados durante hora pico", () => {
+  it("mantiene ESPERAR con circuito CLOSED y menos de diez fallos aun en hora pico", () => {
     expect(determineVerdict({
       source: "watchdog",
       consecutiveFailures: 3,
@@ -78,7 +96,8 @@ describe("determineVerdict", () => {
         isAnomalous: false,
         message: "Hora de saturación conocida del portal.",
       },
-    }).category).toBe("PAUSAR");
+      circuit: circuit({ state: "CLOSED", consecutiveFailures: 2 }),
+    }).category).toBe("ESPERAR");
   });
 
   it("vigila un fallo fuera de hora pico por ser anómalo", () => {

@@ -12,7 +12,10 @@ import {
 import {
   EMPTY_WATCHDOG_HEALTH,
   notifyWatchdogHealthIfNeeded,
+  reconcileWatchdogColdStartHealth,
+  resolveWatchdogHealthDecision,
   transitionWatchdogHealth,
+  type WatchdogHealthDecision,
 } from "./health";
 import {
   getLatestSnapshot,
@@ -25,6 +28,7 @@ import { diffSnapshots, hashSnapshot } from "./snapshot";
 import { structuralChangeGuard } from "./structural-guard";
 import { sendPendingNotification } from "./telegram";
 import { recordNetworkFailure } from "../alerting/saturation";
+import { allCircuits } from "../resilience/circuit-breaker";
 import type {
   JsonObject,
   StructuralConfirmation,
@@ -38,6 +42,7 @@ import type {
 
 const log = createModuleLogger("licitacion-watchdog:job");
 let inFlight = false;
+let coldStartHealthReconciled = false;
 
 function isSkippedExtraction(
   extraction: WatchdogExtractionResult,
@@ -205,6 +210,7 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
   let currentHealth: WatchdogHealthState = EMPTY_WATCHDOG_HEALTH;
   let previousTelemetry: WatchdogTelemetry | null = null;
   let deploymentSha: string | null = null;
+  let healthDecision: WatchdogHealthDecision | null = null;
   const results: JsonObject = {};
   try {
     if (inFlight) {
@@ -226,6 +232,23 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
     deploymentSha = getConfig().RAILWAY_GIT_COMMIT_SHA ?? null;
     previousTelemetry = await getState<WatchdogTelemetry>(STATE_KEYS.WATCHDOG_TELEMETRY);
     currentHealth = previousTelemetry?.health ?? EMPTY_WATCHDOG_HEALTH;
+    if (!coldStartHealthReconciled) {
+      const reconciliation = reconcileWatchdogColdStartHealth(
+        currentHealth,
+        allCircuits(),
+      );
+      currentHealth = reconciliation.health;
+      coldStartHealthReconciled = true;
+      if (reconciliation.reset) {
+        log.info(
+          {
+            previousConsecutiveFailures:
+              previousTelemetry?.health?.consecutiveFailures ?? 0,
+          },
+          "[COLD_START] Contador watchdog reiniciado porque todos los circuitos están CLOSED",
+        );
+      }
+    }
     await setState(STATE_KEYS.WATCHDOG_TELEMETRY, {
       status: "running",
       lastCheckedAt: startedAt,
@@ -288,6 +311,8 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
         errorType: typeof primaryFailure?.errorType === "string" ? primaryFailure.errorType : null,
         message: typeof primaryFailure?.error === "string" ? primaryFailure.error : null,
       });
+      healthDecision = await resolveWatchdogHealthDecision(currentHealth);
+      currentHealth = healthDecision.health;
     } else if (!allSkipped) {
       currentHealth = transitionWatchdogHealth(currentHealth, { success: true });
     }
@@ -328,7 +353,10 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
           );
         });
       }
-      await notifyWatchdogHealthIfNeeded(currentHealth);
+      await notifyWatchdogHealthIfNeeded(
+        currentHealth,
+        healthDecision ?? undefined,
+      );
     }
   } catch (err) {
     // Última frontera: esta función siempre resuelve. Así el scheduler y el handler
@@ -347,6 +375,15 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
         message: watchdogErrorMessage(err),
       },
     );
+    try {
+      healthDecision = await resolveWatchdogHealthDecision(currentHealth);
+      currentHealth = healthDecision.health;
+    } catch (decisionError) {
+      log.warn(
+        { err: decisionError },
+        "Fallo contenido calculando veredicto final watchdog; se conserva WARN",
+      );
+    }
     await setState(STATE_KEYS.WATCHDOG_TELEMETRY, {
       status: "error",
       lastCheckedAt: nowISO(),
@@ -359,7 +396,10 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
     }).catch((stateError) => {
       log.warn({ err: stateError }, "Fallo contenido persistiendo error final watchdog");
     });
-    await notifyWatchdogHealthIfNeeded(currentHealth).catch((alertError) => {
+    await notifyWatchdogHealthIfNeeded(
+      currentHealth,
+      healthDecision ?? undefined,
+    ).catch((alertError) => {
       log.warn({ err: alertError }, "Fallo contenido notificando salud watchdog");
     });
   } finally {
@@ -369,5 +409,6 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
 
 export function resetWatchdogLockForTests(): void {
   inFlight = false;
+  coldStartHealthReconciled = false;
   structuralChangeGuard.reset();
 }

@@ -72,6 +72,20 @@ export function determineVerdict(
     };
   }
 
+  if (
+    context.source === "watchdog" &&
+    context.cause &&
+    context.cause !== "NETWORK_INFRA"
+  ) {
+    return {
+      category: "INTERVENIR",
+      reason: "La causa no es de red y requiere revisar la aplicación o la estructura del portal.",
+      action: "Revisa la evidencia técnica antes de reactivar el watchdog.",
+      reviewAt: "Sin acción pendiente automática.",
+      suggestedPauseMinutes: null,
+    };
+  }
+
   if (context.circuit?.reopenedFromHalfOpen) {
     return {
       category: "PAUSAR",
@@ -83,6 +97,31 @@ export function determineVerdict(
   }
 
   if (
+    context.source === "watchdog" &&
+    context.circuit?.state === "OPEN"
+  ) {
+    const minutes = minutesRemaining(context.circuit.msUntilRetry);
+    return {
+      category: "PAUSAR",
+      reason: `El circuit breaker abrió por fallos sostenidos; faltan ${minutes} minutos para el sondeo automático.${insufficientHistory}`,
+      action: "Mantén el watchdog en pausa y deja que el circuito haga el siguiente sondeo.",
+      reviewAt: `Revisa en ${minutes} minutos.`,
+      suggestedPauseMinutes: minutes,
+    };
+  }
+
+  if (context.source === "watchdog" && failures >= 10) {
+    return {
+      category: "PAUSAR",
+      reason: "El watchdog acumuló diez o más fallos consecutivos.",
+      action: `Envía /pausa watchdog ${defaultPause} y revisa la evidencia técnica.`,
+      reviewAt: `Revisa en ${defaultPause} minutos.`,
+      suggestedPauseMinutes: defaultPause,
+    };
+  }
+
+  if (
+    context.source !== "watchdog" &&
     context.saturation?.sufficient &&
     context.saturation.isPeakHour &&
     failures >= 3
@@ -97,6 +136,7 @@ export function determineVerdict(
   }
 
   if (
+    context.source !== "watchdog" &&
     context.httpStatus !== undefined &&
     context.httpStatus >= 500 &&
     failures >= 3

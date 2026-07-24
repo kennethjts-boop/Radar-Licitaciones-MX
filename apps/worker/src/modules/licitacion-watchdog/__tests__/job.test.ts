@@ -1,7 +1,12 @@
 import { getState, setState } from "../../../core/system-state";
 import { shouldDeferWatchdogForCollector } from "../collector-guard";
 import { extractWatchdogSnapshot } from "../extractor";
-import { notifyWatchdogHealthIfNeeded, transitionWatchdogHealth } from "../health";
+import {
+  notifyWatchdogHealthIfNeeded,
+  reconcileWatchdogColdStartHealth,
+  resolveWatchdogHealthDecision,
+  transitionWatchdogHealth,
+} from "../health";
 import { resetWatchdogLockForTests, runLicitacionWatchdog } from "../job";
 import {
   getLatestSnapshot,
@@ -46,6 +51,29 @@ jest.mock("../health", () => ({
     lastFailureMessage: null,
   },
   notifyWatchdogHealthIfNeeded: jest.fn().mockResolvedValue(false),
+  reconcileWatchdogColdStartHealth: jest.fn((health) => ({
+    health: health.consecutiveFailures > 0
+      ? {
+          ...health,
+          consecutiveFailures: 0,
+          cause: null,
+          severity: null,
+          incidentStartedAt: null,
+        }
+      : health,
+    reset: health.consecutiveFailures > 0,
+  })),
+  resolveWatchdogHealthDecision: jest.fn(async (health) => ({
+    health,
+    verdict: {
+      category: "ESPERAR",
+      reason: "test",
+      action: "test",
+      reviewAt: "test",
+      suggestedPauseMinutes: 30,
+    },
+    circuit: null,
+  })),
   transitionWatchdogHealth: jest.fn((previous) => previous),
 }));
 jest.mock("../repository", () => ({
@@ -68,6 +96,8 @@ const mockedSetState = jest.mocked(setState);
 const mockedGetState = jest.mocked(getState);
 const mockedGuard = jest.mocked(shouldDeferWatchdogForCollector);
 const mockedNotifyHealth = jest.mocked(notifyWatchdogHealthIfNeeded);
+const mockedReconcileHealth = jest.mocked(reconcileWatchdogColdStartHealth);
+const mockedResolveHealth = jest.mocked(resolveWatchdogHealthDecision);
 const mockedTransitionHealth = jest.mocked(transitionWatchdogHealth);
 
 function documents(count: number): WatchdogDocument[] {
@@ -128,6 +158,17 @@ describe("licitacion-watchdog job structural guard", () => {
     mockedPending.mockResolvedValue([]);
     mockedGuard.mockResolvedValue({ defer: false, reason: null });
     resetWatchdogLockForTests();
+    mockedResolveHealth.mockImplementation(async (health) => ({
+      health,
+      verdict: {
+        category: "ESPERAR",
+        reason: "test",
+        action: "test",
+        reviewAt: "test",
+        suggestedPauseMinutes: 30,
+      },
+      circuit: null,
+    }));
     mockedResolve.mockResolvedValue({
       expedienteUrl: "https://comprasmx.example/detalle/uuid/procedimiento",
       uuidProcedimiento: "uuid",
@@ -258,11 +299,11 @@ describe("licitacion-watchdog job structural guard", () => {
     );
   });
 
-  it("si todos los expedientes están skipped conserva salud y no alerta Telegram", async () => {
+  it("en cold start resetea salud persistida si los circuitos nacen CLOSED", async () => {
     const priorHealth = {
       consecutiveFailures: 3,
       cause: "NETWORK_INFRA" as const,
-      severity: "DEGRADED" as const,
+      severity: "WARN" as const,
       incidentStartedAt: "2026-07-23T10:00:00.000Z",
       lastFailureAt: "2026-07-23T10:30:00.000Z",
       lastSuccessAt: "2026-07-23T09:00:00.000Z",
@@ -290,6 +331,10 @@ describe("licitacion-watchdog job structural guard", () => {
     await runLicitacionWatchdog(["PROC-1"]);
 
     expect(mockedTransitionHealth).not.toHaveBeenCalled();
+    expect(mockedReconcileHealth).toHaveBeenCalledWith(
+      priorHealth,
+      [],
+    );
     expect(mockedNotifyHealth).not.toHaveBeenCalled();
     expect(mockedLatest).not.toHaveBeenCalled();
     expect(mockedInsert).not.toHaveBeenCalled();
@@ -298,7 +343,12 @@ describe("licitacion-watchdog job structural guard", () => {
       expect.objectContaining({
         status: "skipped",
         lastSuccessfulCheckAt: "2026-07-23T09:00:00.000Z",
-        health: priorHealth,
+        health: expect.objectContaining({
+          consecutiveFailures: 0,
+          cause: null,
+          severity: null,
+          incidentStartedAt: null,
+        }),
         results: {
           "PROC-1": {
             status: "skipped",
