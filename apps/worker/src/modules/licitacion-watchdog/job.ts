@@ -29,12 +29,20 @@ import type {
   StructuralConfirmation,
   WatchdogFailureCause,
   WatchdogHealthState,
+  WatchdogExtractionResult,
+  WatchdogSkippedResult,
   WatchdogSnapshotRow,
   WatchdogTelemetry,
 } from "./types";
 
 const log = createModuleLogger("licitacion-watchdog:job");
 let inFlight = false;
+
+function isSkippedExtraction(
+  extraction: WatchdogExtractionResult,
+): extraction is WatchdogSkippedResult {
+  return extraction.status === "skipped";
+}
 
 async function notifyPending(row: WatchdogSnapshotRow): Promise<void> {
   const receipt = await sendPendingNotification(row);
@@ -49,7 +57,16 @@ async function processExpediente(numeroProcedimiento: string): Promise<JsonObjec
   for (const row of pending) await notifyPending(row);
 
   const resolved = await resolveExpediente(numeroProcedimiento);
-  const snapshot = await extractWatchdogSnapshot({ numeroProcedimiento, ...resolved });
+  const extraction = await extractWatchdogSnapshot({ numeroProcedimiento, ...resolved });
+  if (isSkippedExtraction(extraction)) {
+    return {
+      status: "skipped",
+      reason: extraction.reason,
+      endpointKey: extraction.endpointKey,
+      msUntilRetry: extraction.msUntilRetry,
+    };
+  }
+  const snapshot = extraction;
   if (snapshot.partial !== false) {
     log.warn(
       { numeroProcedimiento, deploymentSha: snapshot.deploymentSha ?? null },
@@ -185,6 +202,7 @@ async function processExpediente(numeroProcedimiento: string): Promise<JsonObjec
 export async function runLicitacionWatchdog(expedientes: string[]): Promise<void> {
   let ownsInFlight = false;
   let currentHealth: WatchdogHealthState = EMPTY_WATCHDOG_HEALTH;
+  let previousTelemetry: WatchdogTelemetry | null = null;
   let deploymentSha: string | null = null;
   const results: JsonObject = {};
   try {
@@ -205,7 +223,7 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
 
     const startedAt = nowISO();
     deploymentSha = getConfig().RAILWAY_GIT_COMMIT_SHA ?? null;
-    const previousTelemetry = await getState<WatchdogTelemetry>(STATE_KEYS.WATCHDOG_TELEMETRY);
+    previousTelemetry = await getState<WatchdogTelemetry>(STATE_KEYS.WATCHDOG_TELEMETRY);
     currentHealth = previousTelemetry?.health ?? EMPTY_WATCHDOG_HEALTH;
     await setState(STATE_KEYS.WATCHDOG_TELEMETRY, {
       status: "running",
@@ -245,6 +263,12 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
         ["partial", "structural_incomplete", "confirmation_pending"].includes(String(result.status)),
     );
     const incomplete = failed.length + incompleteResults.length;
+    const skippedResults = Object.values(results).filter((result) =>
+      typeof result === "object" && result !== null && !Array.isArray(result) &&
+        result.status === "skipped",
+    );
+    const allSkipped = skippedResults.length > 0 &&
+      skippedResults.length === Object.keys(results).length;
     const extractionFailures = Object.values(results).filter((result) =>
       typeof result === "object" && result !== null && !Array.isArray(result) &&
         ["error", "partial"].includes(String(result.status)) && typeof result.cause === "string",
@@ -263,13 +287,23 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
         errorType: typeof primaryFailure?.errorType === "string" ? primaryFailure.errorType : null,
         message: typeof primaryFailure?.error === "string" ? primaryFailure.error : null,
       });
-    } else {
+    } else if (!allSkipped) {
       currentHealth = transitionWatchdogHealth(currentHealth, { success: true });
     }
+    if (allSkipped) {
+      log.info(
+        { skippedExpedientes: skippedResults.length },
+        "[CIRCUIT] Ciclo watchdog informativo: todos los expedientes fueron omitidos",
+      );
+    }
     await setState(STATE_KEYS.WATCHDOG_TELEMETRY, {
-      status: incomplete > 0 ? "error" : "ok",
+      status: allSkipped ? "skipped" : incomplete > 0 ? "error" : "ok",
       lastCheckedAt: nowISO(),
-      lastSuccessfulCheckAt: incomplete === 0 ? nowISO() : null,
+      lastSuccessfulCheckAt: allSkipped
+        ? previousTelemetry?.lastSuccessfulCheckAt ?? null
+        : incomplete === 0
+          ? nowISO()
+          : null,
       lastError: failed.length > 0
         ? `${failed.length} expediente(s) con error`
         : incompleteResults.length > 0

@@ -1,6 +1,10 @@
 import type { Page } from "playwright";
 import { BrowserManager } from "../../../collectors/comprasmx/browser.manager";
 import {
+  preflightResilientWait,
+  waitForResponseResilient,
+} from "../../resilience/resilient-wait";
+import {
   classifyWatchdogFailure,
   extractWatchdogSnapshot,
   navigateWatchdogPage,
@@ -10,8 +14,14 @@ import {
 jest.mock("../../../collectors/comprasmx/browser.manager", () => ({
   BrowserManager: { withContext: jest.fn() },
 }));
+jest.mock("../../resilience/resilient-wait", () => ({
+  preflightResilientWait: jest.fn().mockReturnValue(null),
+  waitForResponseResilient: jest.fn(),
+}));
 
 const mockedWithContext = jest.mocked(BrowserManager.withContext);
+const mockedPreflight = jest.mocked(preflightResilientWait);
+const mockedResilientWait = jest.mocked(waitForResponseResilient);
 
 function visible(rowCount: number) {
   return {
@@ -83,6 +93,11 @@ describe("waitForStableVisibleSnapshot", () => {
 });
 
 describe("navegación watchdog resiliente", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockedPreflight.mockReturnValue(null);
+  });
+
   it("usa commit, espera 5s y reintenta una sola vez ante ERR_ABORTED", async () => {
     const goto = jest.fn()
       .mockRejectedValueOnce(new Error("page.goto: net::ERR_ABORTED"))
@@ -149,16 +164,17 @@ describe("navegación watchdog resiliente", () => {
   });
 
   it("cierra y liquida los waiters si la sesión falla antes de hidratar datos", async () => {
-    const rejectWaiters: Array<(reason: Error) => void> = [];
-    const waitForResponse = jest.fn(() => new Promise<never>((_resolve, reject) => {
-      rejectWaiters.push(reject);
-    }));
+    mockedResilientWait.mockImplementation((_page, _endpoint, _matcher, options) =>
+      new Promise<never>((_resolve, reject) => {
+        options?.signal?.addEventListener(
+          "abort",
+          () => reject(new Error("Espera cancelada")),
+          { once: true },
+        );
+      }));
     const page = {
-      waitForResponse,
       goto: jest.fn().mockRejectedValue(new Error("Target page, context or browser has been closed")),
-      close: jest.fn().mockImplementation(async () => {
-        for (const reject of rejectWaiters) reject(new Error("Page closed"));
-      }),
+      close: jest.fn().mockResolvedValue(undefined),
     } as unknown as Page;
     mockedWithContext.mockImplementation(async (operation) => operation(page, {} as never));
 
@@ -168,14 +184,44 @@ describe("navegación watchdog resiliente", () => {
       uuidProcedimiento: "uuid",
     });
 
-    expect(result.partial).toBe(true);
-    expect(result.extractionFailure).toEqual(expect.objectContaining({
-      cause: "NETWORK_INFRA",
-      stage: "navigation",
-      errorType: "Error",
-      attempts: 1,
+    expect(result).toEqual(expect.objectContaining({
+      partial: true,
+      extractionFailure: expect.objectContaining({
+        cause: "NETWORK_INFRA",
+        stage: "navigation",
+        errorType: "Error",
+        attempts: 1,
+      }),
     }));
     expect(page.close).toHaveBeenCalledTimes(1);
-    expect(waitForResponse).toHaveBeenCalledTimes(2);
+    expect(mockedResilientWait).toHaveBeenCalledTimes(2);
+    expect(mockedWithContext).toHaveBeenCalledWith(
+      expect.any(Function),
+      { timeoutMs: 180_000 },
+    );
+  });
+
+  it("propaga skipped antes de abrir un contexto o golpear la red", async () => {
+    mockedPreflight.mockReturnValueOnce({
+      status: "skipped",
+      reason: "circuit_open",
+      key: "/whitney/sitiopublico/expedientes/:uuid",
+      msUntilRetry: 90_000,
+    });
+
+    const result = await extractWatchdogSnapshot({
+      numeroProcedimiento: "PROC-1",
+      expedienteUrl: "https://comprasmx.example/#/detalle/uuid/procedimiento",
+      uuidProcedimiento: "uuid",
+    });
+
+    expect(result).toEqual({
+      status: "skipped",
+      reason: "circuit_open",
+      endpointKey: "/whitney/sitiopublico/expedientes/:uuid",
+      msUntilRetry: 90_000,
+    });
+    expect(mockedWithContext).not.toHaveBeenCalled();
+    expect(mockedResilientWait).not.toHaveBeenCalled();
   });
 });

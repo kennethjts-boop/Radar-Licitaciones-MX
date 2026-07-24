@@ -36,6 +36,15 @@ export interface WatchdogSnapshot extends JsonObject {
   visibleTables: VisibleTableSnapshot[];
 }
 
+export interface WatchdogSkippedResult extends JsonObject {
+  status: "skipped";
+  reason: "circuit_open" | "backoff";
+  endpointKey: string;
+  msUntilRetry: number;
+}
+
+export type WatchdogExtractionResult = WatchdogSnapshot | WatchdogSkippedResult;
+
 export type WatchdogFailureCause = "NETWORK_INFRA" | "SITE_STRUCTURE" | "APPLICATION_ERROR";
 
 export interface WatchdogExtractionFailure extends JsonObject {
@@ -110,7 +119,7 @@ export interface WatchdogSnapshotRow {
 }
 
 export interface WatchdogTelemetry extends JsonObject {
-  status: "idle" | "running" | "ok" | "error";
+  status: "idle" | "running" | "ok" | "error" | "skipped";
   deploymentSha: string | null;
   lastCheckedAt: string | null;
   lastSuccessfulCheckAt: string | null;

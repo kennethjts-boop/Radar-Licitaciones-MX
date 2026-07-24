@@ -1,7 +1,7 @@
 import { getState, setState } from "../../../core/system-state";
 import { shouldDeferWatchdogForCollector } from "../collector-guard";
 import { extractWatchdogSnapshot } from "../extractor";
-import { notifyWatchdogHealthIfNeeded } from "../health";
+import { notifyWatchdogHealthIfNeeded, transitionWatchdogHealth } from "../health";
 import { resetWatchdogLockForTests, runLicitacionWatchdog } from "../job";
 import {
   getLatestSnapshot,
@@ -68,6 +68,7 @@ const mockedSetState = jest.mocked(setState);
 const mockedGetState = jest.mocked(getState);
 const mockedGuard = jest.mocked(shouldDeferWatchdogForCollector);
 const mockedNotifyHealth = jest.mocked(notifyWatchdogHealthIfNeeded);
+const mockedTransitionHealth = jest.mocked(transitionWatchdogHealth);
 
 function documents(count: number): WatchdogDocument[] {
   return Array.from({ length: count }, (_, index) => ({
@@ -253,6 +254,59 @@ describe("licitacion-watchdog job structural guard", () => {
             errorType: "Error",
           }),
         }),
+      }),
+    );
+  });
+
+  it("si todos los expedientes están skipped conserva salud y no alerta Telegram", async () => {
+    const priorHealth = {
+      consecutiveFailures: 3,
+      cause: "NETWORK_INFRA" as const,
+      severity: "DEGRADED" as const,
+      incidentStartedAt: "2026-07-23T10:00:00.000Z",
+      lastFailureAt: "2026-07-23T10:30:00.000Z",
+      lastSuccessAt: "2026-07-23T09:00:00.000Z",
+      lastFailureStage: "api_responses",
+      lastFailureType: "FastTimeoutError",
+      lastFailureMessage: "Sin respuesta",
+    };
+    mockedGetState.mockResolvedValue({
+      status: "error",
+      lastCheckedAt: "2026-07-23T10:30:00.000Z",
+      lastSuccessfulCheckAt: "2026-07-23T09:00:00.000Z",
+      lastError: "1 expediente incompleto",
+      configuredExpedientes: ["PROC-1"],
+      deploymentSha: "test-sha",
+      results: {},
+      health: priorHealth,
+    });
+    mockedExtract.mockResolvedValue({
+      status: "skipped",
+      reason: "circuit_open",
+      endpointKey: "/whitney/sitiopublico/expedientes/:uuid",
+      msUntilRetry: 120_000,
+    });
+
+    await runLicitacionWatchdog(["PROC-1"]);
+
+    expect(mockedTransitionHealth).not.toHaveBeenCalled();
+    expect(mockedNotifyHealth).not.toHaveBeenCalled();
+    expect(mockedLatest).not.toHaveBeenCalled();
+    expect(mockedInsert).not.toHaveBeenCalled();
+    expect(mockedSetState).toHaveBeenLastCalledWith(
+      "licitacion_watchdog_telemetry",
+      expect.objectContaining({
+        status: "skipped",
+        lastSuccessfulCheckAt: "2026-07-23T09:00:00.000Z",
+        health: priorHealth,
+        results: {
+          "PROC-1": {
+            status: "skipped",
+            reason: "circuit_open",
+            endpointKey: "/whitney/sitiopublico/expedientes/:uuid",
+            msUntilRetry: 120_000,
+          },
+        },
       }),
     );
   });

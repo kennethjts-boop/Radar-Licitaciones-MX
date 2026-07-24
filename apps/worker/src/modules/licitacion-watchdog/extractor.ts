@@ -1,13 +1,20 @@
-import type { Page } from "playwright";
+import type { Page, Response } from "playwright";
 import { BrowserManager } from "../../collectors/comprasmx/browser.manager";
 import { getConfig } from "../../config/env";
 import { createModuleLogger } from "../../core/logger";
+import {
+  preflightResilientWait,
+  waitForResponseResilient,
+  type ResilientWaitSkipped,
+} from "../resilience/resilient-wait";
 import type {
   JsonObject,
   VisibleTableSnapshot,
   WatchdogDocument,
   WatchdogExtractionFailure,
+  WatchdogExtractionResult,
   WatchdogFailureCause,
+  WatchdogSkippedResult,
   WatchdogSnapshot,
 } from "./types";
 import {
@@ -20,7 +27,6 @@ const log = createModuleLogger("licitacion-watchdog:extractor");
 const API_ORIGIN = "https://upcp-cnetservicios.buengobierno.gob.mx";
 const GOTO_TIMEOUT_MS = 45_000;
 const GOTO_RETRY_BACKOFF_MS = 5_000;
-const API_RESPONSE_TIMEOUT_MS = 115_000;
 const DATA_CONTAINER_TIMEOUT_MS = 20_000;
 const DETAIL_DATA_SELECTOR = "app-sitiopublico-detalle-content .card label";
 const DOM_STABILITY_POLL_MS = 500;
@@ -28,6 +34,13 @@ const DOM_STABILITY_TIMEOUT_MS = 15_000;
 const ANNEX_PAGE_TIMEOUT_MS = 20_000;
 const ANNEX_PAGINATOR_NEXT_SELECTOR =
   "app-sitiopublico-detalle-anexos .p-paginator-next:not(.p-disabled)";
+
+class WatchdogWaitSkippedError extends Error {
+  constructor(readonly skipped: ResilientWaitSkipped) {
+    super(`Espera watchdog omitida para ${skipped.key}`);
+    this.name = "WatchdogWaitSkippedError";
+  }
+}
 
 interface ComprasMxEnvelope<T> {
   success?: boolean;
@@ -90,7 +103,7 @@ function buildDocuments(groups: AnexoGroup[]): WatchdogDocument[] {
 
 async function fetchAllAnnexGroups(
   page: Page,
-  firstResponse: Awaited<ReturnType<Page["waitForResponse"]>>,
+  firstResponse: Response,
   firstPages: AnexosPage[],
 ): Promise<AnexoGroup[]> {
   const groups = [...(firstPages[0]?.registros ?? [])];
@@ -103,15 +116,36 @@ async function fetchAllAnnexGroups(
   // real de anexos y capturando la respuesta que emite la aplicación.
   const annexPathname = new URL(firstResponse.url()).pathname;
   for (let pageNumber = 2; pageNumber <= totalPages; pageNumber++) {
-    const responsePromise = page.waitForResponse((response) => {
-      const parsed = new URL(response.url());
-      return parsed.pathname === annexPathname &&
-        parsed.searchParams.get("page") === String(pageNumber);
-    }, { timeout: ANNEX_PAGE_TIMEOUT_MS });
+    const preflight = preflightResilientWait(annexPathname);
+    if (preflight) throw new WatchdogWaitSkippedError(preflight);
+    const waitAbortController = new AbortController();
+    const responsePromise = waitForResponseResilient(
+      page,
+      annexPathname,
+      (response) => {
+        const parsed = new URL(response.url());
+        return parsed.pathname === annexPathname &&
+          parsed.searchParams.get("page") === String(pageNumber);
+      },
+      {
+        timeoutMs: ANNEX_PAGE_TIMEOUT_MS,
+        signal: waitAbortController.signal,
+      },
+    );
     void responsePromise.catch(() => undefined);
-    await page.locator(ANNEX_PAGINATOR_NEXT_SELECTOR).first()
-      .click({ timeout: ANNEX_PAGE_TIMEOUT_MS });
-    const response = await responsePromise;
+    try {
+      await page.locator(ANNEX_PAGINATOR_NEXT_SELECTOR).first()
+        .click({ timeout: ANNEX_PAGE_TIMEOUT_MS });
+    } catch (error) {
+      waitAbortController.abort();
+      await Promise.allSettled([responsePromise]);
+      throw error;
+    }
+    const waitResult = await responsePromise;
+    if (waitResult.status === "skipped") {
+      throw new WatchdogWaitSkippedError(waitResult);
+    }
+    const response = waitResult.response;
     if (!response.ok()) {
       throw new Error(`anexos ComprasMX página ${pageNumber}: HTTP ${response.status()}`);
     }
@@ -297,6 +331,23 @@ function partialSnapshot(
   });
 }
 
+function skippedResult(skipped: ResilientWaitSkipped): WatchdogSkippedResult {
+  log.info(
+    {
+      endpointKey: skipped.key,
+      reason: skipped.reason,
+      msUntilRetry: skipped.msUntilRetry,
+    },
+    "[CIRCUIT] Ciclo watchdog omitido antes de golpear el endpoint",
+  );
+  return {
+    status: "skipped",
+    reason: skipped.reason,
+    endpointKey: skipped.key,
+    msUntilRetry: skipped.msUntilRetry,
+  };
+}
+
 export interface VisibleSnapshotStabilityOptions {
   pollIntervalMs?: number;
   timeoutMs?: number;
@@ -343,19 +394,34 @@ export async function extractWatchdogSnapshot(input: {
   numeroProcedimiento: string;
   expedienteUrl: string;
   uuidProcedimiento: string;
-}): Promise<WatchdogSnapshot> {
+}): Promise<WatchdogExtractionResult> {
+  const detailPath = `/whitney/sitiopublico/expedientes/${input.uuidProcedimiento}`;
+  const annexPath = `${detailPath}/anexos`;
+  const preflight = preflightResilientWait(detailPath) ??
+    preflightResilientWait(annexPath);
+  if (preflight) return skippedResult(preflight);
+
   try {
-    // El watchdog usa timeouts explícitos por etapa. Desactivar el timeout global
-    // evita que BrowserManager cierre el browser mientras quedan waiters pendientes.
+    // Los timeouts explícitos por etapa se complementan con un techo exterior
+    // configurable que contiene cualquier espera inesperada del contexto.
     return await BrowserManager.withContext(async (page) => {
-      const detailPath = `/whitney/sitiopublico/expedientes/${input.uuidProcedimiento}`;
-      const detailResponsePromise = page.waitForResponse((response) => {
-        const parsed = new URL(response.url());
-        return parsed.pathname === detailPath && parsed.searchParams.get("id_proceso") === "procedimiento";
-      }, { timeout: API_RESPONSE_TIMEOUT_MS });
-      const annexResponsePromise = page.waitForResponse((response) =>
-        response.url().includes(`${detailPath}/anexos`),
-      { timeout: API_RESPONSE_TIMEOUT_MS });
+      const waitAbortController = new AbortController();
+      const detailResponsePromise = waitForResponseResilient(
+        page,
+        detailPath,
+        (response) => {
+          const parsed = new URL(response.url());
+          return parsed.pathname === detailPath &&
+            parsed.searchParams.get("id_proceso") === "procedimiento";
+        },
+        { signal: waitAbortController.signal },
+      );
+      const annexResponsePromise = waitForResponseResilient(
+        page,
+        annexPath,
+        (response) => response.url().includes(annexPath),
+        { signal: waitAbortController.signal },
+      );
 
       // Registrar handlers inmediatamente: aunque goto falle, ningún waiter podrá
       // convertirse después en un unhandledRejection al cerrar el contexto.
@@ -364,6 +430,7 @@ export async function extractWatchdogSnapshot(input: {
 
       const navigation = await navigateWatchdogPage(page, input.expedienteUrl);
       if (!navigation.ok) {
+        waitAbortController.abort();
         await page.close().catch((error) => {
           log.warn({ err: error }, "No se pudo cerrar page tras fallo de navegación watchdog");
         });
@@ -406,16 +473,25 @@ export async function extractWatchdogSnapshot(input: {
           attempts: navigation.attempts,
         });
       }
+      if (detailResult.value.status === "skipped") {
+        return skippedResult(detailResult.value);
+      }
+      if (annexResult.value.status === "skipped") {
+        return skippedResult(annexResult.value);
+      }
 
-      const detailEnvelope = await detailResult.value.json() as ComprasMxEnvelope<JsonObject>;
-      const annexEnvelope = await annexResult.value.json() as ComprasMxEnvelope<AnexosPage[]>;
+      const detailEnvelope = await detailResult.value.response.json() as ComprasMxEnvelope<JsonObject>;
+      const annexEnvelope = await annexResult.value.response.json() as ComprasMxEnvelope<AnexosPage[]>;
       const detail = assertSuccessful(detailEnvelope, "detalle ComprasMX");
       const annexPages = assertSuccessful(annexEnvelope, "anexos ComprasMX");
       const visible = await waitForStableVisibleSnapshot(page);
       let annexGroups: AnexoGroup[];
       try {
-        annexGroups = await fetchAllAnnexGroups(page, annexResult.value, annexPages);
+        annexGroups = await fetchAllAnnexGroups(page, annexResult.value.response, annexPages);
       } catch (error) {
+        if (error instanceof WatchdogWaitSkippedError) {
+          return skippedResult(error.skipped);
+        }
         return partialSnapshot(input, {
           cause: classifyWatchdogFailure(error),
           stage: "annex_pagination",
@@ -473,7 +549,7 @@ export async function extractWatchdogSnapshot(input: {
         );
       }
       return snapshot;
-    }, { timeoutMs: 0 });
+    }, { timeoutMs: getConfig().WATCHDOG_CONTEXT_TIMEOUT_MS });
   } catch (error) {
     return partialSnapshot(input, {
       cause: classifyWatchdogFailure(error),
