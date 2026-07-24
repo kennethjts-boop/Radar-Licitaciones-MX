@@ -35,7 +35,6 @@ const GOTO_RETRY_BACKOFF_MS = 5_000;
 const DATA_CONTAINER_TIMEOUT_MS = 20_000;
 const DETAIL_DATA_SELECTOR = "app-sitiopublico-detalle-content .card label";
 const DOM_STABILITY_POLL_MS = 500;
-const DOM_STABILITY_TIMEOUT_MS = 15_000;
 const ANNEX_PAGINATOR_NEXT_SELECTOR =
   "app-sitiopublico-detalle-anexos .p-paginator-next:not(.p-disabled)";
 
@@ -228,7 +227,7 @@ export function classifyWatchdogFailure(error: unknown): WatchdogFailureCause {
     return "NETWORK_INFRA";
   }
   if (watchdogErrorType(error) === "DomStabilityError") {
-    return "SITE_STRUCTURE";
+    return "TRANSIENT_RENDER";
   }
 
   const message = watchdogErrorMessage(error);
@@ -381,7 +380,8 @@ export async function waitForStableVisibleSnapshot(
   partial: boolean;
 }> {
   const pollIntervalMs = options.pollIntervalMs ?? DOM_STABILITY_POLL_MS;
-  const timeoutMs = options.timeoutMs ?? DOM_STABILITY_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ??
+    getConfig().WATCHDOG_DOM_STABILITY_TIMEOUT_MS;
   const maxPolls = Math.max(2, Math.ceil(timeoutMs / pollIntervalMs) + 1);
   let previousSignatures: string[] | null = null;
   let lastVisible: { fields: JsonObject; tables: VisibleTableSnapshot[] } = {
@@ -510,7 +510,11 @@ export async function extractWatchdogSnapshot(input: {
       const annexEnvelope = await annexResult.value.response.json() as ComprasMxEnvelope<AnexosPage[]>;
       const detail = assertSuccessful(detailEnvelope, "detalle ComprasMX");
       const annexPages = assertSuccessful(annexEnvelope, "anexos ComprasMX");
-      const visible = await waitForStableVisibleSnapshot(page);
+      const domStabilityTimeoutMs =
+        getConfig().WATCHDOG_DOM_STABILITY_TIMEOUT_MS;
+      const visible = await waitForStableVisibleSnapshot(page, {
+        timeoutMs: domStabilityTimeoutMs,
+      });
       let annexGroups: AnexoGroup[];
       try {
         annexGroups = await fetchAllAnnexGroups(page, annexResult.value.response, annexPages);
@@ -538,10 +542,11 @@ export async function extractWatchdogSnapshot(input: {
           }
         : visible.partial
           ? {
-              cause: "SITE_STRUCTURE",
+              cause: "TRANSIENT_RENDER",
               stage: "dom_stability",
               errorType: "DomStabilityError",
-              message: "DOM no hidrató tablas estables dentro de 15s",
+              message:
+                `DOM no hidrató tablas estables dentro de ${domStabilityTimeoutMs} ms`,
               attempts: navigation.attempts,
             }
           : null;

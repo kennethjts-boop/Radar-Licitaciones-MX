@@ -23,6 +23,7 @@ export interface VerdictContext {
   circuit?: CircuitSnapshot | null;
   saturation?: SaturationAnalysis | null;
   defaultPauseMinutes?: number;
+  transientFailureThreshold?: number;
 }
 
 function minutesRemaining(ms: number): number {
@@ -59,6 +60,42 @@ export function determineVerdict(
       action: "Revisa las réplicas en Railway y deja una sola instancia con polling activo.",
       reviewAt: "Verifica de nuevo después de corregir las réplicas.",
       suggestedPauseMinutes: null,
+    };
+  }
+
+  if (
+    context.source === "watchdog" &&
+    context.cause === "TRANSIENT_RENDER"
+  ) {
+    const threshold = context.transientFailureThreshold ?? 3;
+    if (failures >= threshold) {
+      return {
+        category: "INTERVENIR",
+        reason:
+          `El render del portal falló durante ${failures} ciclos consecutivos tras agotar reintentos.`,
+        action:
+          "Revisa la evidencia técnica para descartar una degradación sostenida o un cambio estructural.",
+        reviewAt: "Sin acción pendiente automática.",
+        suggestedPauseMinutes: null,
+      };
+    }
+    if (failures === threshold - 1) {
+      return {
+        category: "VIGILAR",
+        reason:
+          `El render sigue degradado, pero aún no alcanza el umbral de ${threshold} ciclos.`,
+        action: "Vigila el siguiente ciclo; el watchdog seguirá reintentando.",
+        reviewAt: "Revisa en 30 minutos.",
+        suggestedPauseMinutes: 30,
+      };
+    }
+    return {
+      category: "ESPERAR",
+      reason:
+        `El fallo de render es transitorio y aún no alcanza el umbral de ${threshold} ciclos.`,
+      action: "Espera el siguiente intento automático.",
+      reviewAt: "Revisa en 30 minutos.",
+      suggestedPauseMinutes: 30,
     };
   }
 

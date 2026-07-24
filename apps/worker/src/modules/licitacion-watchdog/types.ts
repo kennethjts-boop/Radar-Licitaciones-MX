@@ -45,7 +45,11 @@ export interface WatchdogSkippedResult extends JsonObject {
 
 export type WatchdogExtractionResult = WatchdogSnapshot | WatchdogSkippedResult;
 
-export type WatchdogFailureCause = "NETWORK_INFRA" | "SITE_STRUCTURE" | "APPLICATION_ERROR";
+export type WatchdogFailureCause =
+  | "NETWORK_INFRA"
+  | "TRANSIENT_RENDER"
+  | "SITE_STRUCTURE"
+  | "APPLICATION_ERROR";
 
 export interface WatchdogExtractionFailure extends JsonObject {
   cause: WatchdogFailureCause;

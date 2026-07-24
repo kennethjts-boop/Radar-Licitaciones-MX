@@ -42,12 +42,33 @@ describe("determineVerdict", () => {
     }).category).toBe("PAUSAR");
   });
 
-  it("interviene ante cualquier causa watchdog distinta de NETWORK_INFRA", () => {
+  it("interviene de inmediato ante APPLICATION_ERROR", () => {
     expect(determineVerdict({
       source: "watchdog",
       cause: "APPLICATION_ERROR",
       consecutiveFailures: 1,
       circuit: circuit(),
+    }).category).toBe("INTERVENIR");
+  });
+
+  it("amortigua TRANSIENT_RENDER hasta alcanzar su umbral configurable", () => {
+    expect(determineVerdict({
+      source: "watchdog",
+      cause: "TRANSIENT_RENDER",
+      consecutiveFailures: 1,
+      transientFailureThreshold: 3,
+    }).category).toBe("ESPERAR");
+    expect(determineVerdict({
+      source: "watchdog",
+      cause: "TRANSIENT_RENDER",
+      consecutiveFailures: 2,
+      transientFailureThreshold: 3,
+    }).category).toBe("VIGILAR");
+    expect(determineVerdict({
+      source: "watchdog",
+      cause: "TRANSIENT_RENDER",
+      consecutiveFailures: 3,
+      transientFailureThreshold: 3,
     }).category).toBe("INTERVENIR");
   });
 

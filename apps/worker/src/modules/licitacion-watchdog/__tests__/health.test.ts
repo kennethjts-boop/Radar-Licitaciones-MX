@@ -147,7 +147,7 @@ describe("salud y cooldown persistente watchdog", () => {
     expect(message).not.toContain("[CRITICAL]");
   });
 
-  it("eleva a CRITICAL con 10 fallos, circuito OPEN o causa no NETWORK_INFRA", async () => {
+  it("eleva a CRITICAL con 10 fallos, circuito OPEN o APPLICATION_ERROR", async () => {
     const tenFailures = await resolveWatchdogHealthDecision(critical());
     expect(tenFailures.verdict.category).toBe("PAUSAR");
     expect(tenFailures.health.severity).toBe("CRITICAL");
@@ -170,6 +170,38 @@ describe("salud y cooldown persistente watchdog", () => {
     }));
     expect(application.verdict.category).toBe("INTERVENIR");
     expect(application.health.severity).toBe("CRITICAL");
+  });
+
+  it("mantiene TRANSIENT_RENDER en WARN hasta el tercer ciclo y entonces escala", async () => {
+    const first = await resolveWatchdogHealthDecision(critical({
+      consecutiveFailures: 1,
+      cause: "TRANSIENT_RENDER",
+      severity: "WARN",
+      lastFailureStage: "dom_stability",
+      lastFailureType: "DomStabilityError",
+    }));
+    const second = await resolveWatchdogHealthDecision(critical({
+      consecutiveFailures: 2,
+      cause: "TRANSIENT_RENDER",
+      severity: "WARN",
+      lastFailureStage: "dom_stability",
+      lastFailureType: "DomStabilityError",
+    }));
+    const third = await resolveWatchdogHealthDecision(critical({
+      consecutiveFailures: 3,
+      cause: "TRANSIENT_RENDER",
+      severity: "WARN",
+      lastFailureStage: "dom_stability",
+      lastFailureType: "DomStabilityError",
+    }));
+
+    expect(first.verdict.category).toBe("ESPERAR");
+    expect(first.health.severity).toBe("WARN");
+    expect(second.verdict.category).toBe("VIGILAR");
+    expect(second.health.severity).toBe("WARN");
+    expect(third.verdict.category).toBe("INTERVENIR");
+    expect(third.health.severity).toBe("CRITICAL");
+    expect(mockedSaturation).not.toHaveBeenCalled();
   });
 
   it("resetea fallos persistidos en cold start solo si todos los circuitos están CLOSED", () => {
@@ -298,6 +330,34 @@ describe("salud y cooldown persistente watchdog", () => {
 
     await expect(notifyWatchdogHealthIfNeeded(critical({
       lastFailureStage: "api_responses",
+    }))).resolves.toBe(false);
+    expect(mockedCreate).not.toHaveBeenCalled();
+    expect(mockedSend).not.toHaveBeenCalled();
+  });
+
+  it("deduplica también alertas TRANSIENT_RENDER con el cooldown existente", async () => {
+    const now = new Date();
+    mockedRecent.mockResolvedValue([{
+      id: "previous-transient",
+      alert_type:
+        "licitacion_watchdog_health_warn_transient_render_dom_stability",
+      telegram_message: [
+        "🟡 <b>[WARN] Licitación Watchdog</b>",
+        "🧩 Etapa: <code>dom_stability</code>",
+        "📊 Fallos consecutivos: 1",
+      ].join("\n"),
+      telegram_status: "sent",
+      telegram_message_id: 8,
+      sent_at: now.toISOString(),
+      created_at: now.toISOString(),
+    }]);
+
+    await expect(notifyWatchdogHealthIfNeeded(critical({
+      consecutiveFailures: 2,
+      cause: "TRANSIENT_RENDER",
+      severity: "WARN",
+      lastFailureStage: "dom_stability",
+      lastFailureType: "DomStabilityError",
     }))).resolves.toBe(false);
     expect(mockedCreate).not.toHaveBeenCalled();
     expect(mockedSend).not.toHaveBeenCalled();

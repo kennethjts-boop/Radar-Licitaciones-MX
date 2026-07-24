@@ -52,6 +52,12 @@ TELEGRAM_POLLING_ENABLED=true
 WATCHDOG_TIMEOUT_MS=45000
 # Timeout compartido por detalle, anexos y fast-wait del watchdog.
 
+WATCHDOG_DOM_STABILITY_TIMEOUT_MS=30000
+# Tiempo máximo para que las tablas visibles terminen de hidratarse y estabilizarse.
+
+WATCHDOG_TRANSIENT_FAIL_THRESHOLD=3
+# Ciclos fallidos consecutivos de render, tras agotar reintentos, antes de CRITICAL.
+
 # ── Playwright ────────────────────────────────────────────────────────────────
 PLAYWRIGHT_HEADLESS=true
 # En Railway debe ser true (sin display)

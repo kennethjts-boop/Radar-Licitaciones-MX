@@ -92,6 +92,7 @@ function parseSeverity(alertType: string): WatchdogHealthSeverity | null {
 
 function parseCause(alertType: string): WatchdogFailureCause | null {
   if (alertType.includes("_network_infra")) return "NETWORK_INFRA";
+  if (alertType.includes("_transient_render")) return "TRANSIENT_RENDER";
   if (alertType.includes("_site_structure")) return "SITE_STRUCTURE";
   if (
     alertType.includes("_application_error") ||
@@ -108,7 +109,7 @@ function parseStage(row: WatchdogHealthAlertRow): string {
   )?.[1];
   if (fromMessage) return fromMessage;
   const fromType = row.alert_type.match(
-    /_(?:network_infra|site_structure|application_error|unknown)_(.+)$/i,
+    /_(?:network_infra|transient_render|site_structure|application_error|unknown)_(.+)$/i,
   )?.[1];
   return fromType || "N/D";
 }
@@ -221,7 +222,7 @@ export function formatWatchdogHealthAlert(health: WatchdogHealthState): string {
     `📊 Fallos consecutivos: ${health.consecutiveFailures}`,
     `⏱ Incidente iniciado: ${escapeHtml(health.incidentStartedAt ?? "N/D")}`,
     critical
-      ? "📌 El fallo permanece aislado; el colector principal conserva prioridad."
+      ? "📌 El fallo ya superó el umbral operativo; el colector principal conserva prioridad."
       : "📌 Se reintentará automáticamente sin comparar snapshots parciales.",
   ].join("\n");
 }
@@ -312,6 +313,7 @@ export async function resolveWatchdogHealthDecision(
     circuit,
     saturation,
     defaultPauseMinutes: config.PAUSE_DEFAULT_MINUTES,
+    transientFailureThreshold: config.WATCHDOG_TRANSIENT_FAIL_THRESHOLD,
   });
   const proposedSeverity: WatchdogHealthSeverity =
     verdict.category === "PAUSAR" || verdict.category === "INTERVENIR"

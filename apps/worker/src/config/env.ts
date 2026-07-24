@@ -153,6 +153,16 @@ const envSchema = z.object({
     .default("180000")
     .transform(Number)
     .pipe(z.number().int().min(1000)),
+  WATCHDOG_DOM_STABILITY_TIMEOUT_MS: z
+    .string()
+    .default("30000")
+    .transform(Number)
+    .pipe(z.number().int().min(1000)),
+  WATCHDOG_TRANSIENT_FAIL_THRESHOLD: z
+    .string()
+    .default("3")
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(20)),
 
   // Playwright & Escudo
   PLAYWRIGHT_HEADLESS: z
@@ -333,6 +343,10 @@ export function getConfig(): AppConfig {
       CIRCUIT_OPEN_MS: result.data.CIRCUIT_OPEN_MS,
       WATCHDOG_TIMEOUT_MS: result.data.WATCHDOG_TIMEOUT_MS,
       WATCHDOG_CONTEXT_TIMEOUT_MS: result.data.WATCHDOG_CONTEXT_TIMEOUT_MS,
+      WATCHDOG_DOM_STABILITY_TIMEOUT_MS:
+        result.data.WATCHDOG_DOM_STABILITY_TIMEOUT_MS,
+      WATCHDOG_TRANSIENT_FAIL_THRESHOLD:
+        result.data.WATCHDOG_TRANSIENT_FAIL_THRESHOLD,
       PLAYWRIGHT_IGNORE_HTTPS_ERRORS: result.data.PLAYWRIGHT_IGNORE_HTTPS_ERRORS,
       ALERT_MAX_PER_CYCLE: result.data.ALERT_MAX_PER_CYCLE,
     },

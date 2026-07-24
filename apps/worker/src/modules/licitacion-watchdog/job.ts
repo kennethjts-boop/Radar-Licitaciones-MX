@@ -41,6 +41,7 @@ import type {
 } from "./types";
 
 const log = createModuleLogger("licitacion-watchdog:job");
+const TRANSIENT_RENDER_RETRY_DELAYS_MS = [20_000, 40_000, 60_000] as const;
 let inFlight = false;
 let coldStartHealthReconciled = false;
 
@@ -48,6 +49,61 @@ function isSkippedExtraction(
   extraction: WatchdogExtractionResult,
 ): extraction is WatchdogSkippedResult {
   return extraction.status === "skipped";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientRenderFailure(
+  extraction: WatchdogExtractionResult,
+): boolean {
+  return !isSkippedExtraction(extraction) &&
+    extraction.partial !== false &&
+    extraction.extractionFailure?.cause === "TRANSIENT_RENDER";
+}
+
+export async function extractWatchdogSnapshotWithRetries(
+  input: {
+    numeroProcedimiento: string;
+    expedienteUrl: string;
+    uuidProcedimiento: string;
+  },
+  wait: (ms: number) => Promise<void> = sleep,
+): Promise<WatchdogExtractionResult> {
+  let extraction = await extractWatchdogSnapshot(input);
+  for (
+    let retryIndex = 0;
+    retryIndex < TRANSIENT_RENDER_RETRY_DELAYS_MS.length &&
+    isTransientRenderFailure(extraction);
+    retryIndex++
+  ) {
+    const delayMs = TRANSIENT_RENDER_RETRY_DELAYS_MS[retryIndex];
+    log.info(
+      {
+        numeroProcedimiento: input.numeroProcedimiento,
+        retry: retryIndex + 1,
+        maxRetries: TRANSIENT_RENDER_RETRY_DELAYS_MS.length,
+        delayMs,
+      },
+      "Render transitorio del watchdog; reintento programado",
+    );
+    await wait(delayMs);
+    extraction = await extractWatchdogSnapshot(input);
+    if (
+      !isSkippedExtraction(extraction) &&
+      extraction.partial === false
+    ) {
+      log.info(
+        {
+          numeroProcedimiento: input.numeroProcedimiento,
+          recoveredAfterRetries: retryIndex + 1,
+        },
+        "Render del watchdog recuperado sin escalar alerta",
+      );
+    }
+  }
+  return extraction;
 }
 
 async function notifyPending(row: WatchdogSnapshotRow): Promise<void> {
@@ -63,7 +119,10 @@ async function processExpediente(numeroProcedimiento: string): Promise<JsonObjec
   for (const row of pending) await notifyPending(row);
 
   const resolved = await resolveExpediente(numeroProcedimiento);
-  const extraction = await extractWatchdogSnapshot({ numeroProcedimiento, ...resolved });
+  const extraction = await extractWatchdogSnapshotWithRetries({
+    numeroProcedimiento,
+    ...resolved,
+  });
   if (isSkippedExtraction(extraction)) {
     return {
       status: "skipped",

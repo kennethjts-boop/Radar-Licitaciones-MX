@@ -7,7 +7,11 @@ import {
   resolveWatchdogHealthDecision,
   transitionWatchdogHealth,
 } from "../health";
-import { resetWatchdogLockForTests, runLicitacionWatchdog } from "../job";
+import {
+  extractWatchdogSnapshotWithRetries,
+  resetWatchdogLockForTests,
+  runLicitacionWatchdog,
+} from "../job";
 import {
   getLatestSnapshot,
   getPendingSnapshots,
@@ -137,6 +141,19 @@ function snapshot(partidas = 12, documentCount = 30): WatchdogSnapshot {
   };
 }
 
+function transientRenderSnapshot(): WatchdogSnapshot {
+  const partial = snapshot();
+  partial.partial = true;
+  partial.extractionFailure = {
+    cause: "TRANSIENT_RENDER",
+    stage: "dom_stability",
+    errorType: "DomStabilityError",
+    message: "DOM no hidrató tablas estables dentro de 30000 ms",
+    attempts: 1,
+  };
+  return partial;
+}
+
 function row(value: WatchdogSnapshot): WatchdogSnapshotRow {
   return {
     id: "baseline-id",
@@ -173,6 +190,57 @@ describe("licitacion-watchdog job structural guard", () => {
       expedienteUrl: "https://comprasmx.example/detalle/uuid/procedimiento",
       uuidProcedimiento: "uuid",
     });
+  });
+
+  it("recupera un render transitorio con reintentos 20s, 40s y 60s sin declarar fallo", async () => {
+    const transient = transientRenderSnapshot();
+    const recovered = snapshot();
+    mockedExtract
+      .mockResolvedValueOnce(transient)
+      .mockResolvedValueOnce(transient)
+      .mockResolvedValueOnce(transient)
+      .mockResolvedValueOnce(recovered);
+    const wait = jest.fn().mockResolvedValue(undefined);
+
+    await expect(extractWatchdogSnapshotWithRetries({
+      numeroProcedimiento: "PROC-1",
+      expedienteUrl: "https://comprasmx.example/detalle/uuid/procedimiento",
+      uuidProcedimiento: "uuid",
+    }, wait)).resolves.toBe(recovered);
+
+    expect(mockedExtract).toHaveBeenCalledTimes(4);
+    expect(wait.mock.calls).toEqual([[20_000], [40_000], [60_000]]);
+  });
+
+  it("no aplica los nuevos reintentos a causas distintas de TRANSIENT_RENDER", async () => {
+    const structural = transientRenderSnapshot();
+    structural.extractionFailure!.cause = "SITE_STRUCTURE";
+    const wait = jest.fn().mockResolvedValue(undefined);
+    mockedExtract.mockResolvedValue(structural);
+
+    await expect(extractWatchdogSnapshotWithRetries({
+      numeroProcedimiento: "PROC-1",
+      expedienteUrl: "https://comprasmx.example/detalle/uuid/procedimiento",
+      uuidProcedimiento: "uuid",
+    }, wait)).resolves.toBe(structural);
+
+    expect(mockedExtract).toHaveBeenCalledTimes(1);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("devuelve el fallo transitorio solo después de agotar los tres reintentos", async () => {
+    const transient = transientRenderSnapshot();
+    const wait = jest.fn().mockResolvedValue(undefined);
+    mockedExtract.mockResolvedValue(transient);
+
+    await expect(extractWatchdogSnapshotWithRetries({
+      numeroProcedimiento: "PROC-1",
+      expedienteUrl: "https://comprasmx.example/detalle/uuid/procedimiento",
+      uuidProcedimiento: "uuid",
+    }, wait)).resolves.toBe(transient);
+
+    expect(mockedExtract).toHaveBeenCalledTimes(4);
+    expect(wait.mock.calls).toEqual([[20_000], [40_000], [60_000]]);
   });
 
   it("no persiste ni notifica la primera pérdida masiva y solo la acepta tras confirmación", async () => {

@@ -201,11 +201,11 @@ describe("navegación watchdog resiliente", () => {
     }));
   });
 
-  it("clasifica DomStabilityError como SITE_STRUCTURE por tipo", () => {
+  it("clasifica DomStabilityError como TRANSIENT_RENDER por tipo", () => {
     const error = new Error("Las tablas no se estabilizaron");
     error.name = "DomStabilityError";
 
-    expect(classifyWatchdogFailure(error)).toBe("SITE_STRUCTURE");
+    expect(classifyWatchdogFailure(error)).toBe("TRANSIENT_RENDER");
   });
 
   it("clasifica errores HTTP: 4xx como SITE_STRUCTURE y 5xx/408/429 como NETWORK_INFRA", () => {
