@@ -34,7 +34,11 @@ export interface RadarPauseSnapshot {
  */
 export async function getEffectiveRadarMode(): Promise<RadarMode> {
   try {
-    const dbMode = await getState<string>(STATE_KEYS.RADAR_MODE);
+    const dbModePromise = getState<string>(STATE_KEYS.RADAR_MODE);
+    const dbMode = await Promise.race([
+      dbModePromise,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 100)),
+    ]);
     if (dbMode === "watchdog_only" || dbMode === "full") {
       return dbMode;
     }
