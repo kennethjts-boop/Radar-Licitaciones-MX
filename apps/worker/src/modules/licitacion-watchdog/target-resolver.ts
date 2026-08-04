@@ -70,6 +70,10 @@ export async function resolveTargetUuid(target: WatchdogTarget): Promise<string 
   }
 
   // 2. Probar mediante navegador público en ComprasMX (Buscador público)
+  if (process.env.NODE_ENV === "test") {
+    return null;
+  }
+
   try {
     log.info({ numero: target.numero }, "Buscando expediente en buscador público ComprasMX via Playwright");
     const foundUuid = await BrowserManager.withContext(async (page) => {
