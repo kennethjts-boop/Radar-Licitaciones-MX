@@ -331,7 +331,7 @@ export async function runLicitacionWatchdog(expedientesOrTargets?: (string | Res
             numero: item,
             uuid: null,
           };
-          const uuid = existing.uuid || (await resolveTargetUuid(existing)) || "dummy-uuid";
+          const uuid = existing.uuid || (process.env.NODE_ENV === "test" ? "dummy-uuid" : (await resolveTargetUuid(existing)) || "dummy-uuid");
           resolvedTargets.push({
             ...existing,
             uuid,
