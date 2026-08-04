@@ -83,7 +83,7 @@ describe("sleep-mode control module", () => {
     const mode = await getEffectiveRadarMode();
     expect(mode).toBe("watchdog_only");
 
-    const snapshot = await getState(STATE_KEYS.RADAR_PAUSE_SNAPSHOT);
+    const snapshot = (await getState(STATE_KEYS.RADAR_PAUSE_SNAPSHOT)) as any;
     expect(snapshot).toBeDefined();
     expect(snapshot.previous_mode).toBe("full");
   });

@@ -33,12 +33,6 @@ export interface RadarPauseSnapshot {
  * 3. Fallback a "full"
  */
 export async function getEffectiveRadarMode(): Promise<RadarMode> {
-  if (process.env.NODE_ENV === "test") {
-    const envMode = getConfig().RADAR_MODE;
-    const dbMode = await getState<string>(STATE_KEYS.RADAR_MODE).catch(() => null);
-    if (dbMode === "watchdog_only" || dbMode === "full") return dbMode;
-    return envMode === "watchdog_only" ? "watchdog_only" : "full";
-  }
   try {
     const dbMode = await getState<string>(STATE_KEYS.RADAR_MODE);
     if (dbMode === "watchdog_only" || dbMode === "full") {
@@ -47,7 +41,7 @@ export async function getEffectiveRadarMode(): Promise<RadarMode> {
   } catch (err) {
     log.warn({ err }, "No se pudo consultar system_state[radar_mode]; usando env var fallback");
   }
-  const envMode = getConfig().RADAR_MODE;
+  const envMode = process.env.RADAR_MODE ?? getConfig().RADAR_MODE;
   if (envMode === "watchdog_only") {
     return "watchdog_only";
   }
