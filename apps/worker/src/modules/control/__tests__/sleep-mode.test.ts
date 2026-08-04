@@ -50,6 +50,7 @@ jest.mock("../../../core/system-state", () => {
 jest.mock("../../../config/env", () => ({
   getConfig: () => ({
     RADAR_MODE: "full",
+    LOG_LEVEL: "info",
   }),
 }));
 
