@@ -1488,32 +1488,40 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
   bot.onText(/\/radares/, async (msg) => {
     const chatIdPartial = String(msg.chat.id).slice(-4);
     log.info({ command: msg.text, chatIdPartial, from: msg.from?.username }, "command_received");
-
     if (String(msg.chat.id) !== chatId) return;
-
     try {
-      const radars = getActiveRadars();
-      const status = healthTracker.getStatus();
-      const rawLastRunState = await getState<Record<string, unknown>>(
-        STATE_KEYS.LAST_COLLECT_RUN,
-      );
-      const lastRunState = await resolveLastRunState(
-        rawLastRunState,
-        status.lastCycleAt,
-      );
-      const lastRun = formatTelemetryDate(
-        getLastRunTimestamp(lastRunState, status.lastCycleAt),
-      );
-      const lines = [
-        `📡 <b>Radares Activos (${radars.length})</b>`,
-        `⏰ Última ejecución global del collector: <b>${lastRun}</b>`,
-        "<i>Todos los radares se evalúan dentro del mismo ciclo global.</i>",
-        "",
-        ...radars.map(r => `• <b>${r.name}</b> [<code>${r.key}</code>] (Prio: ${r.priority})`)
-      ];
-      await bot.sendMessage(chatId, lines.join("\n"), { parse_mode: "HTML" });
+      const { handleRadaresCommand } = await import("../modules/licitacion-watchdog/telegram-handler");
+      await handleRadaresCommand(bot, chatId);
     } catch (err) {
       log.error({ err }, "❌ Error en /radares");
+    }
+  });
+
+  // ── /vigilar ─────────────────────────────────────────────────────────────
+  bot.onText(/\/vigilar(?:\s+(.+))?/, async (msg, match) => {
+    const chatIdPartial = String(msg.chat.id).slice(-4);
+    log.info({ command: msg.text, chatIdPartial, from: msg.from?.username }, "command_received");
+    if (String(msg.chat.id) !== chatId) return;
+    const query = match?.[1] ?? "";
+    try {
+      const { handleVigilarCommand } = await import("../modules/licitacion-watchdog/telegram-handler");
+      await handleVigilarCommand(bot, chatId, query);
+    } catch (err) {
+      log.error({ err }, "❌ Error en /vigilar");
+    }
+  });
+
+  // ── /novigilar ───────────────────────────────────────────────────────────
+  bot.onText(/\/novigilar(?:\s+(.+))?/, async (msg, match) => {
+    const chatIdPartial = String(msg.chat.id).slice(-4);
+    log.info({ command: msg.text, chatIdPartial, from: msg.from?.username }, "command_received");
+    if (String(msg.chat.id) !== chatId) return;
+    const query = match?.[1] ?? "";
+    try {
+      const { handleNoVigilarCommand } = await import("../modules/licitacion-watchdog/telegram-handler");
+      await handleNoVigilarCommand(bot, chatId, query);
+    } catch (err) {
+      log.error({ err }, "❌ Error en /novigilar");
     }
   });
 

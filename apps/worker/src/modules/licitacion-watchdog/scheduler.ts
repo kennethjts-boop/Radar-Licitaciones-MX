@@ -39,7 +39,7 @@ export function startLicitacionWatchdogScheduler(): void {
           );
           return;
         }
-        await runLicitacionWatchdog(expedientes);
+        await runLicitacionWatchdog();
       })().catch((err) => {
         log.error(
           { err, suppressTelegram: true },

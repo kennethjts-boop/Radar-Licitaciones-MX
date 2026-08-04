@@ -40,6 +40,16 @@ import type {
   WatchdogTelemetry,
 } from "./types";
 
+import {
+  buildExpedienteUrl,
+  notifyDegradedTarget,
+  resolveTargetUuid,
+  verifySnapshotFields,
+  type ResolvedTarget,
+  type WatchdogTarget,
+} from "./target-resolver";
+import { getAllTargets, getResolvedTargets } from "./target-manager";
+
 const log = createModuleLogger("licitacion-watchdog:job");
 const TRANSIENT_RENDER_RETRY_DELAYS_MS = [20_000, 40_000, 60_000] as const;
 let inFlight = false;
@@ -106,22 +116,23 @@ export async function extractWatchdogSnapshotWithRetries(
   return extraction;
 }
 
-async function notifyPending(row: WatchdogSnapshotRow): Promise<void> {
-  const receipt = await sendPendingNotification(row);
+async function notifyPending(row: WatchdogSnapshotRow, targetAlias?: string): Promise<void> {
+  const receipt = targetAlias
+    ? await sendPendingNotification(row, targetAlias)
+    : await sendPendingNotification(row);
   await markNotificationSent(row, receipt);
 }
 
-async function processExpediente(numeroProcedimiento: string): Promise<JsonObject> {
-  // Drenar primero toda la cola histórica en orden. Antes solo se reintentaba el
-  // snapshot más reciente; si aparecía otro cambio entre intentos, el anterior
-  // podía quedar pendiente para siempre.
+async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
+  const numeroProcedimiento = target.numero;
+  // Drenar primero toda la cola histórica en orden.
   const pending = await getPendingSnapshots(numeroProcedimiento);
-  for (const row of pending) await notifyPending(row);
+  for (const row of pending) await notifyPending(row, target.alias);
 
-  const resolved = await resolveExpediente(numeroProcedimiento);
   const extraction = await extractWatchdogSnapshotWithRetries({
     numeroProcedimiento,
-    ...resolved,
+    expedienteUrl: target.expedienteUrl,
+    uuidProcedimiento: target.uuid,
   });
   if (isSkippedExtraction(extraction)) {
     return {
@@ -132,6 +143,7 @@ async function processExpediente(numeroProcedimiento: string): Promise<JsonObjec
     };
   }
   const snapshot = extraction;
+
   if (snapshot.partial !== false) {
     log.warn(
       { numeroProcedimiento, deploymentSha: snapshot.deploymentSha ?? null },
@@ -147,6 +159,26 @@ async function processExpediente(numeroProcedimiento: string): Promise<JsonObjec
       deploymentSha: snapshot.deploymentSha ?? null,
     };
   }
+
+  // Verificación de portal
+  const verification = verifySnapshotFields(snapshot);
+  if (!verification.valid) {
+    log.warn(
+      { numeroProcedimiento, reason: verification.reason, failedSelectors: verification.failedSelectors },
+      "Target degradado: fallo verificación de campos obligatorios en el portal",
+    );
+    await notifyDegradedTarget(
+      target,
+      verification.reason || "Fallo verificación de campos en portal",
+      verification.failedSelectors || [],
+    );
+    return {
+      status: "degraded",
+      reason: verification.reason ?? null,
+      failedSelectors: verification.failedSelectors ?? null,
+      deploymentSha: snapshot.deploymentSha ?? null,
+    };
+  }
   const hash = hashSnapshot(snapshot);
   const latest = await getLatestSnapshot(numeroProcedimiento);
 
@@ -158,7 +190,7 @@ async function processExpediente(numeroProcedimiento: string): Promise<JsonObjec
       changes: [],
       notificationKind: "baseline",
     });
-    await notifyPending(baseline);
+    await notifyPending(baseline, target.alias);
     return {
       status: "baseline",
       hash,
@@ -170,7 +202,7 @@ async function processExpediente(numeroProcedimiento: string): Promise<JsonObjec
   if (latest.snapshot_hash === hash) {
     structuralChangeGuard.evaluate(numeroProcedimiento, latest.snapshot_json, snapshot);
     if (latest.detected_changes?.notification?.status === "pending") {
-      await notifyPending(latest);
+      await notifyPending(latest, target.alias);
     }
     return {
       status: "unchanged",
@@ -225,7 +257,7 @@ async function processExpediente(numeroProcedimiento: string): Promise<JsonObjec
   const changes = diffSnapshots(latest.snapshot_json, snapshot);
   if (changes.length === 0) {
     if (latest.detected_changes?.notification?.status === "pending") {
-      await notifyPending(latest);
+      await notifyPending(latest, target.alias);
     }
     return {
       status: "unchanged",
@@ -254,7 +286,7 @@ async function processExpediente(numeroProcedimiento: string): Promise<JsonObjec
     notificationKind: baselineCompleted ? "baseline_completed" : "change",
     structuralConfirmation,
   });
-  await notifyPending(changed);
+  await notifyPending(changed, target.alias);
   return {
     status: baselineCompleted ? "baseline_completed" : "changed",
     hash,
@@ -264,12 +296,13 @@ async function processExpediente(numeroProcedimiento: string): Promise<JsonObjec
   };
 }
 
-export async function runLicitacionWatchdog(expedientes: string[]): Promise<void> {
+export async function runLicitacionWatchdog(expedientesOrTargets?: (string | ResolvedTarget)[]): Promise<void> {
   let ownsInFlight = false;
   let currentHealth: WatchdogHealthState = EMPTY_WATCHDOG_HEALTH;
   let previousTelemetry: WatchdogTelemetry | null = null;
   let deploymentSha: string | null = null;
   let healthDecision: WatchdogHealthDecision | null = null;
+  let expedientes: string[] = [];
   const results: JsonObject = {};
   try {
     if (inFlight) {
@@ -286,6 +319,32 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
       );
       return;
     }
+
+    let resolvedTargets: ResolvedTarget[] = [];
+    if (Array.isArray(expedientesOrTargets) && expedientesOrTargets.length > 0) {
+      const allTargetsMap = new Map((await getAllTargets()).map((t: WatchdogTarget) => [t.numero, t]));
+      for (const item of expedientesOrTargets) {
+        if (typeof item === "string") {
+          const existing = allTargetsMap.get(item) || {
+            id: item,
+            alias: item,
+            numero: item,
+            uuid: null,
+          };
+          const uuid = existing.uuid || (await resolveTargetUuid(existing)) || "dummy-uuid";
+          resolvedTargets.push({
+            ...existing,
+            uuid,
+            expedienteUrl: buildExpedienteUrl(uuid),
+          });
+        } else {
+          resolvedTargets.push(item);
+        }
+      }
+    } else {
+      resolvedTargets = await getResolvedTargets();
+    }
+    expedientes = resolvedTargets.map((t: ResolvedTarget) => t.numero);
 
     const startedAt = nowISO();
     deploymentSha = getConfig().RAILWAY_GIT_COMMIT_SHA ?? null;
@@ -319,12 +378,17 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
       health: currentHealth,
     });
 
-    for (const numeroProcedimiento of expedientes) {
+    const delayMs = getConfig().WATCHDOG_DELAY_MS;
+    for (let i = 0; i < resolvedTargets.length; i++) {
+      const target = resolvedTargets[i];
+      if (i > 0 && delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
       try {
-        results[numeroProcedimiento] = await processExpediente(numeroProcedimiento);
+        results[target.numero] = await processExpediente(target);
       } catch (err) {
         const message = watchdogErrorMessage(err);
-        results[numeroProcedimiento] = {
+        results[target.numero] = {
           status: "error",
           error: message,
           cause: classifyWatchdogFailure(err),
@@ -333,7 +397,7 @@ export async function runLicitacionWatchdog(expedientes: string[]): Promise<void
           deploymentSha,
         };
         log.error(
-          { err, numeroProcedimiento, suppressTelegram: true },
+          { err, numeroProcedimiento: target.numero, suppressTelegram: true },
           "Watchdog falló para expediente; alerta consolidada gestionará Telegram",
         );
       }

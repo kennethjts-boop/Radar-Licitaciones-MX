@@ -200,10 +200,31 @@ export function formatChangeMessages(row: WatchdogSnapshotRow): string[] {
   ].join("\n"));
 }
 
-export async function sendPendingNotification(row: WatchdogSnapshotRow): Promise<TelegramDeliveryReceipt> {
-  const messages = row.detected_changes.notification.kind === "baseline"
-    ? [formatBaselineMessage(row)]
-    : formatChangeMessages(row);
+export async function sendPendingNotification(
+  row: WatchdogSnapshotRow,
+  targetAlias?: string,
+): Promise<TelegramDeliveryReceipt> {
+  let messages: string[] = [];
+
+  if (row.detected_changes?.notification?.kind === "change") {
+    try {
+      const { formatWatchdogNarrative } = await import("../watchdog-narrator");
+      const alias = targetAlias || row.numero_procedimiento;
+      const narrative = await formatWatchdogNarrative({
+        alias,
+        expedienteUrl: row.snapshot_json.expedienteUrl || "https://comprasmx.buengobierno.gob.mx/sitiopublico/",
+        changes: row.detected_changes.changes || [],
+      });
+      messages = [narrative.text];
+    } catch (err) {
+      messages = formatChangeMessages(row);
+    }
+  } else if (row.detected_changes?.notification?.kind === "baseline") {
+    messages = [formatBaselineMessage(row)];
+  } else {
+    messages = formatChangeMessages(row);
+  }
+
   let lastReceipt: TelegramDeliveryReceipt | null = null;
   for (const message of messages) {
     lastReceipt = await sendTelegramMessageWithReceipt(message, "HTML");

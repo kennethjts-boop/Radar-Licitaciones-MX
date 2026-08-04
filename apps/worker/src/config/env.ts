@@ -128,6 +128,17 @@ const envSchema = z.object({
   WATCHDOG_EXPEDIENTES: z
     .string()
     .default("LA-09-J0U-009J0U001-N-68-2026"),
+  WATCHDOG_TARGETS: z.string().optional(),
+  WATCHDOG_DELAY_MS: z
+    .string()
+    .default("3000")
+    .transform(Number)
+    .pipe(z.number().int().min(0)),
+  WATCHDOG_NARRATOR_AI: z
+    .string()
+    .default("false")
+    .transform((v) => v === "true"),
+  OPENROUTER_API_KEY: z.string().optional(),
   WATCHDOG_INTERVAL_MINUTES: z
     .string()
     .default("15")
