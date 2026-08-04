@@ -209,6 +209,7 @@ const envSchema = z.object({
   COMPRASMX_DAILY_RECHECK_HOUR: z.string().default("6").transform(Number),
 
   // Scheduler
+  RADAR_MODE: z.enum(["full", "watchdog_only"]).default("full"),
   COLLECT_INTERVAL_MINUTES: z.string().default("30").transform(Number),
   DAILY_SUMMARY_HOUR: z.string().default("7").transform(Number),
 

@@ -5,11 +5,69 @@ import { getState, STATE_KEYS } from "../../core/system-state";
 import { getLastChangedSnapshot, getLatestSnapshot } from "./repository";
 import { getResolvedTargets, addDynamicTarget, removeDynamicTarget } from "./target-manager";
 import type { WatchdogTelemetry } from "./types";
+import { getEffectiveRadarMode } from "../control/sleep-mode";
 
 const log = createModuleLogger("licitacion-watchdog:telegram");
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "N/D").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+export async function handleEstadoCommand(bot: TelegramBot, chatId: string): Promise<void> {
+  try {
+    const mode = await getEffectiveRadarMode();
+    const modeHeader =
+      mode === "watchdog_only"
+        ? "MODO: 😴 DORMIDO (solo watchdog)"
+        : "MODO: ☀️ COMPLETO";
+
+    const targets = await getResolvedTargets();
+    const telemetry = await getState<WatchdogTelemetry>(STATE_KEYS.WATCHDOG_TELEMETRY);
+    const lastChecked = telemetry?.lastCheckedAt
+      ? formatMexicoDate(telemetry.lastCheckedAt, "dd/MM/yyyy HH:mm")
+      : "Sin registro";
+
+    const lines = [
+      modeHeader,
+      "",
+      `🐕 <b>Watchdog Multi-Target (${targets.length} licitaciones)</b>`,
+      `⏰ Última revisión: <b>${escapeHtml(lastChecked)} CDMX</b>`,
+      "",
+    ];
+
+    for (const t of targets) {
+      const [latest, lastChange] = await Promise.all([
+        getLatestSnapshot(t.numero),
+        getLastChangedSnapshot(t.numero),
+      ]);
+
+      const statusField =
+        (latest?.snapshot_json?.visibleFields as any)?.[
+          "Estatus del procedimiento de contratación"
+        ] ||
+        (latest?.snapshot_json?.detail as any)?.registro?.[0]?.estatus ||
+        "Desconocido / Sin snapshot";
+
+      const lastChangeDisplay = lastChange
+        ? formatMexicoDate(lastChange.created_at, "dd/MM/yyyy HH:mm")
+        : "Sin cambios registrados";
+
+      lines.push(
+        `• <b>${escapeHtml(t.alias)}</b> (<code>${escapeHtml(t.numero)}</code>)`,
+        `  Estatus actual: <b>${escapeHtml(statusField)}</b>`,
+        `  Último cambio: <b>${escapeHtml(lastChangeDisplay)}</b>`,
+        "",
+      );
+    }
+
+    await bot.sendMessage(chatId, lines.join("\n").trim(), {
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+    }).catch(() => {});
+  } catch (err) {
+    log.error({ err }, "Error en /estado");
+    await bot.sendMessage(chatId, "⚠️ Error consultando el estado del radar.").catch(() => {});
+  }
 }
 
 export async function handleWatchdogCommand(bot: TelegramBot, chatId: string): Promise<void> {

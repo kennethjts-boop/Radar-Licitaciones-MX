@@ -1525,6 +1525,52 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     }
   });
 
+  // ── /dormir ──────────────────────────────────────────────────────────────
+  bot.onText(/\/dormir/, async (msg) => {
+    const chatIdPartial = String(msg.chat.id).slice(-4);
+    log.info({ command: "/dormir", chatIdPartial, from: msg.from?.username }, "command_received");
+    if (!(await authorizeWriteCommand(bot, msg))) return;
+    const responseChatId = String(msg.chat.id);
+    try {
+      const { enableSleepMode } = await import("../modules/control/sleep-mode");
+      const res = await enableSleepMode();
+      await bot.sendMessage(responseChatId, res.message, { parse_mode: "HTML" }).catch(() => {});
+    } catch (err) {
+      log.error({ err }, "❌ Error en /dormir");
+      await bot.sendMessage(responseChatId, "❌ Error activando modo dormido").catch(() => {});
+    }
+  });
+
+  // ── /despertar ───────────────────────────────────────────────────────────
+  bot.onText(/\/despertar/, async (msg) => {
+    const chatIdPartial = String(msg.chat.id).slice(-4);
+    log.info({ command: "/despertar", chatIdPartial, from: msg.from?.username }, "command_received");
+    if (!(await authorizeWriteCommand(bot, msg))) return;
+    const responseChatId = String(msg.chat.id);
+    try {
+      const { wakeFromSleepMode } = await import("../modules/control/sleep-mode");
+      const res = await wakeFromSleepMode();
+      await bot.sendMessage(responseChatId, res.message, { parse_mode: "HTML" }).catch(() => {});
+    } catch (err) {
+      log.error({ err }, "❌ Error en /despertar");
+      await bot.sendMessage(responseChatId, "❌ Error saliendo de modo dormido").catch(() => {});
+    }
+  });
+
+  // ── /estado ──────────────────────────────────────────────────────────────
+  bot.onText(/\/estado/, async (msg) => {
+    const chatIdPartial = String(msg.chat.id).slice(-4);
+    log.info({ command: "/estado", chatIdPartial, from: msg.from?.username }, "command_received");
+    if (String(msg.chat.id) !== chatId) return;
+    try {
+      const { handleEstadoCommand } = await import("../modules/licitacion-watchdog/telegram-handler");
+      await handleEstadoCommand(bot, chatId);
+    } catch (err) {
+      log.error({ err }, "❌ Error en /estado");
+      await bot.sendMessage(chatId, "⚠️ Error consultando estado").catch(() => {});
+    }
+  });
+
   // ── /noticias_comerciales ──────────────────────────────────────────────────
   bot.onText(/\/noticias_comerciales(?:\s+(\d+))?/, async (msg, match) => {
     const chatIdPartial = String(msg.chat.id).slice(-4);

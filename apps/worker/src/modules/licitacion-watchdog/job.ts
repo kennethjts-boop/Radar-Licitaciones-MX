@@ -29,6 +29,8 @@ import { structuralChangeGuard } from "./structural-guard";
 import { sendPendingNotification } from "./telegram";
 import { recordNetworkFailure } from "../alerting/saturation";
 import { allCircuits } from "../resilience/circuit-breaker";
+import { getEffectiveRadarMode } from "../control/sleep-mode";
+import { sendTelegramMessage } from "../../alerts/telegram.alerts";
 import type {
   JsonObject,
   StructuralConfirmation,
@@ -125,9 +127,10 @@ async function notifyPending(row: WatchdogSnapshotRow, targetAlias?: string): Pr
 
 async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
   const numeroProcedimiento = target.numero;
+  const alias = target.alias !== target.numero ? target.alias : undefined;
   // Drenar primero toda la cola histórica en orden.
   const pending = await getPendingSnapshots(numeroProcedimiento);
-  for (const row of pending) await notifyPending(row, target.alias);
+  for (const row of pending) await notifyPending(row, alias);
 
   const extraction = await extractWatchdogSnapshotWithRetries({
     numeroProcedimiento,
@@ -190,7 +193,7 @@ async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
       changes: [],
       notificationKind: "baseline",
     });
-    await notifyPending(baseline, target.alias);
+    await notifyPending(baseline, alias);
     return {
       status: "baseline",
       hash,
@@ -202,7 +205,7 @@ async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
   if (latest.snapshot_hash === hash) {
     structuralChangeGuard.evaluate(numeroProcedimiento, latest.snapshot_json, snapshot);
     if (latest.detected_changes?.notification?.status === "pending") {
-      await notifyPending(latest, target.alias);
+      await notifyPending(latest, alias);
     }
     return {
       status: "unchanged",
@@ -257,7 +260,7 @@ async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
   const changes = diffSnapshots(latest.snapshot_json, snapshot);
   if (changes.length === 0) {
     if (latest.detected_changes?.notification?.status === "pending") {
-      await notifyPending(latest, target.alias);
+      await notifyPending(latest, alias);
     }
     return {
       status: "unchanged",
@@ -286,7 +289,7 @@ async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
     notificationKind: baselineCompleted ? "baseline_completed" : "change",
     structuralConfirmation,
   });
-  await notifyPending(changed, target.alias);
+  await notifyPending(changed, alias);
   return {
     status: baselineCompleted ? "baseline_completed" : "changed",
     hash,
@@ -436,6 +439,14 @@ export async function runLicitacionWatchdog(expedientesOrTargets?: (string | Res
       });
       healthDecision = await resolveWatchdogHealthDecision(currentHealth);
       currentHealth = healthDecision.health;
+
+      const radarMode = await getEffectiveRadarMode();
+      if (radarMode === "watchdog_only" && currentHealth.consecutiveFailures === 3) {
+        await sendTelegramMessage(
+          "⚠️ El watchdog lleva 3 fallos. Sigue dormido lo demás, pero revisa.",
+          "HTML",
+        ).catch((e) => log.warn({ err: e }, "No se pudo enviar alerta de 3 fallos en modo dormido"));
+      }
     } else if (!allSkipped) {
       currentHealth = transitionWatchdogHealth(currentHealth, { success: true });
     }

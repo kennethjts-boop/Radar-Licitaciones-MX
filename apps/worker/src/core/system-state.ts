@@ -32,6 +32,8 @@ export const STATE_KEYS = {
   LAST_DAILY_SUMMARY: "last_daily_summary",
   WATCHDOG_TELEMETRY: "licitacion_watchdog_telemetry",
   RADAR_PAUSE_STATE: "radar_pause_state",
+  RADAR_MODE: "radar_mode",
+  RADAR_PAUSE_SNAPSHOT: "radar_pause_snapshot",
   NETWORK_FAILURE_HISTOGRAM: "network_failure_histogram",
   WORKER_VERSION: "worker_version",
 } as const;
@@ -84,6 +86,19 @@ export async function setState(
   }
 }
 
+export async function deleteState(key: StateKey): Promise<void> {
+  try {
+    const db = await getDb();
+    const { error } = await db.from("system_state").delete().eq("key", key);
+
+    if (error) {
+      log.warn({ key, error: error.message }, "Error borrando system_state");
+    }
+  } catch (err) {
+    log.warn({ key, err }, "Error borrando system_state");
+  }
+}
+
 /**
  * Persiste estado crítico y comprueba mediante una lectura independiente que
  * Supabase guardó exactamente el valor solicitado. A diferencia de setState(),
@@ -91,7 +106,7 @@ export async function setState(
  */
 export async function setStateStrict(
   key: StateKey,
-  value: object,
+  value: unknown,
 ): Promise<void> {
   const db = await getDb();
   const { error: writeError } = await db

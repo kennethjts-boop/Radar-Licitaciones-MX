@@ -41,6 +41,8 @@ import {
   determineVerdict,
 } from "../modules/alerting/verdict";
 
+import { getEffectiveRadarMode } from "../modules/control/sleep-mode";
+
 const log = createModuleLogger("scheduler");
 
 const JITTER_MS = 3 * 60 * 1000; // ±3 min
@@ -160,6 +162,11 @@ export async function runExternalLeadsIfEnabled(
   runner: typeof runExternalLeadsOsintJob = runExternalLeadsOsintJob,
 ): Promise<void> {
   try {
+    const mode = await getEffectiveRadarMode();
+    if (mode === "watchdog_only") {
+      log.info("RADAR_MODE=watchdog_only — 1 tarea omitida: [external_osint]");
+      return;
+    }
     if (await cycleIsPaused("all", "external_osint")) return;
     const result = await runner();
     log.info(
@@ -185,6 +192,13 @@ export async function runExternalLeadsIfEnabled(
 }
 
 async function scheduledCollect(baseIntervalMs: number): Promise<void> {
+  const mode = await getEffectiveRadarMode();
+  if (mode === "watchdog_only") {
+    log.info("RADAR_MODE=watchdog_only — 2 tareas omitidas: [listing_scan, external_osint]");
+    const nextDelay = baseIntervalMs + jitter();
+    setTimeout(() => scheduledCollect(baseIntervalMs), nextDelay);
+    return;
+  }
   if (await cycleIsPaused("collector", "listing_scan")) {
     await runExternalLeadsIfEnabled();
     const nextDelay = baseIntervalMs + jitter();
@@ -235,6 +249,8 @@ async function scheduledCollect(baseIntervalMs: number): Promise<void> {
  */
 async function catchUpDailySummaryIfMissed(summaryHour: number): Promise<void> {
   try {
+    const mode = await getEffectiveRadarMode();
+    if (mode === "watchdog_only") return;
     if (await cycleIsPaused("all", "daily_summary_catchup")) return;
     const now = nowInMexico();
     const dayOfWeek = now.getDay(); // 0=Dom, 1=Lun … 5=Vie, 6=Sáb
@@ -279,12 +295,25 @@ export function startScheduler(): void {
   const recheckHour = config.COMPRASMX_DAILY_RECHECK_HOUR;
   const summaryHour = config.DAILY_SUMMARY_HOUR;
 
+  getEffectiveRadarMode().then((mode) => {
+    if (mode === "watchdog_only") {
+      log.info(
+        "RADAR_MODE=watchdog_only — 5 tareas omitidas: [collect_job, daily_recheck, daily_summary, external_leads, matchers_radars]",
+      );
+    }
+  }).catch(() => {});
+
   // ── MODO 2: Daily Direct Recheck ──────────────────────────────────────────
   const recheckCron = `0 ${recheckHour} * * 1-5`;
 
   cron.schedule(
     recheckCron,
     async () => {
+      const mode = await getEffectiveRadarMode();
+      if (mode === "watchdog_only") {
+        log.info("RADAR_MODE=watchdog_only — 1 tarea omitida: [daily_recheck]");
+        return;
+      }
       if (await cycleIsPaused("collector", "daily_recheck")) return;
       log.info(
         { cron: recheckCron, hour: recheckHour, mode: "daily_recheck" },
@@ -308,6 +337,11 @@ export function startScheduler(): void {
   cron.schedule(
     summaryCron,
     async () => {
+      const mode = await getEffectiveRadarMode();
+      if (mode === "watchdog_only") {
+        log.info("RADAR_MODE=watchdog_only — 1 tarea omitida: [daily_summary]");
+        return;
+      }
       if (await cycleIsPaused("all", "daily_summary")) return;
       log.info({ cron: summaryCron }, "📊 Disparando resumen diario");
       try {
@@ -331,6 +365,17 @@ export function startScheduler(): void {
   // Primer ciclo inmediato post-deploy — 10 s para que bootstrap termine
   setTimeout(async () => {
     log.info("🚀 Ejecutando primer ciclo inmediato post-deploy...");
+    const mode = await getEffectiveRadarMode();
+    if (mode === "watchdog_only") {
+      log.info("RADAR_MODE=watchdog_only — ciclo colectivo post-deploy omitido");
+      const firstDelay = baseIntervalMs + jitter();
+      log.info(
+        { nextInMin: (firstDelay / 60_000).toFixed(1) },
+        "⏱ Iniciando loop MODO 1 con jitter (modo watchdog_only)",
+      );
+      setTimeout(() => scheduledCollect(baseIntervalMs), firstDelay);
+      return;
+    }
     if (!(await cycleIsPaused("collector", "initial_listing_scan"))) {
       try {
         const result = await runCollectJob();
