@@ -53,3 +53,9 @@ apps/worker/data/
 
 # Local diagnostic/download artifacts
 /downloads/
+scratch/
+apps/worker/scratch/
+*.pdf
+/check_watchdog.ts
+/fetch_live_annexes.ts
+/.txt
