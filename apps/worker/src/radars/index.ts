@@ -51,3 +51,23 @@ export function getActiveRadars(): RadarConfig[] {
 export function getRadarByKey(key: string): RadarConfig | undefined {
   return RADARS.find((r) => r.key === key);
 }
+
+/**
+ * Consulta la tabla `radars` en Supabase para obtener conteos reales en tiempo de ejecución.
+ */
+export async function getDbRadarCounts(): Promise<{ active: number; dormant: number; total: number }> {
+  try {
+    const { getSupabaseClient } = await import("../storage/client");
+    const db = getSupabaseClient();
+    const { data, error } = await db.from("radars").select("key, is_active");
+    if (!error && Array.isArray(data) && data.length > 0) {
+      const active = data.filter((r: { is_active?: boolean }) => Boolean(r.is_active)).length;
+      const dormant = data.filter((r: { is_active?: boolean }) => !r.is_active).length;
+      return { active, dormant, total: data.length };
+    }
+  } catch {
+    // fallback
+  }
+  const activeFallback = getActiveRadars().length;
+  return { active: activeFallback, dormant: 0, total: activeFallback };
+}

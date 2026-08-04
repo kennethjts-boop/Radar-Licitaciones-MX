@@ -15,7 +15,7 @@ import { formatDuration, formatMexicoDate } from "../core/time";
 import { withTimeout } from "../core/errors";
 import { formatCurrency } from "../core/text";
 import { getState, STATE_KEYS } from "../core/system-state";
-import { getActiveRadars } from "../radars/index";
+import { getActiveRadars, getDbRadarCounts } from "../radars/index";
 import { getLastCollectRun } from "../storage/collect-run.repo";
 import { getLastSentAlert } from "../storage/match-alert.repo";
 import type { DbCollectRun } from "../types/database";
@@ -908,7 +908,11 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     try {
       const config = getConfig();
       const status = healthTracker.getStatus();
-      const radars = getActiveRadars();
+      const { getEffectiveRadarMode } = await import("../modules/control/sleep-mode");
+      const radarMode = await getEffectiveRadarMode();
+      const isSleeping = radarMode === "watchdog_only";
+
+      const radarCounts = await getDbRadarCounts();
 
       const rawLastRunState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_COLLECT_RUN);
       const lastRunState = await resolveLastRunState(rawLastRunState, status.lastCycleAt);
@@ -935,21 +939,28 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       const workerIcon = statusIcon(status.overall);
 
       const nextRun = nextRunEstimate(config.COLLECT_INTERVAL_MINUTES);
+      const nextWatchdogRun = nextRunEstimate(config.WATCHDOG_INTERVAL_MINUTES ?? 15);
       const bootTime = bootState?.bootedAt ? formatMexicoDate(String(bootState.bootedAt)) : "N/D";
       const lastRunDisplay = formatTelemetryDate(getLastRunTimestamp(lastRunState, status.lastCycleAt));
-      const lastHeartbeatDisplay = formatTelemetryDate(healthcheckState?.checkedAt);
+      const lastHeartbeatDisplay = isSleeping
+        ? formatTelemetryDate(watchdogTelemetry?.lastCheckedAt ?? healthcheckState?.checkedAt)
+        : formatTelemetryDate(healthcheckState?.checkedAt);
       const lastAlertDisplay = lastAlert?.sent_at
         ? formatTelemetryDate(lastAlert.sent_at)
         : "No disponible";
 
-      const stalledLine = status.stalled
+      const stalledLine = (!isSleeping && status.stalled)
         ? [`⚠️ <b>SIN CICLOS: +${Math.floor((status.stalledForMs ?? 0) / 60_000)} min — revisar scheduler</b>`]
         : [];
-      const lastCycleErrorLine = status.lastCycleStatus === "error"
+      const lastCycleErrorLine = (!isSleeping && status.lastCycleStatus === "error")
         ? ["⚠️ <b>Último ciclo terminó con error — revisar /debug_resumen</b>"]
         : [];
-      const degradationLine = status.degradationReasons.length > 0
-        ? [`⚠️ Causa: <code>${escapeHtml(status.degradationReasons.join("; ")).slice(0, 220)}</code>`]
+
+      const filteredReasons = isSleeping
+        ? status.degradationReasons.filter((r) => !r.toLowerCase().includes("playwright"))
+        : status.degradationReasons;
+      const degradationLine = filteredReasons.length > 0
+        ? [`⚠️ Causa: <code>${escapeHtml(filteredReasons.join("; ")).slice(0, 220)}</code>`]
         : [];
 
       const external =
@@ -961,24 +972,33 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         dailySummaryState,
         externalView.state,
       );
-      const dailySummaryDisplay = dailySummaryState
-        ? `${dailySummaryState.status ?? "N/D"} | Esperado: ${formatTelemetryDate(dailySummaryState.expectedAt)} | Real: ${formatTelemetryDate(dailySummaryState.finishedAt ?? dailySummaryState.actualAt ?? dailySummaryState.startedAt)}`
-        : "Sin registro";
+      const dailySummaryDisplay = isSleeping
+        ? "😴 pausado"
+        : dailySummaryState
+          ? `${dailySummaryState.status ?? "N/D"} | Esperado: ${formatTelemetryDate(dailySummaryState.expectedAt)} | Real: ${formatTelemetryDate(dailySummaryState.finishedAt ?? dailySummaryState.actualAt ?? dailySummaryState.startedAt)}`
+          : "Sin registro";
+
       const commercialState = lastRunState?.commercialMatching as Record<string, unknown> | undefined;
+      const commercialDisplay = isSleeping
+        ? "😴 dormido"
+        : `<b>${config.COMMERCIAL_MATCHING_ENABLED ? "activo" : "inactivo"}</b> | Candidatos: <b>${numberField(commercialState, "commercialCandidates")}</b> | Matches perfiles: <b>${numberField(commercialState, "matchedProfiles")}</b>`;
+
       const externalSummary = externalView.disabled
         ? "deshabilitado"
         : `vivo, ${externalView.detected > 0 ? "con leads" : `sin leads: ${externalNoLeadCause(externalView.state)}`}`;
-      const externalStatusLines = externalView.disabled
-        ? [
-            `🧭 External OSINT: <b>deshabilitado</b>`,
-            `   Discovery: <b>false</b>`,
-            `   Último: <b>disabled_by_env</b>`,
-            `   Fuentes: <b>0</b> | Raw: <b>0</b> | Detectados: <b>0</b> | Guardados: <b>0</b> | Alertas: <b>0</b> | Errores: <b>0</b>`,
-          ]
-        : [
-            `🧭 External OSINT: <b>${escapeHtml(externalSummary)}</b> | Dry run: <b>${formatBool(externalView.dryRun)}</b> | Discovery: <b>${formatBool(externalView.discoveryMode)}</b>`,
-            `   Último: <b>${escapeHtml(externalView.status)}</b> | Fuentes: <b>${externalView.sourcesReviewed}</b> | Raw: <b>${externalView.rawResultsReceived}</b> | Detectados: <b>${externalView.detected}</b> | Guardados: <b>${externalView.saved}</b> | Alertas: <b>${externalView.alerted}</b> | Errores: <b>${externalView.errors.length}</b>`,
-          ];
+      const externalStatusLines = isSleeping
+        ? [`🧭 External OSINT: <b>😴 dormido</b>`]
+        : externalView.disabled
+          ? [
+              `🧭 External OSINT: <b>deshabilitado</b>`,
+              `   Discovery: <b>false</b>`,
+              `   Último: <b>disabled_by_env</b>`,
+              `   Fuentes: <b>0</b> | Raw: <b>0</b> | Detectados: <b>0</b> | Guardados: <b>0</b> | Alertas: <b>0</b> | Errores: <b>0</b>`,
+            ]
+          : [
+              `🧭 External OSINT: <b>${escapeHtml(externalSummary)}</b> | Dry run: <b>${formatBool(externalView.dryRun)}</b> | Discovery: <b>${formatBool(externalView.discoveryMode)}</b>`,
+              `   Último: <b>${escapeHtml(externalView.status)}</b> | Fuentes: <b>${externalView.sourcesReviewed}</b> | Raw: <b>${externalView.rawResultsReceived}</b> | Detectados: <b>${externalView.detected}</b> | Guardados: <b>${externalView.saved}</b> | Alertas: <b>${externalView.alerted}</b> | Errores: <b>${externalView.errors.length}</b>`,
+            ];
       const pollingEnabled = isTelegramCommandsPollingEnabled(config);
       const pollingStatus = pollingStatusLabel(
         pollingEnabled,
@@ -995,8 +1015,32 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         telegramCommandsState?.last_telegram_commands_error_at,
       );
 
+      const schedulerLabel = isSleeping
+        ? "✅ Activo (solo watchdog)"
+        : status.schedulerStatus === "active" || schedulerState?.status === "active"
+          ? "✅ Activo"
+          : "⏳ Iniciando";
+
+      const nextRunLine = isSleeping
+        ? `🔜 Próximo ciclo watchdog: ~<b>${nextWatchdogRun} MX</b>`
+        : `🔜 Próxima: ~<b>${nextRun} MX</b>`;
+
+      const lastRunLine = isSleeping
+        ? `⏰ Último ciclo completo (antes de dormir): <b>${lastRunDisplay}</b>`
+        : `⏰ Última: <b>${lastRunDisplay}</b>`;
+
+      const radarsDisplay = isSleeping
+        ? `0 activos (${radarCounts.total} dormidos)`
+        : radarCounts.dormant > 0
+          ? `${radarCounts.active} activos (${radarCounts.dormant} dormidos)`
+          : `${radarCounts.active} activos`;
+
+      const statusTitle = isSleeping
+        ? `🔍 <b>ESTADO — Radar Licitaciones MX (😴 MODO DORMIDO)</b>`
+        : `🔍 <b>ESTADO — Radar Licitaciones MX</b>`;
+
       const lines = [
-        `🔍 <b>ESTADO — Radar Licitaciones MX</b>`,
+        statusTitle,
         "",
         `🖥 Worker: <b>${workerIcon} ${serviceLabel(status.overall)}</b>`,
         `${dbIcon} DB: <b>${serviceLabel(status.services.database)}</b> (${status.dbConnected ? "Conectada" : "Desconectada"})`,
@@ -1011,19 +1055,19 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         ...stalledLine,
         ...lastCycleErrorLine,
         "",
-        `⏰ Última: <b>${lastRunDisplay}</b>`,
+        lastRunLine,
         `📨 Última alerta: <b>${lastAlertDisplay}</b>`,
         `💓 Heartbeat: <b>${lastHeartbeatDisplay}</b>`,
         `❌ Último error: <code>${escapeHtml(lastErrorLine)}</code>`,
-        `🔜 Próxima: ~<b>${nextRun} MX</b>`,
-        `📡 Scheduler: <b>${status.schedulerStatus === "active" || schedulerState?.status === "active" ? "✅ Activo" : "⏳ Iniciando"}</b>`,
+        nextRunLine,
+        `📡 Scheduler: <b>${schedulerLabel}</b>`,
         `🧾 Resumen 7am: <b>${escapeHtml(dailySummaryDisplay)}</b>`,
-        `🛰 Radares: <b>${radars.length} activos</b>`,
+        `🛰 Radares: <b>${radarsDisplay}</b>`,
         ...pauseStatusLines(pauseState),
         ...circuitStatusLines(),
         `🐕 Watchdog: <b>${escapeHtml(watchdogTelemetry?.status ?? "sin ejecución")}</b> | Último: <b>${formatTelemetryDate(watchdogTelemetry?.lastCheckedAt)}</b>`,
         `📈 Saturación: <b>${escapeHtml(saturation.message)}</b> | Muestras: <b>${saturation.sampleCount}</b>${saturation.sufficient ? ` | Horas pico: <b>${saturation.peakHours.map((hour) => `${String(hour).padStart(2, "0")}:00`).join(", ")}</b>` : ""}`,
-        `💼 Motor comercial: <b>${config.COMMERCIAL_MATCHING_ENABLED ? "activo" : "inactivo"}</b> | Candidatos: <b>${numberField(commercialState, "commercialCandidates")}</b> | Matches perfiles: <b>${numberField(commercialState, "matchedProfiles")}</b>`,
+        isSleeping ? `💼 Motor comercial: <b>${commercialDisplay}</b>` : `💼 Motor comercial: ${commercialDisplay}`,
         ...externalStatusLines,
         "",
         `⏱ Uptime: <b>${formatDuration(status.uptimeMs)}</b>`,
@@ -1557,19 +1601,7 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     }
   });
 
-  // ── /estado ──────────────────────────────────────────────────────────────
-  bot.onText(/\/estado/, async (msg) => {
-    const chatIdPartial = String(msg.chat.id).slice(-4);
-    log.info({ command: "/estado", chatIdPartial, from: msg.from?.username }, "command_received");
-    if (String(msg.chat.id) !== chatId) return;
-    try {
-      const { handleEstadoCommand } = await import("../modules/licitacion-watchdog/telegram-handler");
-      await handleEstadoCommand(bot, chatId);
-    } catch (err) {
-      log.error({ err }, "❌ Error en /estado");
-      await bot.sendMessage(chatId, "⚠️ Error consultando estado").catch(() => {});
-    }
-  });
+
 
   // ── /noticias_comerciales ──────────────────────────────────────────────────
   bot.onText(/\/noticias_comerciales(?:\s+(\d+))?/, async (msg, match) => {

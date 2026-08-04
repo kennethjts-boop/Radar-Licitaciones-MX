@@ -221,6 +221,31 @@ describe("Telegram Commands - /noticias_comerciales", () => {
     expect(message).toContain("Saturación:");
   });
 
+  it("/estado reporta correctamente en modo dormido RADAR_MODE=watchdog_only", async () => {
+    mockConfig.RADAR_MODE = "watchdog_only";
+
+    const callbacks = (botInstance as any)._textRegexpCallbacks || [];
+    const handler = callbacks.find(
+      (callback: any) =>
+        callback.regexp?.toString().includes("prueba|estado"),
+    )?.callback;
+    expect(handler).toBeDefined();
+
+    await handler({
+      chat: { id: 123456 },
+      text: "/estado",
+    });
+
+    const message = mockSendMessage.mock.calls.at(-1)?.[1] as string;
+    expect(message).toContain("ESTADO — Radar Licitaciones MX (😴 MODO DORMIDO)");
+    expect(message).toContain("Scheduler: <b>✅ Activo (solo watchdog)</b>");
+    expect(message).toContain("Resumen 7am: <b>😴 pausado</b>");
+    expect(message).toContain("Motor comercial: <b>😴 dormido</b>");
+    expect(message).toContain("External OSINT: <b>😴 dormido</b>");
+    expect(message).toContain("Último ciclo completo (antes de dormir):");
+    expect(message).toContain("Próximo ciclo watchdog:");
+  });
+
   it("/estado separa sendMessage de polling y muestra fallos/recovery", async () => {
     mockTelegramCommandsState = {
       telegram_polling_ok: false,
