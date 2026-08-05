@@ -252,7 +252,25 @@ describe("Telegram commands polling health", () => {
     expect(mockSetTelegramHealth).not.toHaveBeenCalledWith("down");
   });
 
-  it("conflictos duplicados se deduplican durante treinta minutos", async () => {
+  it("un conflicto 409 aislado se recupera sin pedir intervención", async () => {
+    const send = jest.fn().mockResolvedValue({ message_id: 1 });
+    const conflict = pollingError(
+      "Conflict: terminated by other getUpdates request",
+      409,
+      "ETELEGRAM",
+    );
+
+    const result = await recordTelegramPollingFailure(
+      conflict,
+      send,
+      new Date("2026-06-10T00:00:00.000Z"),
+    );
+
+    expect(result).toMatchObject({ alerted: false, failures: 1 });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("un conflicto 409 persistente alerta al tercer fallo y se deduplica", async () => {
     const send = jest.fn().mockResolvedValue({ message_id: 1 });
     const conflict = pollingError(
       "Conflict: terminated by other getUpdates request",
@@ -270,7 +288,18 @@ describe("Telegram commands polling health", () => {
       send,
       new Date("2026-06-10T00:00:30.000Z"),
     );
+    const third = await recordTelegramPollingFailure(
+      conflict,
+      send,
+      new Date("2026-06-10T00:01:00.000Z"),
+    );
+    await recordTelegramPollingFailure(
+      conflict,
+      send,
+      new Date("2026-06-10T00:01:30.000Z"),
+    );
 
+    expect(third).toMatchObject({ alerted: true, failures: 3 });
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0][0]).toContain("🎯 VEREDICTO: INTERVENIR");
     expect(send.mock.calls[0][0]).toContain("réplicas en Railway");
@@ -285,11 +314,13 @@ describe("Telegram commands polling health", () => {
       "ETELEGRAM",
     );
 
-    await recordTelegramPollingFailure(
-      conflict,
-      send,
-      new Date("2026-06-10T00:00:00.000Z"),
-    );
+    for (let minute = 0; minute < 3; minute += 1) {
+      await recordTelegramPollingFailure(
+        conflict,
+        send,
+        new Date(`2026-06-10T00:0${minute}:00.000Z`),
+      );
+    }
 
     expect(mockSetTelegramHealth).toHaveBeenCalledWith("ok");
     expect(mockSetTelegramHealth).not.toHaveBeenCalledWith("down");
@@ -302,11 +333,13 @@ describe("Telegram commands polling health", () => {
       409,
       "ETELEGRAM",
     );
-    await recordTelegramPollingFailure(
-      conflict,
-      send,
-      new Date("2026-06-10T00:00:00.000Z"),
-    );
+    for (let minute = 0; minute < 3; minute += 1) {
+      await recordTelegramPollingFailure(
+        conflict,
+        send,
+        new Date(`2026-06-10T00:0${minute}:00.000Z`),
+      );
+    }
     send.mockClear();
 
     await recordTelegramPollingSuccess(

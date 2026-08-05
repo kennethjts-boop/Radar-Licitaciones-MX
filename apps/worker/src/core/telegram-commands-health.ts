@@ -454,8 +454,11 @@ export async function recordTelegramPollingFailure(
   }
   pendingPollingFailures++;
 
+  // Un 409 aislado también puede aparecer durante un relevo lento de Railway
+  // fuera de la ventana inicial. El poller ya se recupera con backoff, así que
+  // solo pedimos intervención si el conflicto realmente persiste. Auth sí es
+  // accionable desde el primer fallo.
   const persistent =
-    diagnosis.kind === "telegram_conflict" ||
     diagnosis.kind === "telegram_auth" ||
     pendingPollingFailures >= tuning.alertMinFailures;
 

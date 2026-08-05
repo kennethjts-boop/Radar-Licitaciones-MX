@@ -934,10 +934,6 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         return null;
       });
 
-      const dbIcon = statusIcon(status.services.database);
-      const tgIcon = statusIcon(status.services.telegram);
-      const workerIcon = statusIcon(status.overall);
-
       const nextRun = nextRunEstimate(config.COLLECT_INTERVAL_MINUTES);
       const nextWatchdogRun = nextRunEstimate(config.WATCHDOG_INTERVAL_MINUTES ?? 15);
       const bootTime = bootState?.bootedAt ? formatMexicoDate(String(bootState.bootedAt)) : "N/D";
@@ -957,8 +953,22 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         : [];
 
       const filteredReasons = isSleeping
-        ? status.degradationReasons.filter((r) => !r.toLowerCase().includes("playwright"))
+        ? status.degradationReasons.filter((reason) => {
+            const normalized = reason.toLowerCase();
+            return !normalized.includes("sin ciclos recientes") &&
+              !normalized.includes("playwright") &&
+              !normalized.includes("último ciclo con error");
+          })
         : status.degradationReasons;
+      const workerStatus =
+        isSleeping &&
+          status.overall === "degraded" &&
+          filteredReasons.length === 0
+          ? "ok"
+          : status.overall;
+      const dbIcon = statusIcon(status.services.database);
+      const tgIcon = statusIcon(status.services.telegram);
+      const workerIcon = statusIcon(workerStatus);
       const degradationLine = filteredReasons.length > 0
         ? [`⚠️ Causa: <code>${escapeHtml(filteredReasons.join("; ")).slice(0, 220)}</code>`]
         : [];
@@ -1042,7 +1052,7 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       const lines = [
         statusTitle,
         "",
-        `🖥 Worker: <b>${workerIcon} ${serviceLabel(status.overall)}</b>`,
+        `🖥 Worker: <b>${workerIcon} ${serviceLabel(workerStatus)}</b>`,
         `${dbIcon} DB: <b>${serviceLabel(status.services.database)}</b> (${status.dbConnected ? "Conectada" : "Desconectada"})`,
         `🧱 Schema: <b>${status.dbSchemaValid ? "Válido" : "Inválido"}</b>`,
         `${tgIcon} Telegram alertas sendMessage: <b>${sendStatus}</b>`,

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createModuleLogger } from "../../core/logger";
 import { getSupabaseClient } from "../../storage/client";
 
@@ -9,9 +10,30 @@ const HEARTBEAT_INTERVAL_MS = 10_000;
 
 type LockLostHandler = () => void | Promise<void>;
 
-const instanceId =
-  process.env.RAILWAY_REPLICA_ID ??
-  `local-${process.pid}-${Date.now()}`;
+type PollingInstanceEnvironment = Partial<
+  Pick<
+    NodeJS.ProcessEnv,
+    "RAILWAY_DEPLOYMENT_ID" | "RAILWAY_REPLICA_ID" | "HOSTNAME"
+  >
+>;
+
+/**
+ * La identidad del dueño debe ser única por proceso, no solo por réplica.
+ * Railway puede solapar dos procesos durante un deploy y ambos pueden exponer
+ * el mismo RAILWAY_REPLICA_ID; si compartieran el id, la RPC permitiría que los
+ * dos renovaran el mismo lock y Telegram respondería 409 a getUpdates.
+ */
+export function buildPollingInstanceId(
+  env: PollingInstanceEnvironment = process.env,
+  pid = process.pid,
+  nonce: string = randomUUID(),
+): string {
+  const deployment = env.RAILWAY_DEPLOYMENT_ID ?? "local-deployment";
+  const replica = env.RAILWAY_REPLICA_ID ?? env.HOSTNAME ?? "local-instance";
+  return `${deployment}:${replica}:${pid}:${nonce}`;
+}
+
+const instanceId = buildPollingInstanceId();
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let heartbeatInFlight = false;

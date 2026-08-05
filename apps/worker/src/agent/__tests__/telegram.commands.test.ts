@@ -125,7 +125,7 @@ jest.mock("../../core/system-state", () => ({
 // Mock healthTracker
 jest.mock("../../core/healthcheck", () => ({
   healthTracker: {
-    getStatus: () => ({
+    getStatus: jest.fn(() => ({
       overall: "ok",
       services: {
         database: "ok",
@@ -140,7 +140,7 @@ jest.mock("../../core/healthcheck", () => ({
       uptimeMs: 60_000,
       schedulerStatus: "active",
       externalLeads: { status: "none" },
-    }),
+    })),
     setTelegramHealth: jest.fn(),
   },
 }));
@@ -223,6 +223,30 @@ describe("Telegram Commands - /noticias_comerciales", () => {
 
   it("/estado reporta correctamente en modo dormido RADAR_MODE=watchdog_only", async () => {
     mockConfig.RADAR_MODE = "watchdog_only";
+    const { healthTracker } = jest.requireMock("../../core/healthcheck") as {
+      healthTracker: { getStatus: jest.Mock };
+    };
+    healthTracker.getStatus.mockReturnValueOnce({
+      overall: "degraded",
+      services: {
+        database: "ok",
+        telegram: "ok",
+        playwright: "unknown",
+      },
+      dbConnected: true,
+      dbSchemaValid: true,
+      degradationReasons: [
+        "sin ciclos recientes por 1270 min",
+        "Playwright pendiente de verificación, próximo ciclo",
+      ],
+      stalled: true,
+      stalledForMs: 76_200_000,
+      lastCycleAt: "2026-08-04T20:47:00.000Z",
+      lastCycleStatus: "success",
+      uptimeMs: 76_200_000,
+      schedulerStatus: "active",
+      externalLeads: { status: "none" },
+    });
 
     const callbacks = (botInstance as any)._textRegexpCallbacks || [];
     const handler = callbacks.find(
@@ -238,6 +262,8 @@ describe("Telegram Commands - /noticias_comerciales", () => {
 
     const message = mockSendMessage.mock.calls.at(-1)?.[1] as string;
     expect(message).toContain("ESTADO — Radar Licitaciones MX (😴 MODO DORMIDO)");
+    expect(message).toContain("Worker: <b>✅ OK</b>");
+    expect(message).not.toContain("sin ciclos recientes");
     expect(message).toContain("Scheduler: <b>✅ Activo (solo watchdog)</b>");
     expect(message).toContain("Resumen 7am: <b>😴 pausado</b>");
     expect(message).toContain("Motor comercial: <b>😴 dormido</b>");

@@ -14,6 +14,7 @@ jest.mock("../../../storage/client", () => ({
 
 import {
   acquirePollingLock,
+  buildPollingInstanceId,
   startHeartbeat,
   stopHeartbeat,
 } from "../instance-lock";
@@ -32,6 +33,19 @@ describe("Telegram polling instance lock", () => {
   afterEach(() => {
     stopHeartbeat();
     jest.useRealTimers();
+  });
+
+  it("genera una identidad distinta por proceso aunque Railway reutilice la réplica", () => {
+    const env = {
+      RAILWAY_DEPLOYMENT_ID: "deployment-1",
+      RAILWAY_REPLICA_ID: "replica-1",
+    };
+
+    const first = buildPollingInstanceId(env, 100, "process-a");
+    const second = buildPollingInstanceId(env, 100, "process-b");
+
+    expect(first).not.toBe(second);
+    expect(first).toContain("deployment-1:replica-1:100:process-a");
   });
 
   it("reclama el lock mediante la RPC atómica con TTL de 30 segundos", async () => {
