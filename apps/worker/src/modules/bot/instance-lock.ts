@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { createModuleLogger } from "../../core/logger";
 import { getSupabaseClient } from "../../storage/client";
+import { withTimeout } from "../../core/errors";
 
 const log = createModuleLogger("telegram-instance-lock");
 
 const POLLING_LOCK_KEY = "telegram_polling";
 const POLLING_LOCK_TTL_MS = 30_000;
 const HEARTBEAT_INTERVAL_MS = 10_000;
+const MAX_UNRENEWED_AGE_MS = 20_000;
+const SUPABASE_TIMEOUT_MS = 5_000;
 
 type LockLostHandler = () => void | Promise<void>;
 
@@ -38,16 +41,32 @@ const instanceId = buildPollingInstanceId();
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let heartbeatInFlight = false;
 let lockLostHandler: LockLostHandler | undefined;
+let lastSuccessfulRenewalAt = 0;
+let lockLostTriggered = false;
+
+export function getLastSuccessfulRenewalAt(): number {
+  return lastSuccessfulRenewalAt;
+}
+
+export function isPollingLockValid(): boolean {
+  return (
+    lastSuccessfulRenewalAt > 0 &&
+    Date.now() - lastSuccessfulRenewalAt < MAX_UNRENEWED_AGE_MS
+  );
+}
 
 export async function acquirePollingLock(): Promise<boolean> {
   try {
-    const { data, error } = await getSupabaseClient().rpc(
+    const { data, error } = await withTimeout(
+      Promise.resolve(
+        getSupabaseClient().rpc("claim_polling_lock", {
+          p_key: POLLING_LOCK_KEY,
+          p_instance: instanceId,
+          p_ttl_ms: POLLING_LOCK_TTL_MS,
+        }),
+      ),
+      SUPABASE_TIMEOUT_MS,
       "claim_polling_lock",
-      {
-        p_key: POLLING_LOCK_KEY,
-        p_instance: instanceId,
-        p_ttl_ms: POLLING_LOCK_TTL_MS,
-      },
     );
 
     if (error) {
@@ -58,7 +77,13 @@ export async function acquirePollingLock(): Promise<boolean> {
       return false;
     }
 
-    return data === true;
+    if (data === true) {
+      lastSuccessfulRenewalAt = Date.now();
+      lockLostTriggered = false;
+      return true;
+    }
+
+    return false;
   } catch (err) {
     log.warn(
       { err, instanceId },
@@ -68,40 +93,100 @@ export async function acquirePollingLock(): Promise<boolean> {
   }
 }
 
+async function triggerLockLost(): Promise<void> {
+  if (lockLostTriggered) return;
+  lockLostTriggered = true;
+
+  const onLockLost = lockLostHandler;
+  stopHeartbeat();
+
+  if (onLockLost) {
+    try {
+      await onLockLost();
+    } catch (err) {
+      log.warn({ err }, "Error ejecutando handler de lock perdido");
+    }
+  }
+}
+
 async function renewHeartbeat(): Promise<void> {
-  if (heartbeatInFlight) return;
+  if (heartbeatInFlight || lockLostTriggered) return;
   heartbeatInFlight = true;
 
   try {
-    const { data, error } = await getSupabaseClient()
-      .from("bot_lock")
-      .update({ updated_at: new Date().toISOString() })
-      .eq("key", POLLING_LOCK_KEY)
-      .eq("instance_id", instanceId)
-      .select("key");
+    const now = Date.now();
+    if (
+      lastSuccessfulRenewalAt > 0 &&
+      now - lastSuccessfulRenewalAt >= MAX_UNRENEWED_AGE_MS
+    ) {
+      log.warn(
+        {
+          instanceId,
+          elapsedMs: now - lastSuccessfulRenewalAt,
+          maxAgeMs: MAX_UNRENEWED_AGE_MS,
+        },
+        "Límite seguro de TTL de lock superado sin renovación confirmada — declarando lock perdido",
+      );
+      await triggerLockLost();
+      return;
+    }
+
+    const { data, error } = await withTimeout(
+      Promise.resolve(
+        getSupabaseClient()
+          .from("bot_lock")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("key", POLLING_LOCK_KEY)
+          .eq("instance_id", instanceId)
+          .select("key"),
+      ),
+      SUPABASE_TIMEOUT_MS,
+      "bot_lock heartbeat update",
+    );
 
     if (error) {
       log.warn(
         { err: error, instanceId },
         "No se pudo renovar el heartbeat del lock de polling",
       );
+      if (
+        lastSuccessfulRenewalAt > 0 &&
+        Date.now() - lastSuccessfulRenewalAt >= MAX_UNRENEWED_AGE_MS
+      ) {
+        log.warn(
+          { instanceId, elapsedMs: Date.now() - lastSuccessfulRenewalAt },
+          "Lock expirado tras fallo de Supabase — declarando lock perdido",
+        );
+        await triggerLockLost();
+      }
       return;
     }
 
     if (!data || data.length === 0) {
       log.warn(
         { instanceId },
-        "La instancia perdió el lock de polling",
+        "La instancia perdió el lock de polling (0 filas actualizadas)",
       );
-      const onLockLost = lockLostHandler;
-      stopHeartbeat();
-      await onLockLost?.();
+      await triggerLockLost();
+      return;
     }
+
+    lastSuccessfulRenewalAt = Date.now();
   } catch (err) {
     log.warn(
       { err, instanceId },
       "Error inesperado renovando el heartbeat del lock de polling",
     );
+    if (
+      lastSuccessfulRenewalAt > 0 &&
+      Date.now() - lastSuccessfulRenewalAt >= MAX_UNRENEWED_AGE_MS
+    ) {
+      log.warn(
+        { instanceId, elapsedMs: Date.now() - lastSuccessfulRenewalAt },
+        "Lock expirado tras excepción en heartbeat — declarando lock perdido",
+      );
+      await triggerLockLost();
+    }
   } finally {
     heartbeatInFlight = false;
   }
@@ -111,6 +196,10 @@ export function startHeartbeat(
   onLockLost?: LockLostHandler,
 ): () => void {
   lockLostHandler = onLockLost;
+  lockLostTriggered = false;
+  if (lastSuccessfulRenewalAt === 0) {
+    lastSuccessfulRenewalAt = Date.now();
+  }
   if (heartbeatTimer) return stopHeartbeat;
 
   heartbeatTimer = setInterval(() => {
@@ -132,4 +221,13 @@ export function stopHeartbeat(): void {
     heartbeatTimer = null;
   }
   lockLostHandler = undefined;
+  lastSuccessfulRenewalAt = 0;
 }
+
+export function resetPollingLockForTests(): void {
+  stopHeartbeat();
+  heartbeatInFlight = false;
+  lockLostTriggered = false;
+  lastSuccessfulRenewalAt = 0;
+}
+

@@ -73,7 +73,7 @@ export class TimeoutError extends RadarError {
  * Envuelve una Promise con timeout. Lanza TimeoutError si excede.
  */
 export async function withTimeout<T>(
-  promise: Promise<T>,
+  promise: Promise<T> | PromiseLike<T>,
   timeoutMs: number,
   operation: string,
 ): Promise<T> {

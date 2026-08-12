@@ -158,7 +158,9 @@ async function tryStartPolling(bot: TelegramBot): Promise<boolean> {
       pollingStarted = false;
       stopPollingHeartbeat?.();
       stopPollingHeartbeat = null;
-      schedulePollingLockRetry(bot);
+      if (!shuttingDown) {
+        schedulePollingLockRetry(bot);
+      }
       throw err;
     }
 
@@ -189,6 +191,14 @@ async function tryStartPolling(bot: TelegramBot): Promise<boolean> {
     );
     log.info("✅ Bot de comandos Telegram inició polling como líder");
     return true;
+  } catch (err) {
+    pollingStarted = false;
+    stopPollingHeartbeat?.();
+    stopPollingHeartbeat = null;
+    if (!shuttingDown) {
+      schedulePollingLockRetry(bot);
+    }
+    throw err;
   } finally {
     pollingStartInFlight = false;
   }
@@ -440,14 +450,15 @@ export function schedulePollingRetry(
     );
   }
 
-  void bot.stopPolling({
-    cancel: true,
-    reason: startupConflict
-      ? "startup_conflict_retry"
-      : conflict
-        ? "telegram_conflict_backoff"
-        : "transient_network_backoff",
-  })
+  void bot
+    .stopPolling({
+      cancel: true,
+      reason: startupConflict
+        ? "startup_conflict_retry"
+        : conflict
+          ? "telegram_conflict_backoff"
+          : "transient_network_backoff",
+    })
     .then(() => {
       if (shuttingDown) {
         pollingRetryInProgress = false;
@@ -467,7 +478,12 @@ export function schedulePollingRetry(
           return tryStartPolling(bot);
         })()
           .then((started) => {
-            if (shuttingDown || !started) return;
+            if (shuttingDown || !started) {
+              if (!shuttingDown && !started && !pollingStarted && !pollingLockRetryTimer) {
+                schedulePollingLockRetry(bot);
+              }
+              return;
+            }
             if (
               pollingRetryInProgress ||
               pollingRetryTimer ||
@@ -503,6 +519,9 @@ export function schedulePollingRetry(
               { err, attempt },
               "No se pudo reiniciar Telegram commands polling tras backoff",
             );
+            if (!shuttingDown) {
+              schedulePollingLockRetry(bot);
+            }
           });
       }, delayMs);
     })
@@ -514,6 +533,9 @@ export function schedulePollingRetry(
         { err },
         "No se pudo pausar polling Telegram commands; reinicio cancelado",
       );
+      if (!shuttingDown) {
+        schedulePollingLockRetry(bot);
+      }
     });
 }
 

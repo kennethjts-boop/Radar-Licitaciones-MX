@@ -811,4 +811,71 @@ describe("Telegram Commands - ciclo de vida del polling", () => {
     });
     expect(startPolling).not.toHaveBeenCalled();
   });
+
+  it("8. Después de un fallo de restart por 409 siempre queda otro retry programado", async () => {
+    const bot = {
+      stopPolling: jest.fn(async () => {}),
+      deleteWebHook: jest.fn(async () => {
+        throw new Error("deleteWebhook network error");
+      }),
+      startPolling: jest.fn(async () => {}),
+    } as unknown as TelegramBot;
+
+    const diagnosis = {
+      origin: "OUR_INFRA",
+      kind: "telegram_conflict",
+      severity: "DEGRADED",
+      userDiagnosis: "instancia duplicada",
+      recommendedAction: "revisar réplicas",
+      statusCode: 409,
+      code: "ETELEGRAM",
+      technicalReason: "Conflict: terminated by other getUpdates request",
+    } as const;
+
+    schedulePollingRetry(bot, diagnosis);
+    await Promise.resolve();
+
+    // Advance past backoff delay (5000ms)
+    await jest.advanceTimersByTimeAsync(5_000);
+    await Promise.resolve();
+
+    // Verification: deleteWebHook threw, catch block executed schedulePollingLockRetry(bot)
+    // Advance timers by POLLING_LOCK_RETRY_MS (15_000ms) to ensure retry timer fires tryStartPolling
+    mockAcquirePollingLock.mockClear();
+    await jest.advanceTimersByTimeAsync(15_000);
+
+    expect(mockAcquirePollingLock).toHaveBeenCalled();
+  });
+
+  it("9. No existe camino donde polling continúe activo indefinidamente con heartbeat muerto", async () => {
+    jest.spyOn(TelegramBot.prototype, "deleteWebHook").mockResolvedValue(true);
+    const stopPolling = jest
+      .spyOn(TelegramBot.prototype, "stopPolling")
+      .mockResolvedValue(undefined);
+
+    let onLockLostCallback!: () => void;
+    mockStartHeartbeat.mockImplementation((cb) => {
+      if (cb) onLockLostCallback = cb;
+      return jest.fn();
+    });
+
+    await initCommandBot();
+
+    // Simulate lock lost callback triggered by instance lock module
+    expect(onLockLostCallback).toBeDefined();
+    await onLockLostCallback();
+
+    // Polling must be explicitly stopped with cancel: true
+    expect(stopPolling).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cancel: true,
+        reason: "Supabase polling lock lost",
+      }),
+    );
+
+    // Standby timer must be scheduled
+    mockAcquirePollingLock.mockClear();
+    await jest.advanceTimersByTimeAsync(15_000);
+    expect(mockAcquirePollingLock).toHaveBeenCalled();
+  });
 });
