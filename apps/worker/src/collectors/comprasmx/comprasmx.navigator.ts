@@ -854,18 +854,26 @@ export class ComprasMxNavigator {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const result = await page.evaluate((): string | null => {
-        const LABEL_HINT = "publicaci"; // fragmento case-insensitive, tolerante a tildes
+        const PUBLICATION_LABEL = /fecha(?:\s+y\s+hora)?\s+de\s+publicaci[oó]n/i;
+        const OFFICIAL_DATE = /\b\d{2}\/\d{2}\/\d{4}(?:\s+\d{2}:\d{2}(?::\d{2})?)?\b/;
+        const extractOfficialDate = (value: string | null | undefined): string | null =>
+          value?.match(OFFICIAL_DATE)?.[0] ?? null;
+        const isPublicationLabel = (value: string): boolean =>
+          value.length <= 100 && PUBLICATION_LABEL.test(value);
 
         // Estrategia 1: celdas de tabla (PrimeNG p-table / tablas nativas)
         // @ts-ignore
         const allTds: any[] = Array.from(document.querySelectorAll("td, th"));
         for (const td of allTds) {
-          const text = ((td.textContent as string) ?? "").trim().toLowerCase();
-          if (text.includes(LABEL_HINT)) {
+          const text = ((td.textContent as string) ?? "").trim();
+          if (isPublicationLabel(text)) {
+            const ownValue = extractOfficialDate(text.replace(PUBLICATION_LABEL, ""));
+            if (ownValue) return ownValue;
+
             const next: any = td.nextElementSibling;
             if (next) {
-              const val = ((next.textContent as string) ?? "").trim();
-              if (val && /\d/.test(val)) return val;
+              const val = extractOfficialDate((next.textContent as string) ?? "");
+              if (val) return val;
             }
           }
         }
@@ -877,14 +885,17 @@ export class ComprasMxNavigator {
           document.querySelectorAll("label, span, div, b, p, .p-column-title"),
         );
         for (const el of allEls) {
-          const text = ((el.textContent as string) ?? "").trim().toLowerCase();
-          if (!text.includes(LABEL_HINT)) continue;
+          const text = ((el.textContent as string) ?? "").trim();
+          if (!isPublicationLabel(text)) continue;
+
+          const ownValue = extractOfficialDate(text.replace(PUBLICATION_LABEL, ""));
+          if (ownValue) return ownValue;
 
           // Sibling directo
           const next: any = el.nextElementSibling;
           if (next) {
-            const val = ((next.textContent as string) ?? "").trim();
-            if (val && /\d/.test(val)) return val;
+            const val = extractOfficialDate((next.textContent as string) ?? "");
+            if (val) return val;
           }
 
           // Padre — quitar el label y tomar el resto
@@ -893,8 +904,10 @@ export class ComprasMxNavigator {
             const children: any[] = Array.from(parent.children);
             const idx = children.indexOf(el);
             if (idx >= 0 && idx + 1 < children.length) {
-              const val = ((children[idx + 1].textContent as string) ?? "").trim();
-              if (val && /\d/.test(val)) return val;
+              const val = extractOfficialDate(
+                (children[idx + 1].textContent as string) ?? "",
+              );
+              if (val) return val;
             }
             // Texto completo del padre menos el label
             const labelText = ((el.textContent as string) ?? "").trim();
@@ -902,9 +915,8 @@ export class ComprasMxNavigator {
               .replace(labelText, "")
               .replace(/\s+/g, " ")
               .trim();
-            if (parentText && /\d/.test(parentText) && parentText.length < 30) {
-              return parentText;
-            }
+            const val = extractOfficialDate(parentText);
+            if (val) return val;
           }
         }
 
