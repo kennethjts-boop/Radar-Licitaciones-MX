@@ -852,6 +852,18 @@ export class ComprasMxNavigator {
    */
   async fetchPublicationDate(page: Page): Promise<string | null> {
     try {
+      await page.waitForFunction(
+        () => {
+          // @ts-ignore — callback ejecutado dentro del DOM de Playwright.
+          const bodyText = document.body?.innerText ?? "";
+          return /fecha(?:\s+y\s+hora)?\s+de\s+publicaci[oó]n[\s\S]{0,80}\d{2}\/\d{2}\/\d{4}/i.test(
+            bodyText,
+          );
+        },
+        undefined,
+        { timeout: 5_000 },
+      ).catch(() => undefined);
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const result = await page.evaluate((): string | null => {
         const PUBLICATION_LABEL = /fecha(?:\s+y\s+hora)?\s+de\s+publicaci[oó]n/i;

@@ -17,6 +17,7 @@ const element = (textContent: string): FakeElement => ({
 
 function pageWithElements(elements: FakeElement[]): Page {
   return {
+    waitForFunction: jest.fn().mockResolvedValue(undefined),
     evaluate: jest.fn(async (callback: () => string | null) => {
       const testGlobal = globalThis as typeof globalThis & { document?: unknown };
       const priorDocument = testGlobal.document;
