@@ -142,11 +142,27 @@ export interface DbRadarRule {
   created_at: string;
 }
 
+export interface DbRadarConfigVersion {
+  id: string;
+  radar_id: string;
+  version_number: number;
+  version_key: string;
+  radar_key: string;
+  radar_name: string;
+  radar_description: string | null;
+  config_json: Record<string, unknown>;
+  criteria_snapshot: Record<string, unknown>;
+  effective_from: string;
+  effective_to: string | null;
+  created_at: string;
+}
+
 // ─── matches ─────────────────────────────────────────────────────────────────
 
 export interface DbMatch {
   id: string;
   radar_id: string;
+  radar_config_version_id: string;
   procurement_id: string;
   match_score: number;
   opportunity_score: number;
@@ -169,6 +185,7 @@ export interface DbAlert {
   telegram_message: string;
   telegram_status: "pending" | "sent" | "failed";
   telegram_message_id: number | null;
+  dedupe_key: string | null;
   sent_at: string | null;
   created_at: string;
 }

@@ -95,18 +95,21 @@ export async function getLastChangedSnapshot(numeroProcedimiento: string): Promi
 }
 
 export async function insertSnapshot(input: {
+  targetId?: string;
   numeroProcedimiento: string;
   hash: string;
   snapshot: WatchdogSnapshot;
   changes: WatchdogChange[];
   notificationKind: "baseline" | "baseline_completed" | "change";
   structuralConfirmation?: StructuralConfirmation;
+  suppressNotification?: boolean;
 }): Promise<WatchdogSnapshotRow> {
   const detectedChanges: StoredDetectedChanges = {
     changes: input.changes,
     notification: {
       kind: input.notificationKind,
-      status: "pending",
+      status: input.suppressNotification ? "sent" : "pending",
+      ...(input.suppressNotification ? { sentAt: nowISO() } : {}),
       deploymentSha: input.snapshot.deploymentSha,
     },
     ...(input.structuralConfirmation
@@ -116,6 +119,7 @@ export async function insertSnapshot(input: {
   const { data, error } = await getSupabaseClient()
     .from("watchdog_snapshots")
     .insert({
+      ...(input.targetId ? { target_id: input.targetId } : {}),
       numero_procedimiento: input.numeroProcedimiento,
       snapshot_hash: input.hash,
       snapshot_json: input.snapshot,

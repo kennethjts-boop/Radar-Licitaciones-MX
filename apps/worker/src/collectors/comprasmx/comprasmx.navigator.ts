@@ -174,7 +174,10 @@ export function apiRegistroToRawInput(item: ApiRegistro): RawProcurementInput {
     title: item.nombre_procedimiento?.trim() || 'Sin Título',
     description: null,
     dependencyName: item.siglas?.trim() ?? null,
-    buyingUnit: null,
+    buyingUnit:
+      typeof item.unidad_compradora === "string"
+        ? item.unidad_compradora.trim()
+        : null,
     procedureType: item.tipo_procedimiento ?? null,
     procedureTypeSource: item.tipo_procedimiento ? "comprasmx_listing.tipo_procedimiento" : null,
     procedureTypeConfidence: item.tipo_procedimiento ? "high" : null,

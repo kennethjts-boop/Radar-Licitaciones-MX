@@ -103,13 +103,14 @@ describe("sleep-mode control module", () => {
     expect(secondSnapshot).toEqual(firstSnapshot);
   });
 
-  it("wakeFromSleepMode restaura el estado y elimina las claves de system_state", async () => {
+  it("wakeFromSleepMode reactiva modo full con los cuatro focos y elimina el snapshot", async () => {
     await enableSleepMode();
     expect(await getEffectiveRadarMode()).toBe("watchdog_only");
 
     const wakeRes = await wakeFromSleepMode();
     expect(wakeRes.mode).toBe("full");
-    expect(wakeRes.message).toContain("Todo despierto");
+    expect(wakeRes.message).toContain("Radar despierto con 4 focos operativos");
+    expect(wakeRes.radarsRestored).toBe(4);
 
     const modeAfter = await getEffectiveRadarMode();
     expect(modeAfter).toBe("full");

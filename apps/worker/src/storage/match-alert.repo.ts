@@ -22,11 +22,25 @@ export async function upsertMatch(
   const documentScore = match.documentScore ?? 0;
   const opportunityScore = match.opportunityScore ?? 0;
 
+  const { data: configVersion, error: configVersionError } = await db
+    .from("radar_config_versions")
+    .select("id")
+    .eq("radar_id", radarDbId)
+    .is("effective_to", null)
+    .single();
+
+  if (configVersionError || !configVersion) {
+    throw new StorageError(
+      `Configuración vigente no encontrada para radar ${radarDbId}: ${configVersionError?.message ?? "sin fila"}`,
+      "find_radar_config_version",
+    );
+  }
+
   // Verificar si ya existe
   const { data: existing, error: existingError } = await db
     .from("matches")
     .select("id")
-    .eq("radar_id", radarDbId)
+    .eq("radar_config_version_id", configVersion.id)
     .eq("procurement_id", match.procurementId)
     .maybeSingle();
 
@@ -87,6 +101,7 @@ export async function upsertMatch(
   const record: DbMatch = {
     id,
     radar_id: radarDbId,
+    radar_config_version_id: configVersion.id,
     procurement_id: match.procurementId,
     match_score: match.matchScore,
     opportunity_score: opportunityScore,
@@ -153,6 +168,7 @@ export async function createAlert(
     telegram_message: enrichedAlert.telegramMessage,
     telegram_status: "pending",
     telegram_message_id: null,
+    dedupe_key: null,
     sent_at: null,
     created_at: now,
   };
@@ -166,6 +182,92 @@ export async function createAlert(
   }
 
   return id;
+}
+
+export async function ensurePendingNewTenderAlert(
+  enrichedAlert: EnrichedAlert,
+  dbProcurementId: string,
+  radarDbId?: string,
+): Promise<{ alertId: string; created: boolean; status: "pending" | "sent" | "failed" }> {
+  const db = getSupabaseClient();
+  const dedupeKey = `new_match:${dbProcurementId}`;
+  const { data: existing, error: findError } = await db
+    .from("alerts")
+    .select("id, telegram_status")
+    .eq("dedupe_key", dedupeKey)
+    .maybeSingle();
+  if (findError && findError.code !== "PGRST116") {
+    throw new StorageError(findError.message, "find_new_alert");
+  }
+  if (existing) {
+    if (existing.telegram_status === "failed") {
+      const { error: retryError } = await db
+        .from("alerts")
+        .update({ telegram_status: "pending" })
+        .eq("id", existing.id);
+      if (retryError) throw new StorageError(retryError.message, "retry_new_alert");
+    }
+    return {
+      alertId: existing.id,
+      created: false,
+      status: existing.telegram_status === "failed"
+        ? "pending"
+        : existing.telegram_status as "pending" | "sent",
+    };
+  }
+
+  const id = uuidv4();
+  const { error } = await db.from("alerts").insert({
+    id,
+    radar_id: radarDbId ?? null,
+    procurement_id: dbProcurementId,
+    alert_type: "new_match",
+    telegram_message: enrichedAlert.telegramMessage,
+    telegram_status: "pending",
+    telegram_message_id: null,
+    sent_at: null,
+    created_at: nowISO(),
+    dedupe_key: dedupeKey,
+  });
+  if (!error) return { alertId: id, created: true, status: "pending" };
+  if (error.code !== "23505") {
+    throw new StorageError(error.message, "insert_new_alert");
+  }
+  const { data: raced, error: raceError } = await db
+    .from("alerts")
+    .select("id, telegram_status")
+    .eq("dedupe_key", dedupeKey)
+    .single();
+  if (raceError || !raced) {
+    throw new StorageError(raceError?.message ?? "Alerta concurrente no encontrada", "find_new_alert");
+  }
+  return {
+    alertId: raced.id,
+    created: false,
+    status: raced.telegram_status as "pending" | "sent" | "failed",
+  };
+}
+
+export interface PendingNewTenderAlertRow {
+  id: string;
+  telegramMessage: string;
+}
+
+export async function getPendingNewTenderAlerts(limit = 500): Promise<PendingNewTenderAlertRow[]> {
+  const { data, error } = await getSupabaseClient()
+    .from("alerts")
+    .select("id, telegram_message, procurements!inner(publication_date)")
+    .eq("alert_type", "new_match")
+    .eq("telegram_status", "pending")
+    .not("dedupe_key", "is", null)
+    .gte("procurements.publication_date", "2026-08-13")
+    .order("created_at", { ascending: true })
+    .limit(limit);
+  if (error) throw new StorageError(error.message, "get_pending_new_alerts");
+  return (data ?? []).map((row) => ({
+    id: row.id,
+    telegramMessage: row.telegram_message,
+  }));
 }
 
 /**

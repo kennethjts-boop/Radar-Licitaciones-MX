@@ -14,14 +14,16 @@ import { conaviFederalRadar } from "./conavi-federal.radar";
 import { imssMorelosRadar } from "./imss-morelos.radar";
 import { imssBienestarMorelosRadar } from "./imss-bienestar-morelos.radar";
 import { habitatMorelosRadar } from "./habitat-morelos.radar";
-import { morelosGeneralRadar } from "./morelos-general.radar";
 import { BUSINESS_LINE_RADARS } from "./business-lines.radar";
+import { OPERATIONAL_FOCUS_KEYS } from "./operational-focus.matcher";
+
+const ACTIVE_FOCUS_KEYS = new Set<string>(Object.values(OPERATIONAL_FOCUS_KEYS));
 
 /**
  * Lista canónica de todos los radares.
  * El matcher itera sobre esta lista en cada ciclo.
  */
-export const RADARS: RadarConfig[] = [
+const ALL_RADAR_DEFINITIONS: RadarConfig[] = [
   capufeDirectAwardsRadar,
   capufeEmergenciaRadar,
   capufeMantenimientoEquiposRadar,
@@ -32,9 +34,17 @@ export const RADARS: RadarConfig[] = [
   imssMorelosRadar,
   imssBienestarMorelosRadar,
   habitatMorelosRadar,
-  morelosGeneralRadar,
   ...BUSINESS_LINE_RADARS,
 ];
+
+/**
+ * Estado operativo canónico. Las definiciones históricas se conservan, pero
+ * solamente los cuatro focos aprobados pueden participar en el matcher.
+ */
+export const RADARS: RadarConfig[] = ALL_RADAR_DEFINITIONS.map((radar) => ({
+  ...radar,
+  isActive: ACTIVE_FOCUS_KEYS.has(radar.key),
+}));
 
 /**
  * Retorna los radares activos ordenados por prioridad.
@@ -69,5 +79,9 @@ export async function getDbRadarCounts(): Promise<{ active: number; dormant: num
     // fallback
   }
   const activeFallback = getActiveRadars().length;
-  return { active: activeFallback, dormant: 0, total: activeFallback };
+  return {
+    active: activeFallback,
+    dormant: RADARS.length - activeFallback,
+    total: RADARS.length,
+  };
 }

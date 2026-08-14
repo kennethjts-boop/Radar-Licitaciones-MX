@@ -1,6 +1,7 @@
 import {
   classifyComprasMxBrowserOutcome,
   parseComprasMxProcedimientosResponse,
+  apiRegistroToRawInput,
 } from "../comprasmx.navigator";
 
 describe("ComprasMX browser fallback response handling", () => {
@@ -82,5 +83,20 @@ describe("ComprasMX browser fallback response handling", () => {
         rowsExtracted: 0,
       }),
     ).toBe("source_unavailable");
+  });
+
+  it("preserva unidad compradora y entidad federativa estructuradas", () => {
+    const raw = apiRegistroToRawInput({
+      numero_procedimiento: "LA-50-GYR-050GYR085-N-33-2026",
+      nombre_procedimiento: "Servicio Centro Vacacional",
+      uuid_procedimiento: "uuid-oaxtepec",
+      siglas: "IMSS",
+      fecha_publicacion: "13/08/2026 00:00",
+      unidad_compradora: "050GYR085 - CENTRO VACACIONAL IMSS OAXTEPEC",
+      entidad_federativa_contratacion: "MORELOS",
+    } as never);
+    expect(raw.buyingUnit).toBe("050GYR085 - CENTRO VACACIONAL IMSS OAXTEPEC");
+    expect(raw.state).toBe("MORELOS");
+    expect(raw.publicationDate).toBe("13/08/2026 00:00");
   });
 });

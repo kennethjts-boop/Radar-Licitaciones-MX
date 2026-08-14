@@ -14,6 +14,7 @@ import { createModuleLogger } from "../../core/logger";
 import { deleteState, getState, setStateStrict, STATE_KEYS } from "../../core/system-state";
 import { nowISO } from "../../core/time";
 import { getSupabaseClient } from "../../storage/client";
+import { OPERATIONAL_FOCUS_KEYS } from "../../radars/operational-focus.matcher";
 
 const log = createModuleLogger("control:sleep-mode");
 
@@ -105,7 +106,7 @@ export async function enableSleepMode(): Promise<{
   }
 
   const message =
-    "😴 Modo dormido. Solo el watchdog sigue vigilando 3 licitaciones. Nada se borró. Usa /despertar para volver a la normalidad.";
+    "😴 Modo dormido. Solo el watchdog y sus targets activos siguen operando. Nada se borró. Usa /despertar para volver a la normalidad.";
 
   return {
     mode: "watchdog_only",
@@ -118,9 +119,8 @@ export async function enableSleepMode(): Promise<{
 /**
  * Despierta el sistema (/despertar):
  * 1. Lee el snapshot `radar_pause_snapshot` de system_state.
- * 2. Si existe, restaura cada radar y fuente a su estado original `is_active`.
- * 3. Si no existe, reactiva todos los radares a `is_active = true`.
- * 4. Elimina `radar_mode` y `radar_pause_snapshot` de system_state.
+ * 2. Restaura fuentes, pero aplica la política vigente de cuatro focos al radar.
+ * 3. Persiste `radar_mode=full`, incluso si Railway conserva un env antiguo.
  */
 export async function wakeFromSleepMode(): Promise<{
   mode: RadarMode;
@@ -136,11 +136,14 @@ export async function wakeFromSleepMode(): Promise<{
   let sourcesRestored = 0;
   let usedDefault = false;
 
+  const activeKeys = Object.values(OPERATIONAL_FOCUS_KEYS);
+  await db.from("radars").update({ is_active: false }).neq("key", "");
+  for (const key of activeKeys) {
+    await db.from("radars").update({ is_active: true }).eq("key", key);
+    radarsRestored++;
+  }
+
   if (snapshot && Array.isArray(snapshot.radars)) {
-    for (const r of snapshot.radars) {
-      await db.from("radars").update({ is_active: r.is_active }).eq("key", r.key);
-      radarsRestored++;
-    }
     if (Array.isArray(snapshot.sources)) {
       for (const s of snapshot.sources) {
         await db.from("sources").update({ is_active: s.is_active }).eq("key", s.key);
@@ -149,21 +152,15 @@ export async function wakeFromSleepMode(): Promise<{
     }
   } else {
     usedDefault = true;
-    const { data: allRadars } = await db.from("radars").select("key");
-    const keys = (allRadars || []).map((r) => r.key);
-    for (const key of keys) {
-      await db.from("radars").update({ is_active: true }).eq("key", key);
-      radarsRestored++;
-    }
-    sourcesRestored = 10;
+    sourcesRestored = 0;
   }
 
-  await deleteState(STATE_KEYS.RADAR_MODE);
+  await setStateStrict(STATE_KEYS.RADAR_MODE, "full");
   await deleteState(STATE_KEYS.RADAR_PAUSE_SNAPSHOT);
 
   const message = usedDefault
-    ? `☀️ Todo despierto. Radars restaurados: ${radarsRestored} (usando valor por defecto). Fuentes restauradas: ${sourcesRestored}.`
-    : `☀️ Todo despierto. Radars restaurados: ${radarsRestored}. Fuentes restauradas: ${sourcesRestored}.`;
+    ? `☀️ Radar despierto con ${radarsRestored} focos operativos. No había snapshot de fuentes; no se alteraron. Fuentes restauradas: ${sourcesRestored}.`
+    : `☀️ Radar despierto con ${radarsRestored} focos operativos. Fuentes restauradas: ${sourcesRestored}.`;
 
   return {
     mode: "full",

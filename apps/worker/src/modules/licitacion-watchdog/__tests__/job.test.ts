@@ -88,7 +88,11 @@ jest.mock("../repository", () => ({
   resolveExpediente: jest.fn(),
 }));
 jest.mock("../telegram", () => ({ sendPendingNotification: jest.fn() }));
-
+jest.mock("../target-manager", () => ({
+  getAllTargets: jest.fn().mockResolvedValue([{ id: "PROC-1", alias: "PROC-1", numero: "PROC-1", uuid: "uuid" }]),
+  getResolvedTargets: jest.fn().mockResolvedValue([{ id: "PROC-1", alias: "PROC-1", numero: "PROC-1", uuid: "uuid", expedienteUrl: "https://comprasmx.example/detalle/uuid/procedimiento" }]),
+  updateTargetCheck: jest.fn().mockResolvedValue(undefined),
+}));
 const mockedExtract = jest.mocked(extractWatchdogSnapshot);
 const mockedLatest = jest.mocked(getLatestSnapshot);
 const mockedPending = jest.mocked(getPendingSnapshots);
@@ -309,6 +313,63 @@ describe("licitacion-watchdog job structural guard", () => {
     expect(mockedMarkSent).toHaveBeenCalledWith(pending, receipt);
     expect(mockedSend.mock.invocationCallOrder[0]).toBeLessThan(
       mockedExtract.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("primer snapshot crea baseline silencioso sin falsa alerta", async () => {
+    const initial = snapshot();
+    const inserted = row(initial);
+    mockedLatest.mockResolvedValue(null);
+    mockedExtract.mockResolvedValue(initial);
+    mockedInsert.mockResolvedValue(inserted);
+
+    await runLicitacionWatchdog(["PROC-1"]);
+
+    expect(mockedInsert).toHaveBeenCalledWith(expect.objectContaining({
+      numeroProcedimiento: "PROC-1",
+      changes: [],
+      notificationKind: "baseline",
+      suppressNotification: true,
+    }));
+    expect(mockedSend).not.toHaveBeenCalled();
+  });
+
+  it("dos targets consultan snapshots independientes", async () => {
+    const first = snapshot();
+    const second = snapshot();
+    second.numeroProcedimiento = "PROC-2";
+    second.uuidProcedimiento = "uuid-2";
+    mockedExtract.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    mockedLatest.mockImplementation(async (numero) =>
+      numero === "PROC-1" ? row(first) : row(second));
+
+    await runLicitacionWatchdog(["PROC-1", "PROC-2"]);
+
+    expect(mockedLatest).toHaveBeenCalledWith("PROC-1");
+    expect(mockedLatest).toHaveBeenCalledWith("PROC-2");
+    expect(mockedInsert).not.toHaveBeenCalled();
+  });
+
+  it("un error del target A no impide ni contamina el snapshot del target B", async () => {
+    const second = snapshot();
+    second.numeroProcedimiento = "PROC-2";
+    mockedExtract
+      .mockRejectedValueOnce(new Error("fallo aislado A"))
+      .mockResolvedValueOnce(second);
+    mockedLatest.mockResolvedValue(row(second));
+
+    await runLicitacionWatchdog(["PROC-1", "PROC-2"]);
+
+    expect(mockedLatest).toHaveBeenCalledTimes(1);
+    expect(mockedLatest).toHaveBeenCalledWith("PROC-2");
+    expect(mockedSetState).toHaveBeenLastCalledWith(
+      "licitacion_watchdog_telemetry",
+      expect.objectContaining({
+        results: expect.objectContaining({
+          "PROC-1": expect.objectContaining({ status: "error" }),
+          "PROC-2": expect.objectContaining({ status: "unchanged" }),
+        }),
+      }),
     );
   });
 

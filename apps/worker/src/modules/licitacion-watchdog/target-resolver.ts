@@ -13,6 +13,9 @@ export interface WatchdogTarget {
   alias: string;
   numero: string;
   uuid: string | null;
+  procurementId?: string;
+  dependency?: string | null;
+  active?: boolean;
 }
 
 export interface ResolvedTarget extends WatchdogTarget {

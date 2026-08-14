@@ -8,20 +8,9 @@ import type { WatchdogTelemetry } from "./types";
 const log = createModuleLogger("licitacion-watchdog:scheduler");
 const MAX_WATCHDOG_BACKOFF_MS = 120 * 60_000;
 
-function configuredExpedientes(): string[] {
-  return getConfig().WATCHDOG_EXPEDIENTES.split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-}
-
 export function startLicitacionWatchdogScheduler(): void {
   try {
     const config = getConfig();
-    const expedientes = configuredExpedientes();
-    if (expedientes.length === 0) {
-      log.info("Watchdog deshabilitado: WATCHDOG_EXPEDIENTES está vacío");
-      return;
-    }
     const intervalMs = config.WATCHDOG_INTERVAL_MINUTES * 60_000;
     const scheduleNext = (delayMs: number): void => {
       setTimeout(runSafely, delayMs);
@@ -70,7 +59,7 @@ export function startLicitacionWatchdogScheduler(): void {
     };
     scheduleNext(20_000);
     log.info(
-      { expedientes, intervalMinutes: config.WATCHDOG_INTERVAL_MINUTES },
+      { source: "watchdog_targets.active", intervalMinutes: config.WATCHDOG_INTERVAL_MINUTES },
       "Scheduler watchdog independiente iniciado",
     );
   } catch (err) {

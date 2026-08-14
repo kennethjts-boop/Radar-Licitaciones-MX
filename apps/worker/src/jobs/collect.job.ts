@@ -14,7 +14,8 @@
 import { createModuleLogger } from "../core/logger";
 import { withLock } from "../core/lock";
 import { withTimeout } from "../core/errors";
-import { nowISO, formatDuration, isDateExpired, isPublicationTooOld } from "../core/time";
+import { nowISO, formatDuration, isDateExpired, MX_TIMEZONE } from "../core/time";
+import { formatInTimeZone } from "date-fns-tz";
 import { healthTracker } from "../core/healthcheck";
 import {
   getState,
@@ -30,13 +31,12 @@ import {
   COMPRASMX_SOURCE_KEY,
   ComprasMxCollectResult,
 } from "../collectors/comprasmx/comprasmx.collector";
-import { upsertProcurement } from "../storage/procurement.repo";
+import { upsertProcurement, updateOfficialPublicationDate } from "../storage/procurement.repo";
 import { startCollectRun, finishCollectRun } from "../storage/collect-run.repo";
 import {
-  createAlert,
+  ensurePendingNewTenderAlert,
+  getPendingNewTenderAlerts,
   markAlertSent,
-  markAlertFailed,
-  hasExistingAlert,
   upsertMatch,
 } from "../storage/match-alert.repo";
 import { getActiveRadars } from "../radars/index";
@@ -44,7 +44,6 @@ import { evaluateAllRadars } from "../matchers/matcher";
 import { enrichMatch } from "../enrichers/match.enricher";
 import { evaluarModalidad, inferTipoContratacion } from "../topes/topes.service";
 import {
-  sendMatchAlert,
   sendTelegramMessage,
   formatAiVipAlertMessage,
 } from "../alerts/telegram.alerts";
@@ -77,7 +76,6 @@ import {
   recordCommercialMatchTelemetry,
   type CommercialMatchingTelemetry,
 } from "../modules/commercial-matching/telemetry";
-import { IMSS_MORELOS_RADAR_KEY } from "../radars/imss-morelos-priority.matcher";
 import {
   EMPTY_COMPRASMX_TELEMETRY,
   transitionComprasMxTelemetry,
@@ -87,6 +85,10 @@ import {
   classifyComprasMxFailure,
   type ComprasMxFailureDiagnosis,
 } from "../collectors/comprasmx/comprasmx.failure";
+import {
+  deliverPendingWithinLimit,
+  evaluateNewTenderPublication,
+} from "../modules/operational-alerts";
 
 const log = createModuleLogger("collect-job");
 
@@ -194,6 +196,40 @@ export function buildCollectRunPersistenceStatus(input: {
     status: input.errorMessage ? "error" : "success",
     errorMessage: input.errorMessage,
   };
+}
+
+export function shouldSkipDuplicateProcurementAlert(
+  alertedProcurementIds: ReadonlySet<string>,
+  procurementId: string,
+): boolean {
+  return alertedProcurementIds.has(procurementId);
+}
+
+async function fetchOfficialPublicationDate(sourceUrl: string): Promise<string | null> {
+  return BrowserManager.withContext(async (page, context) => {
+    const navigator = new ComprasMxNavigator();
+    const detail = await navigator.extractDetail(context, sourceUrl, page);
+    if (!detail) return null;
+    return navigator.fetchPublicationDate(page);
+  }, { timeoutMs: 90_000 });
+}
+
+async function deliverQueuedNewTenderAlerts(maxPerCycle: number): Promise<number> {
+  if (maxPerCycle <= 0) return 0;
+  const pending = await getPendingNewTenderAlerts();
+  const result = await deliverPendingWithinLimit(
+    pending,
+    maxPerCycle,
+    (alert) => sendTelegramMessage(alert.telegramMessage, "HTML"),
+    (alert, messageId) => markAlertSent(alert.id, messageId),
+  );
+  if (result.remaining > 0) {
+    log.info(
+      { sent: result.sent, remaining: result.remaining, limit: maxPerCycle },
+      "Alertas nuevas pendientes se conservarán para el siguiente ciclo",
+    );
+  }
+  return result.sent;
 }
 
 function procurementToCommercialInput(item: NormalizedProcurement) {
@@ -473,6 +509,7 @@ export async function runCollectJob(): Promise<CollectJobResult> {
     let capufeDeepReportsAttempted = 0;
     const capufeDeepReportsSent = new Set<string>();
     let alertsSentThisCycle = 0;
+    const queuedProcurementIds = new Set<string>();
     const publicDocumentsByProcurementId = new Map<string, PublicTenderDocument[]>();
     const commercialTelemetry: CommercialMatchingTelemetry =
       createCommercialMatchingTelemetry();
@@ -490,6 +527,11 @@ export async function runCollectJob(): Promise<CollectJobResult> {
     let durationMs = 0;
 
     try {
+      alertsSentThisCycle = await deliverQueuedNewTenderAlerts(
+        config.ALERT_MAX_PER_CYCLE,
+      );
+      cycleMetrics.sent = alertsSentThisCycle;
+
       // 1. Colectar
       collectResult = await withTimeout(
         collectComprasMx({ maxPages: 10, headless: true }),
@@ -543,29 +585,6 @@ export async function runCollectJob(): Promise<CollectJobResult> {
           // Solo evaluar matches si es nuevo o cambió
           if (!upsertResult.isNew && !upsertResult.isUpdated) continue;
 
-          // ── Filtro Global de Fechas: Solo procesar licitaciones "a partir de hoy" ──
-          if (isPublicationTooOld(item.publicationDate)) {
-            log.info(
-              { externalId: item.externalId, pubDate: item.publicationDate },
-              "Licitación omitida por tener una fecha de publicación muy antigua (fuera del margen actual)",
-            );
-            continue;
-          }
-
-          // ── Filtro Global de Ocultamiento Geográfico ──
-          const stateLower = (item.state || "").toLowerCase();
-          const canonicalGlobalLower = item.canonicalText.toLowerCase();
-          const hasExcludedGeo = BUSINESS_PROFILE.EXCLUDED_GEO?.some(geo =>
-            stateLower.includes(geo) || canonicalGlobalLower.includes(geo)
-          );
-          if (hasExcludedGeo) {
-            log.info(
-              { externalId: item.externalId, state: item.state },
-              "Licitación omitida por regla de ocultamiento geográfico (EXCLUDED_GEO)",
-            );
-            continue;
-          }
-
           // Filtrar licitaciones vencidas: no generar alertas si ya pasó la fecha de apertura.
           // Excepción: las DESIERTA siempre pasan (classifyAlert decidirá si son recientes).
           const isDesiertaItem = item.status.toLowerCase().includes('desierta');
@@ -583,17 +602,22 @@ export async function runCollectJob(): Promise<CollectJobResult> {
               ? (upsertResult.changedFields["status"].prev as ProcurementStatus)
               : null;
 
-          const commercialInput = procurementToCommercialInput(item);
-          const commercialResult = matchCommercialOpportunity(commercialInput, {
-            minScore: config.COMMERCIAL_MATCHING_MIN_SCORE,
-            requireTerritory: config.COMMERCIAL_MATCHING_REQUIRE_TERRITORY,
-            debug: config.COMMERCIAL_MATCHING_DEBUG,
-          });
-          recordCommercialMatchTelemetry(
-            commercialTelemetry,
-            commercialInput,
-            commercialResult,
-          );
+          if (
+            config.COMMERCIAL_MATCHING_ENABLED &&
+            radars.some((radar) => Boolean(radar.commercialProfileId))
+          ) {
+            const commercialInput = procurementToCommercialInput(item);
+            const commercialResult = matchCommercialOpportunity(commercialInput, {
+              minScore: config.COMMERCIAL_MATCHING_MIN_SCORE,
+              requireTerritory: config.COMMERCIAL_MATCHING_REQUIRE_TERRITORY,
+              debug: config.COMMERCIAL_MATCHING_DEBUG,
+            });
+            recordCommercialMatchTelemetry(
+              commercialTelemetry,
+              commercialInput,
+              commercialResult,
+            );
+          }
 
           // 3. Match contra radares
           const matches = evaluateAllRadars(
@@ -603,19 +627,43 @@ export async function runCollectJob(): Promise<CollectJobResult> {
             previousStatus,
           );
 
+          let publicationDecision = evaluateNewTenderPublication(item.publicationDate);
+          if (matches.length > 0 && publicationDecision.reason === "publication_date_unverifiable") {
+            try {
+              const detailPublicationDate = await fetchOfficialPublicationDate(item.sourceUrl);
+              if (detailPublicationDate) {
+                item.publicationDate = detailPublicationDate;
+                item.rawJson = { ...item.rawJson, fecha_publicacion: detailPublicationDate };
+                publicationDecision = evaluateNewTenderPublication(detailPublicationDate);
+              }
+            } catch (publicationErr) {
+              log.warn(
+                { err: publicationErr, externalId: item.externalId },
+                "No se pudo verificar fecha oficial de publicación; no se alertará como nueva",
+              );
+            }
+          }
+          if (publicationDecision.publishedAt) {
+            await updateOfficialPublicationDate(
+              upsertResult.procurementId,
+              formatInTimeZone(publicationDecision.publishedAt, MX_TIMEZONE, "yyyy-MM-dd"),
+            );
+          }
+
           const canonicalLower = item.canonicalText.toLowerCase();
           const dependencyLower = (item.dependencyName ?? "").toLowerCase();
           const isCapufeTender =
             dependencyLower.includes("capufe") &&
             CAPUFE_DEEP_REPORT_TERMS.some((term) => canonicalLower.includes(term));
 
-          let fechaPublicacion: string | null = null;
-          const shouldRunAttachmentPipeline = matches.length > 0 || isCapufeTender;
+          let fechaPublicacion: string | null = item.publicationDate;
+          const shouldRunAttachmentPipeline =
+            publicationDecision.eligible && (matches.length > 0 || isCapufeTender);
           if (shouldRunAttachmentPipeline) {
             if (attachmentPipelinesExecuted < MAX_ATTACHMENT_PIPELINES_PER_CYCLE) {
               attachmentPipelinesExecuted++;
               try {
-                fechaPublicacion = await withTimeout(
+                const attachmentPublicationDate = await withTimeout(
                   processAttachmentsForProcurement(
                     upsertResult.procurementId,
                     item.sourceUrl,
@@ -623,6 +671,9 @@ export async function runCollectJob(): Promise<CollectJobResult> {
                   ATTACHMENT_PIPELINE_TIMEOUT_MS + 15_000,
                   `attachments:${item.externalId}`,
                 );
+                if (attachmentPublicationDate) {
+                  fechaPublicacion = attachmentPublicationDate;
+                }
               } catch (attErr) {
                 log.warn(
                   { err: attErr, externalId: item.externalId },
@@ -642,18 +693,22 @@ export async function runCollectJob(): Promise<CollectJobResult> {
 
           // Inyectar fecha_publicacion en rawJson para que telegram.alerts la muestre.
           if (fechaPublicacion) {
+            item.publicationDate = fechaPublicacion;
             item.rawJson = { ...item.rawJson, fecha_publicacion: fechaPublicacion };
-
-            if (isPublicationTooOld(fechaPublicacion)) {
-              log.info(
-                { externalId: item.externalId, pubDate: fechaPublicacion },
-                "Licitación omitida por fecha_publicacion antigua extraída del detalle",
+            publicationDecision = evaluateNewTenderPublication(fechaPublicacion);
+            if (publicationDecision.publishedAt) {
+              await updateOfficialPublicationDate(
+                upsertResult.procurementId,
+                formatInTimeZone(publicationDecision.publishedAt, MX_TIMEZONE, "yyyy-MM-dd"),
               );
-              continue;
             }
           }
 
-          if (isCapufeTender && !capufeDeepReportsSent.has(upsertResult.procurementId)) {
+          if (
+            publicationDecision.eligible &&
+            isCapufeTender &&
+            !capufeDeepReportsSent.has(upsertResult.procurementId)
+          ) {
             if (capufeDeepReportsAttempted < MAX_CAPUFE_DEEP_REPORTS_PER_CYCLE) {
               capufeDeepReportsAttempted++;
               try {
@@ -696,7 +751,8 @@ export async function runCollectJob(): Promise<CollectJobResult> {
 
           totalMatches += matches.length;
 
-          // 4. Enriquecer y alertar por cada match
+          // 4. Persistir todas las razones de match, pero emitir como máximo una
+          // alerta por identidad canónica del procurement en este ciclo.
           for (const match of matches) {
             try {
               // ── Filtro geográfico duro ────────────────────────────────────
@@ -706,7 +762,6 @@ export async function runCollectJob(): Promise<CollectJobResult> {
               const radarCfg = radars.find((r) => r.key === match.radarKey);
               if (
                 radarCfg &&
-                radarCfg.key !== IMSS_MORELOS_RADAR_KEY &&
                 radarCfg.geoTerms.length > 0 &&
                 item.state !== null
               ) {
@@ -761,19 +816,13 @@ export async function runCollectJob(): Promise<CollectJobResult> {
 
               cycleMetrics.alertable++;
 
-              // Límite duro por ciclo
-              if (alertsSentThisCycle >= config.ALERT_MAX_PER_CYCLE) {
-                log.warn(
-                  { limit: config.ALERT_MAX_PER_CYCLE, externalId: item.externalId },
-                  '[alert-filter] límite de ciclo alcanzado, alerta omitida',
-                );
-                continue;
-              }
-
               // Usar procurement_id real de DB si está disponible
               const enrichableMatch = {
                 ...match,
                 procurementId: upsertResult.procurementId,
+                explanation: publicationDecision.eligible
+                  ? match.explanation
+                  : `${match.explanation} Alerta nueva omitida: ${publicationDecision.reason}.`,
               };
 
               const radarDbId = radarDbIds.get(match.radarKey);
@@ -781,6 +830,33 @@ export async function runCollectJob(): Promise<CollectJobResult> {
               // Persistir match en DB antes de alertar
               if (radarDbId) {
                 await upsertMatch(enrichableMatch, radarDbId);
+              }
+
+              if (!publicationDecision.eligible) {
+                log.info(
+                  {
+                    procurementId: upsertResult.procurementId,
+                    externalId: item.externalId,
+                    publicationDate: item.publicationDate,
+                    reason: publicationDecision.reason,
+                  },
+                  "Match persistido sin alerta nueva por regla temporal operativa",
+                );
+                continue;
+              }
+
+              if (shouldSkipDuplicateProcurementAlert(
+                queuedProcurementIds,
+                upsertResult.procurementId,
+              )) {
+                log.info(
+                  {
+                    procurementId: upsertResult.procurementId,
+                    additionalRadarKey: match.radarKey,
+                  },
+                  "Match superpuesto persistido sin duplicar alerta Telegram",
+                );
+                continue;
               }
 
               // Evaluar modalidad de contratación si el expediente tiene monto.
@@ -831,17 +907,12 @@ export async function runCollectJob(): Promise<CollectJobResult> {
                 modalidadProbable,
                 publicDocuments,
               );
-              const alertId = await createAlert(enriched, upsertResult.procurementId, radarDbId);
-
-              const msgId = await sendMatchAlert(enriched);
-
-              if (msgId) {
-                alertsSentThisCycle++;
-                cycleMetrics.sent++;
-                await markAlertSent(alertId, msgId);
-              } else {
-                await markAlertFailed(alertId);
-              }
+              await ensurePendingNewTenderAlert(
+                enriched,
+                upsertResult.procurementId,
+                radarDbId,
+              );
+              queuedProcurementIds.add(upsertResult.procurementId);
 
               // Lanzar enrichment de forma no bloqueante (Fase D)
               const scopeResult = filterProcurementScope({
@@ -883,6 +954,14 @@ export async function runCollectJob(): Promise<CollectJobResult> {
           );
         }
       }
+
+      const remainingAlertCapacity = Math.max(
+        0,
+        config.ALERT_MAX_PER_CYCLE - alertsSentThisCycle,
+      );
+      const newlyDelivered = await deliverQueuedNewTenderAlerts(remainingAlertCapacity);
+      alertsSentThisCycle += newlyDelivered;
+      cycleMetrics.sent += newlyDelivered;
 
       const partialSourceFailure =
         collectResult.status === "degraded" ||

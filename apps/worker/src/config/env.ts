@@ -248,7 +248,7 @@ const envSchema = z.object({
     .transform((v) => v === "true"),
   COMMERCIAL_MATCHING_ENABLED: z
     .string()
-    .default("true")
+    .default("false")
     .transform((v) => v === "true"),
   COMMERCIAL_MATCHING_MIN_SCORE: z
     .string()

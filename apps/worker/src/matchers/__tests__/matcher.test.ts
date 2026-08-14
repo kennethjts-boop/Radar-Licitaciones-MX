@@ -275,16 +275,14 @@ describe("evaluateAllRadars", () => {
 });
 
 describe("business line radars", () => {
-  it("mantiene activos radares existentes y agrega nuevas verticales", () => {
+  it("mantiene exactamente los cuatro focos operativos activos", () => {
     const keys = getActiveRadars().map((radar) => radar.key);
-    expect(keys).toContain("capufe_oportunidades");
-    expect(keys).toContain("capufe_direct_awards");
-    expect(keys).toContain("imss_morelos");
-    expect(keys).toContain("hm_highmil_lubricantes_morelos");
-    expect(keys).toContain("primasa_impresos_morelos");
-    expect(keys).toContain("coformex_impresos_morelos");
-    expect(keys).toContain("uniforce_seguridad_riesgo_morelos");
-    expect(keys).toContain("grupo_constructor_nag_mantenimiento_morelos");
+    expect(keys).toEqual([
+      "capufe_oportunidades",
+      "imss_morelos",
+      "imss_bienestar_morelos",
+      "habitat_morelos",
+    ]);
   });
 
   it("marca nueva vertical CAPUFE nacional como posible con score penalizado", () => {
@@ -475,110 +473,106 @@ describe("CAPUFE direct awards priority radar", () => {
   });
 });
 
-describe("IMSS Morelos priority radar", () => {
-  function makeImssCase(title: string, overrides: Partial<NormalizedProcurement> = {}) {
+describe("cuatro focos operativos estructurados", () => {
+  function structured(overrides: Partial<NormalizedProcurement>) {
     return makeProcurement({
       source: "comprasmx",
-      title,
-      description: null,
+      title: "Texto incidental sin valor para el matcher",
+      description: "Morelos puede aparecer aquí sin controlar el match",
       dependencyName: null,
       buyingUnit: null,
       state: null,
-      municipality: null,
-      canonicalText: title,
+      canonicalText: "morelos texto secundario",
       rawJson: {},
       ...overrides,
     });
   }
 
-  function evaluateImssCase(title: string, overrides: Partial<NormalizedProcurement> = {}) {
-    const radar = getRadarByKey("imss_morelos");
-    expect(radar).toBeDefined();
-    return evaluateProcurementAgainstRadar(makeImssCase(title, overrides), radar!, true);
-  }
-
-  it.each([
-    "Adquisición de material de curación para el Instituto Mexicano del Seguro Social en Morelos",
-    "Servicio de mantenimiento para OOAD Morelos del IMSS",
-    "Contratación de limpieza para unidades médicas del IMSS en Cuernavaca",
-    "Instituto Mexicano del Seguro Social — Delegación Morelos — adquisición de papelería",
-    "Unidad de Medicina Familiar del IMSS en Jiutepec solicita servicio de fumigación",
-    "Instituto Mexicano del Seguro Social OOAD Morelos adquisición de material de curación",
-    "IMSS Delegación Morelos contratación de servicio de mantenimiento",
-    "Unidad de Medicina Familiar del IMSS en Cuernavaca adquisición de papelería",
-  ])("alerta para IMSS ordinario en Morelos: %s", (title) => {
-    const result = evaluateImssCase(title);
-
-    expect(result).not.toBeNull();
-    expect(result!.radarKey).toBe("imss_morelos");
-    expect(result!.matchScore).toBe(1);
-    expect(result!.matchLevel).toBe("high");
-    expect(result!.scoreReasons).toEqual([
-      "buyer_imss",
-      "territory_morelos",
-      "priority_institutional_radar",
-    ]);
+  it("A/B: CAPUFE nacional coincide sin importar el estado", () => {
+    for (const state of ["NACIONAL", "JALISCO", "MORELOS", "OAXACA"]) {
+      const procurement = structured({ dependencyName: "CAPUFE", state });
+      const match = evaluateProcurementAgainstRadar(
+        procurement,
+        getRadarByKey("capufe_oportunidades")!,
+        true,
+      );
+      expect(match).not.toBeNull();
+    }
   });
 
-  it.each([
-    "IMSS Jalisco adquisición de medicamentos",
-    "Gobierno de Morelos adquisición de equipo de cómputo",
-    "Servicio de seguridad social para trabajadores del municipio de Cuernavaca",
-    "Instituto Mexicano del Seguro Social en Estado de México adquisición de material",
-    "IMSS-Bienestar Morelos adquisición de medicamentos",
-    "Servicios de Salud IMSS-Bienestar en Morelos contratación de limpieza",
-    "OPD IMSS-Bienestar Morelos mantenimiento de unidades médicas",
-    "Organismo Público Descentralizado IMSS-Bienestar en Cuernavaca solicita insumos",
-  ])("no alerta para falsos positivos o IMSS-Bienestar: %s", (title) => {
-    const result = evaluateImssCase(title);
-    expect(result).toBeNull();
+  it("C/D: IMSS Morelos coincide e IMSS de otro estado no", () => {
+    const radar = getRadarByKey("imss_morelos")!;
+    expect(evaluateProcurementAgainstRadar(structured({
+      dependencyName: "IMSS",
+      state: "MORELOS",
+      rawJson: { siglas: "IMSS", entidad_federativa_contratacion: "MORELOS" },
+    }), radar, true)).not.toBeNull();
+    expect(evaluateProcurementAgainstRadar(structured({
+      dependencyName: "IMSS",
+      state: "JALISCO",
+      rawJson: { siglas: "IMSS", entidad_federativa_contratacion: "JALISCO" },
+    }), radar, true)).toBeNull();
   });
 
-  it("revisa campos extraidos y anexos sin depender del titulo", () => {
-    const result = evaluateImssCase("Servicio integral sin tema comercial", {
-      dependencyName: "Instituto Mexicano del Seguro Social",
-      buyingUnit: "OOAD Morelos",
-      state: "Morelos",
-      attachments: [{
-        fileName: "anexo tecnico.pdf",
-        fileType: "pdf",
-        fileUrl: "https://example.com/anexo.pdf",
-        fileHash: null,
-        detectedText: "Unidad de Medicina Familiar del IMSS en Cuernavaca",
-      }],
+  it("E: IMSS Oaxtepec usa la unidad compradora histórica 050GYR085", () => {
+    const match = evaluateProcurementAgainstRadar(structured({
+      dependencyName: "IMSS",
+      buyingUnit: "050GYR085 - CENTRO VACACIONAL IMSS OAXTEPEC",
+      state: "MORELOS",
       rawJson: {
-        comprador: "IMSS",
-        lugar_de_ejecucion: "Cuernavaca, Morelos",
-        objeto_contratacion: "Servicio integral sin keywords comerciales",
+        siglas: "IMSS",
+        unidad_compradora: "050GYR085 - CENTRO VACACIONAL IMSS OAXTEPEC",
+        entidad_federativa_contratacion: "MORELOS",
+      },
+    }), getRadarByKey("imss_bienestar_morelos")!, true);
+    expect(match?.territoryMatched).toBe("Oaxtepec, Morelos");
+  });
+
+  it("F/G: otra dependencia en Morelos coincide; texto incidental no", () => {
+    const radar = getRadarByKey("habitat_morelos")!;
+    expect(evaluateProcurementAgainstRadar(structured({
+      dependencyName: "ISSSTE",
+      state: "MORELOS",
+    }), radar, true)).not.toBeNull();
+    expect(evaluateProcurementAgainstRadar(structured({
+      dependencyName: "CFE",
+      state: "PUEBLA",
+      title: "Documento secundario menciona Morelos",
+    }), radar, true)).toBeNull();
+  });
+
+  it("H: IMSS Morelos registra dos razones de perfil para una sola identidad", () => {
+    const procurement = structured({
+      dependencyName: "IMSS",
+      state: "MORELOS",
+      rawJson: { siglas: "IMSS", entidad_federativa_contratacion: "MORELOS" },
+    });
+    const matches = evaluateAllRadars(procurement, getActiveRadars(), true);
+    expect(matches.map((match) => match.radarKey)).toEqual([
+      "imss_morelos",
+      "habitat_morelos",
+    ]);
+    expect(new Set(matches.map((match) => match.procurementId)).size).toBe(1);
+  });
+
+  it("IMSS Oaxtepec puede registrar tres razones con una sola identidad", () => {
+    const procurement = structured({
+      externalId: "OAX-TRIPLE",
+      dependencyName: "IMSS",
+      buyingUnit: "050GYR085 - CENTRO VACACIONAL IMSS OAXTEPEC",
+      state: "MORELOS",
+      rawJson: {
+        siglas: "IMSS",
+        unidad_compradora: "050GYR085 - CENTRO VACACIONAL IMSS OAXTEPEC",
+        entidad_federativa_contratacion: "MORELOS",
       },
     });
-
-    expect(result).not.toBeNull();
-    expect(result!.territoryMatched).toBe("Morelos");
-  });
-
-  it("tiene prioridad mayor que un radar comercial normal", () => {
-    const proc = makeImssCase(
-      "IMSS Morelos adquisición de lubricantes y aceites para parque vehicular",
-      {
-        dependencyName: "IMSS",
-        state: "Morelos",
-      },
-    );
-    const imssRadar = getRadarByKey("imss_morelos");
-    const commercialRadar = getRadarByKey("hm_highmil_lubricantes_morelos");
-    expect(imssRadar).toBeDefined();
-    expect(commercialRadar).toBeDefined();
-
-    const imssResult = evaluateProcurementAgainstRadar(proc, imssRadar!, true);
-    const commercialResult = evaluateProcurementAgainstRadar(proc, commercialRadar!, true);
-
-    expect(imssResult).not.toBeNull();
-    expect(imssResult!.matchScore).toBe(1);
-    expect(imssResult!.matchLevel).toBe("high");
-    if (commercialResult) {
-      expect(imssResult!.matchScore).toBeGreaterThan(commercialResult.matchScore);
-    }
-    expect(imssRadar!.priority).toBeLessThanOrEqual(commercialRadar!.priority);
+    const matches = evaluateAllRadars(procurement, getActiveRadars(), true);
+    expect(matches.map((match) => match.radarKey)).toEqual([
+      "imss_morelos",
+      "imss_bienestar_morelos",
+      "habitat_morelos",
+    ]);
+    expect(new Set(matches.map((match) => match.procurementId)).size).toBe(1);
   });
 });

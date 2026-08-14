@@ -16,6 +16,7 @@ import { getSupabaseClient } from "../storage/client";
 import { consultarTopes, evaluarModalidad } from "../topes/topes.service";
 import type { TipoContratacion } from "../topes/topes.types";
 import { getRuntimeHealthSnapshot } from "./runtime-health";
+import { resolveHistoricalRadarContext } from "../storage/radar-config-history";
 
 const log = createModuleLogger("http-server");
 
@@ -440,13 +441,14 @@ async function handleGetRecientes(
 
   const db = getSupabaseClient();
 
-  // Fetch recent matches with embedded radar key and procurement data.
+  // La versión ligada al match preserva el criterio histórico aunque el slot
+  // actual de radars haya cambiado de significado.
   // Fetch extra rows to absorb deduplication by procurement_id.
   let recentResult = await db
     .from("matches")
     .select(
       "match_score, opportunity_score, document_score, " +
-      "radars(key), " +
+      "radar_config_versions!inner(radar_key, radar_name), " +
       "procurements!inner(id, title, dependency_name, status, amount, publication_date)",
     )
     .order("created_at", { ascending: false })
@@ -461,7 +463,7 @@ async function handleGetRecientes(
       .from("matches")
       .select(
         "match_score, " +
-        "radars(key), " +
+        "radar_config_versions!inner(radar_key, radar_name), " +
         "procurements!inner(id, title, dependency_name, status, amount, publication_date)",
       )
       .order("created_at", { ascending: false })
@@ -479,7 +481,10 @@ async function handleGetRecientes(
     if (!proc?.["id"]) continue;
     const procId = String(proc["id"]);
 
-    const radarKey = (row["radars"] as Record<string, unknown> | null)?.["key"] as string | null ?? null;
+    const radarContext = resolveHistoricalRadarContext(row as unknown as {
+      radar_config_versions: { radar_key: string; radar_name: string } | null;
+    });
+    const radarKey = radarContext?.key ?? null;
 
     // Client-side filters
     if (radarFilter && (!radarKey || !radarKey.toLowerCase().includes(radarFilter.toLowerCase()))) continue;

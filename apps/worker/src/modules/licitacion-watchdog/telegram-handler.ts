@@ -3,7 +3,13 @@ import { createModuleLogger } from "../../core/logger";
 import { formatMexicoDate } from "../../core/time";
 import { getState, STATE_KEYS } from "../../core/system-state";
 import { getLastChangedSnapshot, getLatestSnapshot } from "./repository";
-import { getResolvedTargets, addDynamicTarget, removeDynamicTarget } from "./target-manager";
+import {
+  getResolvedTargets,
+  addDynamicTarget,
+  removeDynamicTarget,
+  listPersistentTargets,
+} from "./target-manager";
+import { runLicitacionWatchdog } from "./job";
 import type { WatchdogTelemetry } from "./types";
 import { getEffectiveRadarMode } from "../control/sleep-mode";
 
@@ -156,15 +162,31 @@ export async function handleVigilarCommand(bot: TelegramBot, chatId: string, num
   await bot.sendMessage(chatId, `🔍 Buscando y resolviendo expediente <code>${escapeHtml(numero)}</code>...`, { parse_mode: "HTML" }).catch(() => {});
 
   try {
+    const existing = (await listPersistentTargets(false))?.find(
+      (target) => target.numero.toLowerCase() === numero.toLowerCase(),
+    );
     const target = await addDynamicTarget(numero);
+    const latest = await getLatestSnapshot(target.numero);
+    if (!latest) {
+      void runLicitacionWatchdog([target]).catch((err) => {
+        log.warn(
+          { err, targetId: target.id, numero: target.numero },
+          "Baseline inmediato falló; el scheduler watchdog reintentará",
+        );
+      });
+    }
     const lines = [
-      `✅ <b>Expediente agregado al watchdog</b>`,
+      existing?.active
+        ? `ℹ️ <b>Ya se encuentra bajo vigilancia</b>`
+        : `✅ <b>Watchdog activo</b>`,
       `Alias: <b>${escapeHtml(target.alias)}</b>`,
       `Número: <code>${escapeHtml(target.numero)}</code>`,
       `UUID resuelto: <code>${escapeHtml(target.uuid)}</code>`,
       `🔗 <a href="${escapeHtml(target.expedienteUrl)}">Ver en ComprasMX</a>`,
       "",
-      "<i>Se vigilará automáticamente en cada ciclo del watchdog.</i>",
+      latest
+        ? "<i>Se reutiliza el historial existente; solo se alertarán cambios posteriores.</i>"
+        : "<i>El baseline silencioso quedó programado; después se alertan cambios reales.</i>",
     ];
     await bot.sendMessage(chatId, lines.join("\n"), { parse_mode: "HTML", disable_web_page_preview: true }).catch(() => {});
   } catch (err: any) {
@@ -183,9 +205,9 @@ export async function handleNoVigilarCommand(bot: TelegramBot, chatId: string, i
   try {
     const removed = await removeDynamicTarget(query);
     if (removed) {
-      await bot.sendMessage(chatId, `🗑 <b>Expediente <code>${escapeHtml(query)}</code> removido del monitoreo dinámico.</b>`, { parse_mode: "HTML" }).catch(() => {});
+      await bot.sendMessage(chatId, `⏹ <b>Watchdog desactivado para <code>${escapeHtml(query)}</code>.</b> El historial y los snapshots se conservaron.`, { parse_mode: "HTML" }).catch(() => {});
     } else {
-      await bot.sendMessage(chatId, `⚠️ No se encontró un expediente dinámico registrado con ID o número: <code>${escapeHtml(query)}</code>`, { parse_mode: "HTML" }).catch(() => {});
+      await bot.sendMessage(chatId, `⚠️ No se encontró un target registrado con ID o número: <code>${escapeHtml(query)}</code>`, { parse_mode: "HTML" }).catch(() => {});
     }
   } catch (err: any) {
     log.error({ err, query }, "Error en /novigilar");

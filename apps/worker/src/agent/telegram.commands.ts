@@ -62,6 +62,11 @@ import {
   acquirePollingLock,
   startHeartbeat,
 } from "../modules/bot/instance-lock";
+import { listPersistentTargets } from "../modules/licitacion-watchdog/target-manager";
+import {
+  getLastChangedSnapshot,
+  getLatestSnapshot,
+} from "../modules/licitacion-watchdog/repository";
 
 const log = createModuleLogger("commands");
 const MANUAL_SCAN_TIMEOUT_MS = 30 * 60 * 1000;
@@ -934,7 +939,9 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       const radarMode = await getEffectiveRadarMode();
       const isSleeping = radarMode === "watchdog_only";
 
+      const activeRadarConfigs = getActiveRadars();
       const radarCounts = await getDbRadarCounts();
+      const watchdogTargets = (await listPersistentTargets(true)) ?? [];
 
       const rawLastRunState = await getState<Record<string, unknown>>(STATE_KEYS.LAST_COLLECT_RUN);
       const lastRunState = await resolveLastRunState(rawLastRunState, status.lastCycleAt);
@@ -1011,9 +1018,12 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
           : "Sin registro";
 
       const commercialState = lastRunState?.commercialMatching as Record<string, unknown> | undefined;
-      const commercialDisplay = isSleeping
+      const commercialEngineActive =
+        config.COMMERCIAL_MATCHING_ENABLED &&
+        activeRadarConfigs.some((radar) => Boolean(radar.commercialProfileId));
+      const commercialDisplay = isSleeping || !commercialEngineActive
         ? "😴 dormido"
-        : `<b>${config.COMMERCIAL_MATCHING_ENABLED ? "activo" : "inactivo"}</b> | Candidatos: <b>${numberField(commercialState, "commercialCandidates")}</b> | Matches perfiles: <b>${numberField(commercialState, "matchedProfiles")}</b>`;
+        : `<b>activo</b> | Candidatos: <b>${numberField(commercialState, "commercialCandidates")}</b> | Matches perfiles: <b>${numberField(commercialState, "matchedProfiles")}</b>`;
 
       const externalSummary = externalView.disabled
         ? "deshabilitado"
@@ -1071,6 +1081,24 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         ? `🔍 <b>ESTADO — Radar Licitaciones MX (😴 MODO DORMIDO)</b>`
         : `🔍 <b>ESTADO — Radar Licitaciones MX</b>`;
 
+      const watchdogTargetLines: string[] = [];
+      for (const target of watchdogTargets) {
+        const [latest, lastChanged] = await Promise.all([
+          getLatestSnapshot(target.numero),
+          getLastChangedSnapshot(target.numero),
+        ]);
+        watchdogTargetLines.push(
+          `• <b>${escapeHtml(target.alias)}</b>`,
+          `  Última verificación: <b>${formatTelemetryDate(target.lastCheckedAt)}</b>`,
+          `  Último snapshot: <b>${formatTelemetryDate(latest?.created_at)}</b>`,
+          `  Último cambio: <b>${formatTelemetryDate(lastChanged?.created_at)}</b>`,
+        );
+      }
+
+      const activeFocusLines = activeRadarConfigs.map(
+        (radar) => `   • ${escapeHtml(radar.name)}`,
+      );
+
       const lines = [
         statusTitle,
         "",
@@ -1095,9 +1123,11 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `📡 Scheduler: <b>${schedulerLabel}</b>`,
         `🧾 Resumen 7am: <b>${escapeHtml(dailySummaryDisplay)}</b>`,
         `🛰 Radares: <b>${radarsDisplay}</b>`,
+        ...activeFocusLines,
         ...pauseStatusLines(pauseState),
         ...circuitStatusLines(),
-        `🐕 Watchdog: <b>${escapeHtml(watchdogTelemetry?.status ?? "sin ejecución")}</b> | Último: <b>${formatTelemetryDate(watchdogTelemetry?.lastCheckedAt)}</b>`,
+        `🐕 Watchdog: <b>${escapeHtml(watchdogTelemetry?.status ?? "sin ejecución")}</b> | <b>${watchdogTargets.length} ${watchdogTargets.length === 1 ? "licitación vigilada" : "licitaciones vigiladas"}</b>`,
+        ...watchdogTargetLines,
         `📈 Saturación: <b>${escapeHtml(saturation.message)}</b> | Muestras: <b>${saturation.sampleCount}</b>${saturation.sufficient ? ` | Horas pico: <b>${saturation.peakHours.map((hour) => `${String(hour).padStart(2, "0")}:00`).join(", ")}</b>` : ""}`,
         isSleeping ? `💼 Motor comercial: <b>${commercialDisplay}</b>` : `💼 Motor comercial: ${commercialDisplay}`,
         ...externalStatusLines,
@@ -1243,6 +1273,9 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       );
       const config = getConfig();
       const radars = getActiveRadars();
+      const commercialEngineActive =
+        config.COMMERCIAL_MATCHING_ENABLED &&
+        radars.some((radar) => Boolean(radar.commercialProfileId));
       const external =
         status.externalLeads.status !== "none" ? status.externalLeads : externalState;
       const externalRecord = external as Record<string, unknown> | null;
@@ -1300,7 +1333,7 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `  Streak: <b>${lastRunState?.known_streak ?? 0}</b>`,
         `  Stop: <code>${String(lastRunState?.stop_reason ?? "N/D").slice(0, 50)}</code>`,
         "",
-        `<b>💼 Motor comercial:</b> ${config.COMMERCIAL_MATCHING_ENABLED ? "activo" : "inactivo"}`,
+        `<b>💼 Motor comercial:</b> ${commercialEngineActive ? "activo" : "dormido"}`,
         `  Revisados: <b>${numberField(commercialState, "totalReviewed")}</b>`,
         `  Raw results: <b>${numberField(commercialState, "rawResultsReceived")}</b>`,
         `  Texto suficiente: <b>${numberField(commercialState, "recordsWithSufficientText")}</b>`,
@@ -1848,5 +1881,5 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
   });
 
   log.info("telegram_handlers_registered");
-  log.info("✅ Comandos registrados: /prueba, /estado, /pausa, /reanudar, /watchdog, /radares, /buscar, /monto, /debug_resumen, /scan, /recuperar, /techo, /noticias_comerciales, /perdidas");
+  log.info("✅ Comandos registrados: /prueba, /estado, /pausa, /reanudar, /watchdog, /radares, /vigilar, /novigilar, /buscar, /monto, /debug_resumen, /scan, /recuperar, /techo, /noticias_comerciales, /perdidas");
 }

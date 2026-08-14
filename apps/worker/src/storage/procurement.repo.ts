@@ -27,6 +27,19 @@ export interface UpsertProcurementResult {
   versionNumber: number;
 }
 
+export async function updateOfficialPublicationDate(
+  procurementId: string,
+  publicationDate: string,
+): Promise<void> {
+  const { error } = await getSupabaseClient()
+    .from("procurements")
+    .update({ publication_date: publicationDate, updated_at: nowISO() })
+    .eq("id", procurementId);
+  if (error) {
+    throw new StorageError(error.message, "update_publication_date");
+  }
+}
+
 /**
  * Inserta o actualiza un expediente.
  * Si ya existe (mismo source + external_id):

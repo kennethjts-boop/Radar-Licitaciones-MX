@@ -34,12 +34,15 @@ export const REQUIRED_TABLES = [
   "attachments",
   "radars",
   "radar_rules",
+  "radar_config_versions",
   "matches",
   "alerts",
   "telegram_logs",
   "daily_summaries",
   "entity_memory",
   "system_state",
+  "watchdog_snapshots",
+  "watchdog_targets",
 ] as const;
 
 export type RequiredTable = (typeof REQUIRED_TABLES)[number];
@@ -48,6 +51,7 @@ export const REQUIRED_COLUMNS: Partial<Record<RequiredTable, readonly string[]>>
   matches: [
     "id",
     "radar_id",
+    "radar_config_version_id",
     "procurement_id",
     "match_score",
     "opportunity_score",

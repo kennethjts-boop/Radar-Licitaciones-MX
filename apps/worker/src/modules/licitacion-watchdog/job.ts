@@ -50,10 +50,11 @@ import {
   type ResolvedTarget,
   type WatchdogTarget,
 } from "./target-resolver";
-import { getAllTargets, getResolvedTargets } from "./target-manager";
+import { getAllTargets, getResolvedTargets, updateTargetCheck } from "./target-manager";
 
 const log = createModuleLogger("licitacion-watchdog:job");
 const TRANSIENT_RENDER_RETRY_DELAYS_MS = [20_000, 40_000, 60_000] as const;
+const targetsInFlight = new Set<string>();
 let inFlight = false;
 let coldStartHealthReconciled = false;
 
@@ -187,15 +188,17 @@ async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
 
   if (!latest) {
     const baseline = await insertSnapshot({
+      ...(target.procurementId ? { targetId: target.id } : {}),
       numeroProcedimiento,
       hash,
       snapshot,
       changes: [],
       notificationKind: "baseline",
+      suppressNotification: true,
     });
-    await notifyPending(baseline, alias);
     return {
       status: "baseline",
+      snapshotId: baseline.id,
       hash,
       changes: 0,
       deploymentSha: snapshot.deploymentSha,
@@ -282,6 +285,7 @@ async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
         }
       : undefined;
   const changed = await insertSnapshot({
+    ...(target.procurementId ? { targetId: target.id } : {}),
     numeroProcedimiento,
     hash,
     snapshot,
@@ -296,6 +300,7 @@ async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
     changes: changes.length,
     deploymentSha: snapshot.deploymentSha,
     structuralConfirmation: structuralConfirmation ?? null,
+    snapshotId: changed.id,
   };
 }
 
@@ -387,8 +392,26 @@ export async function runLicitacionWatchdog(expedientesOrTargets?: (string | Res
       if (i > 0 && delayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
+      const targetIdentity = target.procurementId ?? target.numero;
+      if (targetsInFlight.has(targetIdentity)) {
+        results[target.numero] = {
+          status: "skipped",
+          reason: "target_in_flight",
+          deploymentSha,
+        };
+        continue;
+      }
+      targetsInFlight.add(targetIdentity);
       try {
-        results[target.numero] = await processExpediente(target);
+        const result = await processExpediente(target);
+        results[target.numero] = result;
+        if (target.procurementId) {
+          await updateTargetCheck({
+            targetId: target.id,
+            snapshotId:
+              typeof result.snapshotId === "string" ? result.snapshotId : undefined,
+          });
+        }
       } catch (err) {
         const message = watchdogErrorMessage(err);
         results[target.numero] = {
@@ -403,6 +426,8 @@ export async function runLicitacionWatchdog(expedientesOrTargets?: (string | Res
           { err, numeroProcedimiento: target.numero, suppressTelegram: true },
           "Watchdog falló para expediente; alerta consolidada gestionará Telegram",
         );
+      } finally {
+        targetsInFlight.delete(targetIdentity);
       }
     }
     const failed = Object.values(results).filter((result) =>

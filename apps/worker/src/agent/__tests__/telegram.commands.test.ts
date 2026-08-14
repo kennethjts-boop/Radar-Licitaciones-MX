@@ -17,6 +17,7 @@ let mockTelegramCommandsState: Record<string, unknown> | null = null;
 let mockPauseState: Record<string, unknown> | null = null;
 let mockHistogramState: Record<string, unknown> | null = null;
 let mockStrictFailure = false;
+let mockWatchdogTargets: Array<Record<string, unknown>> = [];
 
 type TestTextHandler = (...args: unknown[]) => unknown;
 
@@ -56,6 +57,14 @@ const mockSupabaseClient = {
 
 jest.mock("../../storage/client", () => ({
   getSupabaseClient: () => mockSupabaseClient,
+}));
+
+jest.mock("../../modules/licitacion-watchdog/target-manager", () => ({
+  listPersistentTargets: jest.fn(() => Promise.resolve(mockWatchdogTargets)),
+}));
+jest.mock("../../modules/licitacion-watchdog/repository", () => ({
+  getLatestSnapshot: jest.fn().mockResolvedValue(null),
+  getLastChangedSnapshot: jest.fn().mockResolvedValue(null),
 }));
 
 // Mock config
@@ -184,6 +193,7 @@ describe("Telegram Commands - /noticias_comerciales", () => {
     mockPauseState = null;
     mockHistogramState = null;
     mockStrictFailure = false;
+    mockWatchdogTargets = [];
   });
 
   it("/estado muestra External OSINT deshabilitado y contadores actuales en cero", async () => {
@@ -219,6 +229,27 @@ describe("Telegram Commands - /noticias_comerciales", () => {
     expect(message).toContain("Circuitos watchdog:");
     expect(message).toContain("Watchdog:");
     expect(message).toContain("Saturación:");
+    expect(message).toContain("Radares: <b>4 activos");
+    expect(message).toContain("CAPUFE — Nacional");
+    expect(message).toContain("IMSS — Oaxtepec, Morelos");
+    expect(message).toContain("Morelos — cualquier dependencia");
+  });
+
+  it("/estado cuenta y enumera targets watchdog persistentes", async () => {
+    mockWatchdogTargets = [{
+      id: "target-n68",
+      procurementId: "proc-n68",
+      alias: "CAPUFE · N-68",
+      numero: "LA-09-J0U-009J0U001-N-68-2026",
+      lastCheckedAt: "2026-08-13T12:00:00Z",
+    }];
+    const handler = findTextHandler(botInstance, "prueba|estado");
+    await handler({ chat: { id: 123456 }, text: "/estado" });
+    const message = mockSendMessage.mock.calls.at(-1)?.[1] as string;
+    expect(message).toContain("1 licitación vigilada");
+    expect(message).toContain("CAPUFE · N-68");
+    expect(message).toContain("Último snapshot:");
+    expect(message).toContain("Último cambio:");
   });
 
   it("/estado reporta correctamente en modo dormido RADAR_MODE=watchdog_only", async () => {

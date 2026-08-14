@@ -10,10 +10,9 @@ import {
 } from "../modules/commercial-profiles";
 import { matchCommercialOpportunity } from "../modules/commercial-matching";
 import {
-  detectImssMorelosPriority,
-  IMSS_MORELOS_RADAR_KEY,
-  IMSS_MORELOS_SCORE_REASONS,
-} from "../radars/imss-morelos-priority.matcher";
+  detectOperationalFocus,
+  OPERATIONAL_FOCUS_KEYS,
+} from "../radars/operational-focus.matcher";
 import {
   CAPUFE_DIRECT_AWARDS_RADAR_KEY,
   CAPUFE_DIRECT_AWARDS_SCORE_REASONS,
@@ -201,9 +200,10 @@ export function evaluateProcurementAgainstRadar(
   isNew: boolean,
   previousStatus: NormalizedProcurement["status"] | null = null,
 ): MatchResult | null {
-  if (radar.key === IMSS_MORELOS_RADAR_KEY) {
-    return evaluateImssMorelosPriorityRadar(
+  if (Object.values(OPERATIONAL_FOCUS_KEYS).includes(radar.key as never)) {
+    return evaluateOperationalFocusRadar(
       procurement,
+      radar,
       isNew,
       previousStatus,
     );
@@ -431,22 +431,24 @@ function evaluateProcurementAgainstCommercialRadar(
   };
 }
 
-function evaluateImssMorelosPriorityRadar(
+function evaluateOperationalFocusRadar(
   procurement: NormalizedProcurement,
+  radar: RadarConfig,
   isNew: boolean,
   previousStatus: NormalizedProcurement["status"] | null,
 ): MatchResult | null {
-  const detection = detectImssMorelosPriority(procurement);
+  const detection = detectOperationalFocus(procurement, radar.key);
   if (!detection) return null;
 
   const matchedTerms = [
-    ...detection.imssTerms,
-    ...detection.territoryTerms,
+    ...detection.matchedTerms,
   ];
   const explanation = [
-    "PRIORIDAD INSTITUCIONAL IMSS MORELOS.",
-    "Motivo: buyer_imss + territory_morelos + priority_institutional_radar.",
-    `Territorio detectado: ${detection.territoryMatched}.`,
+    `FOCO OPERATIVO ${radar.name}.`,
+    `Motivo: ${detection.scoreReasons.join(" + ")}.`,
+    detection.territoryMatched
+      ? `Territorio detectado: ${detection.territoryMatched}.`
+      : "",
     isNew ? "Expediente nuevo — primera vez detectado." : "",
     previousStatus !== null && previousStatus !== procurement.status
       ? "Cambio de estatus detectado."
@@ -454,7 +456,7 @@ function evaluateImssMorelosPriorityRadar(
   ].filter(Boolean).join(" ");
 
   return {
-    radarKey: IMSS_MORELOS_RADAR_KEY,
+    radarKey: radar.key,
     procurementId: procurement.externalId,
     matchScore: 1,
     opportunityScore: calculateOpportunityScore(procurement),
@@ -463,7 +465,7 @@ function evaluateImssMorelosPriorityRadar(
     matchedTerms: [...new Set(matchedTerms)],
     excludedTerms: [],
     explanation,
-    scoreReasons: IMSS_MORELOS_SCORE_REASONS,
+    scoreReasons: detection.scoreReasons,
     territoryMatched: detection.territoryMatched,
     isNew,
     isStatusChange:

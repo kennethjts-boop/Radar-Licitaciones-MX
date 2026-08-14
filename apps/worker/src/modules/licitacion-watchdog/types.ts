@@ -115,6 +115,7 @@ export interface StoredDetectedChanges {
 
 export interface WatchdogSnapshotRow {
   id: string;
+  target_id?: string | null;
   numero_procedimiento: string;
   snapshot_hash: string;
   snapshot_json: WatchdogSnapshot;
