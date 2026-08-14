@@ -208,8 +208,10 @@ export function shouldSkipDuplicateProcurementAlert(
 async function fetchOfficialPublicationDate(sourceUrl: string): Promise<string | null> {
   return BrowserManager.withContext(async (page, context) => {
     const navigator = new ComprasMxNavigator();
-    const detail = await navigator.extractDetail(context, sourceUrl, page);
-    if (!detail) return null;
+    // extractDetail también navega al expediente. La extracción general puede
+    // fallar aunque el cronograma ya esté renderizado; la fecha oficial tiene
+    // su propio selector y debe intentarse de forma independiente.
+    await navigator.extractDetail(context, sourceUrl, page);
     return navigator.fetchPublicationDate(page);
   }, { timeoutMs: 90_000 });
 }

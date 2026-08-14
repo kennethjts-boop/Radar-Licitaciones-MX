@@ -18,9 +18,9 @@ BEGIN
     AND rcv.version_key = 'operational_20260813'
     AND p.lightweight_fingerprint NOT LIKE 'publication-date-recheck:%';
 
-  IF affected_count <> 17 THEN
+  IF affected_count NOT IN (0, 17) THEN
     RAISE EXCEPTION
-      'Recuperación de fecha esperaba exactamente 17 expedientes; encontró %',
+      'Recuperación de fecha esperaba 17 expedientes o 0 al reejecutar; encontró %',
       affected_count;
   END IF;
 END $$;
@@ -41,4 +41,3 @@ WHERE p.publication_date IS NULL
   );
 
 COMMIT;
-
