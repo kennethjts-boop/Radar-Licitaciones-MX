@@ -1,4 +1,4 @@
-import { formatChangeMessages } from "../telegram";
+import { formatChangeMessages, splitLongMessage } from "../telegram";
 import type {
   NotificationState,
   WatchdogChange,
@@ -89,5 +89,37 @@ describe("formatChangeMessages", () => {
     const message = formatChangeMessages(snapshotRow("change", rows, [change])).join("\n");
 
     expect(message).toContain(`(${classification})`);
+  });
+});
+
+describe("splitLongMessage", () => {
+  it("debe devolver el texto intacto si no excede el límite", () => {
+    const text = "línea 1\nlínea 2";
+    expect(splitLongMessage(text, 100)).toEqual([text]);
+  });
+
+  it("debe trocear por líneas respetando el límite", () => {
+    const line = "x".repeat(40);
+    const text = Array.from({ length: 10 }, () => line).join("\n");
+    const parts = splitLongMessage(text, 100);
+    expect(parts.length).toBeGreaterThan(1);
+    for (const part of parts) expect(part.length).toBeLessThanOrEqual(100);
+    expect(parts.join("\n")).toBe(text);
+  });
+
+  it("debe hacer hard-slice cuando una sola línea excede el límite", () => {
+    const parts = splitLongMessage("y".repeat(250), 100);
+    expect(parts).toEqual(["y".repeat(100), "y".repeat(100), "y".repeat(50)]);
+  });
+
+  it("debe mantener cada parte bajo el límite de Telegram para un narrativo enorme", () => {
+    const narrative = [
+      "🔔 <b>N-68-2026</b>",
+      "Detalle técnico:",
+      ...Array.from({ length: 400 }, (_, i) => `• campo[${i}]: "antes" → "después"`),
+    ].join("\n");
+    const parts = splitLongMessage(narrative);
+    expect(parts.length).toBeGreaterThan(1);
+    for (const part of parts) expect(part.length).toBeLessThanOrEqual(2_800);
   });
 });

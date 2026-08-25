@@ -164,6 +164,41 @@ function buildChangeLines(row: WatchdogSnapshotRow): string[] {
   return lines;
 }
 
+/**
+ * Trocea un mensaje largo en partes que respetan el límite de Telegram.
+ * Corta por líneas; si una sola línea excede maxLen, la parte en trozos duros.
+ */
+export function splitLongMessage(text: string, maxLen = MAX_CHANGES_BODY_LENGTH): string[] {
+  if (text.length <= maxLen) return [text];
+
+  const parts: string[] = [];
+  let current = "";
+
+  const pushCurrent = () => {
+    if (current.length > 0) {
+      parts.push(current);
+      current = "";
+    }
+  };
+
+  for (const line of text.split("\n")) {
+    if (line.length > maxLen) {
+      pushCurrent();
+      for (let offset = 0; offset < line.length; offset += maxLen) {
+        parts.push(line.slice(offset, offset + maxLen));
+      }
+      continue;
+    }
+    if (current.length > 0 && current.length + line.length + 1 > maxLen) {
+      pushCurrent();
+    }
+    current = current.length > 0 ? `${current}\n${line}` : line;
+  }
+
+  pushCurrent();
+  return parts.length > 0 ? parts : [text];
+}
+
 export function formatBaselineMessage(row: WatchdogSnapshotRow): string {
   return [
     `✅ Watchdog activo para <code>${escapeHtml(row.numero_procedimiento)}</code> — baseline registrado`,
@@ -224,6 +259,8 @@ export async function sendPendingNotification(
   } else {
     messages = formatChangeMessages(row);
   }
+
+  messages = messages.flatMap((message) => splitLongMessage(message));
 
   let lastReceipt: TelegramDeliveryReceipt | null = null;
   for (const message of messages) {

@@ -6,6 +6,9 @@ export * from "./types";
 export * from "./classifier";
 export * from "./ai-narrator";
 
+/** Máximo de líneas del bloque "Detalle técnico" para no exceder el límite de Telegram. */
+const MAX_TECHNICAL_DETAIL_LINES = 20;
+
 /**
  * Formatea una alerta del watchdog usando el traductor narrativo.
  * Si IA está activa y disponible en <=8s, enriquece las secciones "¿QUÉ SIGNIFICA?" y "¿QUÉ DEBO HACER?".
@@ -53,10 +56,17 @@ export async function formatWatchdogNarrative(input: NarrativeInput): Promise<Re
 
   let finalResultText = aiRenderedText;
   if (deterministic.category === "desconocido") {
-    const rawDiffLines = cleanChanges.map(
+    const allDiffLines = cleanChanges.map(
       (c) => `• ${c.path}: ${JSON.stringify(c.previous)} → ${JSON.stringify(c.current)}`,
-    ).join("\n");
-    finalResultText += `\n\nDetalle técnico:\n${rawDiffLines}`;
+    );
+    const truncated = allDiffLines.length > MAX_TECHNICAL_DETAIL_LINES;
+    const shownLines = truncated
+      ? allDiffLines.slice(0, MAX_TECHNICAL_DETAIL_LINES)
+      : allDiffLines;
+    const header = truncated
+      ? `Detalle técnico (primeros ${MAX_TECHNICAL_DETAIL_LINES} de ${allDiffLines.length}):`
+      : "Detalle técnico:";
+    finalResultText += `\n\n${header}\n${shownLines.join("\n")}`;
   }
 
   return {
