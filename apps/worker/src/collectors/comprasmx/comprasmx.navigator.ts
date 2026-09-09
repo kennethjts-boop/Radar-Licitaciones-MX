@@ -217,10 +217,6 @@ export const SELECTORS = {
   // Se añade soporte para .p-datatable-scrollable-body tr por cambios recientes en el portal.
   LISTING_ROW: '.p-datatable-tbody tr, .p-datatable-scrollable-body tr',
   COL_ID: 'td.col-id',
-  COL_TITLE: 'td.col-nom',
-  COL_DEP: 'td.col-normal:nth-child(5)',
-  COL_STATUS: 'td.col-normal:nth-child(6)',
-  COL_DATE: 'td.col-normal:nth-child(8)',
   PAGINATION_NEXT: 'button.p-paginator-next',
 
   // Detail labels
@@ -402,6 +398,88 @@ function apiRegistroToListingRow(item: ApiRegistro): ListingRow {
   };
 }
 
+function normalizeDomHeaderText(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+export interface DomFallbackMappingResult {
+  rows: ListingRow[];
+  headerDegraded: boolean;
+  headers: string[];
+}
+
+/**
+ * Mapea las filas del fallback DOM de ComprasMX (cuando no se capturó la respuesta
+ * API) a ListingRow, resolviendo columnas por el texto de los <th> en vez de por
+ * índice fijo. Función pura para poder testearla sin DOM/Playwright: la extracción
+ * de headers/celdas/rowText ocurre en el navegador (evaluateAll) y esta función
+ * solo recibe strings ya extraídos.
+ *
+ * Si no se puede resolver el header del número de procedimiento, cae al índice 1
+ * (comportamiento histórico) y reporta headerDegraded=true para que el caller
+ * registre un warn una sola vez por ciclo, no por fila.
+ */
+export function mapComprasMxDomFallbackRows(
+  rawHeaders: string[],
+  rowCells: string[][],
+  rowTexts: string[],
+): DomFallbackMappingResult {
+  const headers = rawHeaders.map(normalizeDomHeaderText);
+  const findIndex = (predicate: (header: string) => boolean): number =>
+    headers.findIndex(predicate);
+
+  const idIdx = findIndex((h) => h.includes("numero") || h.includes("procedimiento"));
+  const titleIdx = findIndex((h) => h.includes("nombre"));
+  const depIdx = findIndex(
+    (h) => h.includes("dependencia") || h.includes("siglas") || h.includes("unidad"),
+  );
+  const statusIdx = findIndex((h) => h.includes("estatus") || h.includes("estado"));
+  let dateIdx = findIndex((h) => h.includes("fecha") && h.includes("apertura"));
+  if (dateIdx === -1) {
+    dateIdx = findIndex((h) => h.includes("fecha") && h.includes("publicacion"));
+  }
+  if (dateIdx === -1) {
+    dateIdx = findIndex((h) => h.includes("fecha"));
+  }
+
+  const headerDegraded = idIdx === -1;
+
+  const resolvedIdIdx = idIdx !== -1 ? idIdx : 1;
+  const resolvedTitleIdx = titleIdx !== -1 ? titleIdx : 3;
+  const resolvedDepIdx = depIdx !== -1 ? depIdx : 4;
+  const resolvedStatusIdx = statusIdx !== -1 ? statusIdx : 5;
+
+  const rows = rowCells
+    .map((cells, i) => {
+      const textAt = (index: number) => (cells[index] ?? "").trim();
+      const externalId = textAt(resolvedIdIdx);
+      if (!externalId) return null;
+      const visibleDate = dateIdx !== -1 ? textAt(dateIdx) : textAt(7) || textAt(6);
+      const row: ListingRow = {
+        externalId,
+        title: textAt(resolvedTitleIdx) || null,
+        dependency: textAt(resolvedDepIdx) || null,
+        status: textAt(resolvedStatusIdx) || null,
+        visibleDate: visibleDate || null,
+        // El fallback DOM no expone el uuid del expediente en texto visible en la
+        // tabla, así que no se puede reconstruir la URL de detalle con
+        // buildComprasMxDetailUrl (requiere uuid_procedimiento). extractDetail()
+        // tolera sourceUrl vacío: reintenta localizando la fila por externalId
+        // en el listado (rama de urlOrId sin "http" en extractDetail).
+        sourceUrl: "",
+        rowText: rowTexts[i] ?? "",
+      };
+      return row;
+    })
+    .filter((row): row is ListingRow => row !== null);
+
+  return { rows, headerDegraded, headers: rawHeaders };
+}
+
 export function parseComprasMxProcedimientosResponse(
   raw: string,
   status = 200,
@@ -469,6 +547,10 @@ async function fetchComprasMxProcedimientosPage(pageNumber: number): Promise<Com
 }
 
 export class ComprasMxNavigator {
+  // Evita spamear logs: el warn de mapeo degradado del fallback DOM se
+  // emite una sola vez por instancia (una instancia == un ciclo de collect).
+  private domHeaderWarnLogged = false;
+
   private async scanListingViaSignedApi(
     maxPages: number,
   ): Promise<ListingScanResult> {
@@ -691,24 +773,43 @@ export class ComprasMxNavigator {
             }
           }
         } else {
-          const rowsOnPage = await page.locator(SELECTORS.LISTING_ROW).evaluateAll((elements: any[]) =>
-            elements.map((element) => {
-              const cells = Array.from(element.querySelectorAll("td")) as any[];
-              const textAt = (index: number) =>
-                (cells[index]?.textContent ?? "").replace(/\s+/g, " ").trim();
-              const externalId = textAt(1);
-              if (!externalId) return null;
-              return {
-                externalId,
-                title: textAt(3) || null,
-                dependency: textAt(4) || null,
-                status: textAt(5) || null,
-                visibleDate: textAt(7) || textAt(6) || null,
-                sourceUrl: "",
-                rowText: (element.textContent ?? "").replace(/\s+/g, " ").trim(),
-              };
-            }).filter((row): row is ListingRow => row !== null),
-          ).catch(() => []);
+          const rawExtraction = await page
+            .locator(SELECTORS.LISTING_ROW)
+            .evaluateAll((elements: any[]) => {
+              const containerTable =
+                elements[0]?.closest("table") ??
+                elements[0]?.ownerDocument?.querySelector("table");
+              const headerCells = containerTable
+                ? Array.from(containerTable.querySelectorAll("thead th"))
+                : [];
+              const headers = headerCells.map(
+                (th: any) => (th.textContent ?? "").replace(/\s+/g, " ").trim(),
+              );
+              const rowCells = elements.map((element) =>
+                (Array.from(element.querySelectorAll("td")) as any[]).map((cell) =>
+                  (cell.textContent ?? "").replace(/\s+/g, " ").trim(),
+                ),
+              );
+              const rowTexts = elements.map((element) =>
+                (element.textContent ?? "").replace(/\s+/g, " ").trim(),
+              );
+              return { headers, rowCells, rowTexts };
+            })
+            .catch(() => ({ headers: [] as string[], rowCells: [] as string[][], rowTexts: [] as string[] }));
+
+          const mapped = mapComprasMxDomFallbackRows(
+            rawExtraction.headers,
+            rawExtraction.rowCells,
+            rawExtraction.rowTexts,
+          );
+          if (mapped.headerDegraded && !this.domHeaderWarnLogged) {
+            this.domHeaderWarnLogged = true;
+            log.warn(
+              { headers: mapped.headers },
+              "No se pudo mapear el encabezado de número de procedimiento en el fallback DOM de ComprasMX; usando índice por defecto",
+            );
+          }
+          const rowsOnPage = mapped.rows;
 
           if (rowsOnPage.length > 0) {
             pagesScanned = 1;

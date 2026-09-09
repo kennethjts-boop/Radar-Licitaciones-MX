@@ -42,9 +42,11 @@ function checkSingleError(e: unknown): boolean {
   if (!(e instanceof Error)) return false;
   const message = e.message.toLowerCase();
   const name = e.name.toLowerCase();
-  const stack = (e.stack ?? "").toLowerCase();
+  // No se busca en e.stack: un stack trace puede contener tokens como "429" o
+  // "503" en rutas de archivo o números de línea (ej. "foo.ts:429"), lo que
+  // reintentaría errores que no son de red.
   return RETRYABLE_NETWORK_TOKENS.some(
-    (token) => message.includes(token) || name.includes(token) || stack.includes(token),
+    (token) => message.includes(token) || name.includes(token),
   );
 }
 

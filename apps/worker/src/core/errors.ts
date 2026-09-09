@@ -94,32 +94,3 @@ export async function withTimeout<T>(
   }
 }
 
-/**
- * Retry con backoff exponencial.
- */
-export async function withRetry<T>(
-  fn: () => Promise<T>,
-  maxAttempts: number,
-  baseDelayMs: number,
-  operationName: string,
-): Promise<T> {
-  let lastError: Error = new Error("Unknown");
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      if (attempt < maxAttempts) {
-        const delay = baseDelayMs * Math.pow(2, attempt - 1);
-        await new Promise((r) => setTimeout(r, delay));
-      }
-    }
-  }
-
-  throw new RadarError(
-    `Operación "${operationName}" falló después de ${maxAttempts} intentos: ${lastError.message}`,
-    "MAX_RETRIES_EXCEEDED",
-    { lastError: lastError.message, maxAttempts },
-  );
-}

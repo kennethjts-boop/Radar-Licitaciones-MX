@@ -2,6 +2,7 @@ import {
   classifyComprasMxBrowserOutcome,
   parseComprasMxProcedimientosResponse,
   apiRegistroToRawInput,
+  mapComprasMxDomFallbackRows,
 } from "../comprasmx.navigator";
 
 describe("ComprasMX browser fallback response handling", () => {
@@ -98,5 +99,97 @@ describe("ComprasMX browser fallback response handling", () => {
     expect(raw.buyingUnit).toBe("050GYR085 - CENTRO VACACIONAL IMSS OAXTEPEC");
     expect(raw.state).toBe("MORELOS");
     expect(raw.publicationDate).toBe("13/08/2026 00:00");
+  });
+});
+
+describe("mapComprasMxDomFallbackRows (mapeo del fallback DOM por encabezado)", () => {
+  const HEADERS_CURRENT_ORDER = [
+    "Seleccionar",
+    "Número de procedimiento",
+    "Carácter",
+    "Nombre del procedimiento",
+    "Dependencia/Entidad",
+    "Estatus",
+    "Fecha de publicación",
+    "Fecha de apertura",
+  ];
+
+  const ROW_CELLS_CURRENT_ORDER = [
+    "",
+    "LA-001",
+    "Adquisición",
+    "Servicio de mantenimiento vial",
+    "SCT",
+    "VIGENTE",
+    "01/01/2026",
+    "05/01/2026",
+  ];
+
+  it("con columnas en el orden actual, produce los mismos valores que el mapeo por índice de hoy", () => {
+    const result = mapComprasMxDomFallbackRows(
+      HEADERS_CURRENT_ORDER,
+      [ROW_CELLS_CURRENT_ORDER],
+      ["texto de la fila LA-001"],
+    );
+
+    expect(result.headerDegraded).toBe(false);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toMatchObject({
+      externalId: "LA-001",
+      title: "Servicio de mantenimiento vial",
+      dependency: "SCT",
+      status: "VIGENTE",
+      visibleDate: "05/01/2026", // prioriza "apertura" sobre "publicación"
+      sourceUrl: "",
+    });
+  });
+
+  it("con una columna extra insertada al inicio, mapea correctamente por encabezado (hoy falla silenciosamente por índice)", () => {
+    const headersWithExtraColumn = ["Favorito", ...HEADERS_CURRENT_ORDER];
+    const rowCellsWithExtraColumn = ["★", "", "LA-002", "Adquisición", "Otro servicio de limpieza", "IMSS", "DESIERTA", "02/01/2026", "06/01/2026"];
+
+    const result = mapComprasMxDomFallbackRows(
+      headersWithExtraColumn,
+      [rowCellsWithExtraColumn],
+      ["texto de la fila LA-002"],
+    );
+
+    expect(result.headerDegraded).toBe(false);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toMatchObject({
+      externalId: "LA-002",
+      title: "Otro servicio de limpieza",
+      dependency: "IMSS",
+      status: "DESIERTA",
+      visibleDate: "06/01/2026",
+    });
+  });
+
+  it("sin thead (headers vacío), cae a los índices numéricos actuales sin romper y marca headerDegraded", () => {
+    const result = mapComprasMxDomFallbackRows(
+      [],
+      [ROW_CELLS_CURRENT_ORDER],
+      ["texto de la fila LA-001"],
+    );
+
+    expect(result.headerDegraded).toBe(true);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toMatchObject({
+      externalId: "LA-001",
+      title: "Servicio de mantenimiento vial",
+      dependency: "SCT",
+      status: "VIGENTE",
+      visibleDate: "05/01/2026",
+    });
+  });
+
+  it("descarta filas sin externalId resuelto", () => {
+    const result = mapComprasMxDomFallbackRows(
+      HEADERS_CURRENT_ORDER,
+      [["", "", "Adquisición", "Sin id", "SCT", "VIGENTE", "01/01/2026", "05/01/2026"]],
+      ["fila sin id"],
+    );
+
+    expect(result.rows).toHaveLength(0);
   });
 });
