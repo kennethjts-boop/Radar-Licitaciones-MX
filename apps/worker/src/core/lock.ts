@@ -123,6 +123,14 @@ async function claimJobLock(lockName: string, ttlMs: number): Promise<boolean> {
   }
 }
 
+/**
+ * Limitación aceptada (no bloqueante): si esta renovación falla repetidamente
+ * y el TTL termina venciendo, otro proceso puede reclamar el lock distribuido
+ * mientras fn sigue corriendo aquí — a diferencia del triggerLockLost() de
+ * instance-lock.ts, aquí no se aborta fn ante ese escenario, solo se deja el
+ * warn de abajo. Es una degradación aceptable y de todos modos mejor que el
+ * estado previo a esta fase (sin lock distribuido en absoluto).
+ */
 async function renewJobLock(lockName: string, ttlMs: number): Promise<void> {
   const renewed = await claimJobLock(lockName, ttlMs);
   if (!renewed) {
@@ -180,7 +188,16 @@ export async function withDistributedLock<T>(
   fn: () => Promise<T>,
   ttlMs: number = JOB_LOCK_TTL_MS,
 ): Promise<T | null> {
-  const acquiredLocal = lock.acquire(lockName, jobName, ttlMs);
+  // OJO: no pasar ttlMs aquí. El lock en memoria NO se renueva mientras fn
+  // corre (solo el distribuido lo hace vía renewJobLock) — su timeout es el
+  // umbral de "huérfano" para forzar liberación, no un TTL renovable. Si se le
+  // pasa el TTL corto del distribuido, un collect que tarde más de esos ~2 min
+  // (normal con Playwright) hace que la propia capa 1 declare su lock
+  // expirado y lo conceda de nuevo al mismo proceso, dejando pasar el caso
+  // mismo-proceso que esta capa existe para bloquear (p.ej. un collect manual
+  // desde Telegram mientras corre el programado). Se deja en el default largo
+  // (25 min) para que actúe solo como red de seguridad ante un proceso muerto.
+  const acquiredLocal = lock.acquire(lockName, jobName);
   if (!acquiredLocal) return null;
 
   let claimedDistributed = false;

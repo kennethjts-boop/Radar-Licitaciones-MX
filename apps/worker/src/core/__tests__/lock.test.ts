@@ -55,6 +55,31 @@ describe("withDistributedLock (lock de dos capas: memoria + Supabase bot_lock)",
     jest.useRealTimers();
   });
 
+  it("REGRESIÓN: un lock local vigente de hace 3 min (> TTL distribuido de 2 min) sigue rechazando al mismo proceso", async () => {
+    // El timeout de "huérfano" del lock en memoria debe seguir usando el
+    // default largo (25 min), no el ttlMs corto del distribuido — de lo
+    // contrario, un collect que dure más de ~2 min (normal con Playwright)
+    // haría que la propia capa 1 declarara su lock expirado y lo concediera
+    // de nuevo al MISMO proceso (p.ej. un collect manual desde Telegram
+    // mientras corre el programado), justo el solapamiento que esta capa
+    // existe para bloquear.
+    jest.useFakeTimers();
+    lock.acquire("collect-job", "ciclo-programado");
+    jest.advanceTimersByTime(3 * 60 * 1000); // 3 min > TTL distribuido (2 min)
+
+    const fn = jest.fn().mockResolvedValue("no debería correr");
+    const result = await withDistributedLock("collect-job", "collect-manual-telegram", fn);
+
+    expect(result).toBeNull();
+    expect(fn).not.toHaveBeenCalled();
+    // Ni siquiera debió intentar tocar Supabase: la capa 1 la rechazó antes.
+    expect(mockRpc).not.toHaveBeenCalled();
+    // El lock del ciclo programado sigue en pie.
+    expect(lock.isLocked("collect-job")).toBe(true);
+
+    lock.release("collect-job");
+  });
+
   it("adquiere el lock distribuido, ejecuta fn y libera ambas capas", async () => {
     mockRpc.mockImplementation((fnName: string) => {
       if (fnName === "claim_polling_lock") return Promise.resolve({ data: true, error: null });
