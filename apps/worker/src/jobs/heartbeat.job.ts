@@ -33,6 +33,10 @@ export async function runHeartbeatJob(): Promise<void> {
   log.info("🔄 Cycle started (heartbeat)");
   const cycleStart = Date.now();
 
+  // Intencional: se queda en withLock (solo memoria), no withDistributedLock.
+  // Es idempotente, corre muy seguido, y su propósito es justamente verificar
+  // que Supabase responde — hacerlo depender de una RPC a Supabase para
+  // adquirir su propio lock sería circular.
   await withLock("heartbeat-job", "main-heartbeat", async () => {
     const startedAt = nowISO();
     let errorMessage: string | null = null;

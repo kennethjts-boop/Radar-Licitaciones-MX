@@ -12,7 +12,7 @@
  * 8. Liberar lock
  */
 import { createModuleLogger } from "../core/logger";
-import { withLock } from "../core/lock";
+import { withDistributedLock } from "../core/lock";
 import { withTimeout } from "../core/errors";
 import { nowISO, formatDuration, isDateExpired, MX_TIMEZONE } from "../core/time";
 import { formatInTimeZone } from "date-fns-tz";
@@ -472,7 +472,7 @@ export async function runCollectJob(): Promise<CollectJobResult> {
   const startedAt = nowISO();
   const cycleStart = Date.parse(startedAt);
 
-  const lockResult = await withLock("collect-job", "main-collect", async (): Promise<CollectJobResult> => {
+  const lockResult = await withDistributedLock("collect-job", "main-collect", async (): Promise<CollectJobResult> => {
     if (!_comprasMxSourceId) {
       const errorMessage = "No source_id for comprasmx available. Cannot collect.";
       const durationMs = Date.now() - cycleStart;
@@ -1187,7 +1187,7 @@ export async function runRecheckJob(): Promise<void> {
   const startedAt = nowISO();
   const cycleStart = Date.parse(startedAt);
 
-  await withLock("recheck-job", "daily-recheck", async () => {
+  await withDistributedLock("recheck-job", "daily-recheck", async () => {
     if (!_comprasMxSourceId) {
       log.error("No source_id for comprasmx disponible. No se puede hacer recheck.");
       return;
