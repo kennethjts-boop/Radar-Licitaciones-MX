@@ -5,13 +5,12 @@
 import { generateSampleData } from './sample-data';
 import { classifyAlert } from './eligibility';
 import type { AlertFilterOptions, CycleMetrics } from './types';
+import { MAX_ALERTS_PER_CYCLE as ALERT_MAX_PER_CYCLE } from '../../config/env';
 
 const OPTIONS: AlertFilterOptions = {
   desertaLookbackDays: 10,
   activeMaxAgeDays: 21,
 };
-
-const ALERT_MAX_PER_CYCLE = 25;
 
 function run(): void {
   const entries = generateSampleData();

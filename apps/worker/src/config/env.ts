@@ -306,7 +306,7 @@ const envSchema = z.object({
     .string()
     .default('false')
     .transform((v) => v === 'true'),
-  ALERT_MAX_PER_CYCLE: z.string().default('25').transform(Number),
+  ALERT_MAX_PER_CYCLE: z.string().default('10').transform(Number),
   DAILY_SUMMARY_MAX_ITEMS: z.string().default('40').transform(Number),
   DAILY_SUMMARY_EXCLUDE_OLD_CLOSED: z
     .string()
@@ -315,6 +315,10 @@ const envSchema = z.object({
 });
 
 export type AppConfig = z.infer<typeof envSchema>;
+
+// Tope duro: nunca se envían más de 10 alertas por ciclo a Telegram (ver CLAUDE.md).
+// La variable de entorno ALERT_MAX_PER_CYCLE no puede superarlo aunque esté configurada más alta.
+export const MAX_ALERTS_PER_CYCLE = 10;
 
 let _config: AppConfig | null = null;
 
@@ -331,6 +335,17 @@ export function getConfig(): AppConfig {
   }
 
   _config = result.data;
+
+  if (_config.ALERT_MAX_PER_CYCLE > MAX_ALERTS_PER_CYCLE) {
+    pino({ base: null, timestamp: pino.stdTimeFunctions.isoTime }).warn(
+      {
+        ALERT_MAX_PER_CYCLE: _config.ALERT_MAX_PER_CYCLE,
+        MAX_ALERTS_PER_CYCLE,
+      },
+      "[CONFIG] ALERT_MAX_PER_CYCLE excede el tope permitido, se recorta a 10",
+    );
+    _config.ALERT_MAX_PER_CYCLE = MAX_ALERTS_PER_CYCLE;
+  }
   pino({ base: null, timestamp: pino.stdTimeFunctions.isoTime }).info(
     {
       COMPRASMX_SEED_URL: result.data.COMPRASMX_SEED_URL,
