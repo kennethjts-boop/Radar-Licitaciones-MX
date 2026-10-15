@@ -43,6 +43,19 @@ describe("once focos de octubre", () => {
     expect(keys(title, buyer)).toEqual([expected]);
   });
 
+  it("detecta flota administrativa sin la etiqueta literal vehículos administrativos", () => {
+    expect(keys("Arrendamiento de flota vehicular nueva para oficinas", "CAPUFE"))
+      .toEqual([OPERATIONAL_FOCUS_KEYS.capufeAdministrativeVehicles]);
+    expect(keys("Adquisición de llantas para la flota vehicular", "CAPUFE")).toEqual([]);
+  });
+
+  it("detecta limpieza nacional aunque no diga especial", () => {
+    expect(keys("Servicio integral de limpieza para la red nacional", "CAPUFE"))
+      .toEqual([OPERATIONAL_FOCUS_KEYS.capufeSpecialNationalCleaning]);
+    expect(keys("Servicio integral de limpieza de oficinas regionales", "CAPUFE"))
+      .toEqual([OPERATIONAL_FOCUS_KEYS.capufeGeneralCleaning]);
+  });
+
   it.each([
     ["Servicio de vigilancia presencial", "Caminos y Puentes Federales de Ingresos y Servicios Conexos", OPERATIONAL_FOCUS_KEYS.capufeSecurity],
     ["Compra de grúas de arrastre", "CAPUFE", OPERATIONAL_FOCUS_KEYS.capufeEmergencyVehicles],
