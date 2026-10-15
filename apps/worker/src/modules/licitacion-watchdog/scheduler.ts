@@ -1,6 +1,7 @@
 import { getConfig } from "../../config/env";
 import { createModuleLogger } from "../../core/logger";
 import { runLicitacionWatchdog } from "./job";
+import { reconcileWatchdogFromSentAlerts } from "./auto-activation";
 import { getEffectivePause } from "../control/pause-state";
 import { getState, STATE_KEYS } from "../../core/system-state";
 import type { WatchdogTelemetry } from "./types";
@@ -27,6 +28,11 @@ export function startLicitacionWatchdogScheduler(): void {
             "[PAUSA] Ciclo watchdog omitido por pausa manual",
           );
           return;
+        }
+        try {
+          await reconcileWatchdogFromSentAlerts();
+        } catch (err) {
+          log.warn({ err }, "Conciliación de alertas watchdog pendiente; se mantienen los targets actuales");
         }
         await runLicitacionWatchdog();
       })().catch((err) => {
