@@ -42,6 +42,10 @@ function contractObject(procurement: NormalizedProcurement): string {
   ].filter(Boolean).join(" "));
 }
 function matches(text: string, pattern: RegExp): boolean { return pattern.test(text); }
+const NATIONAL_CLEANING_SCOPE = /\b(?:alcance nacional|cobertura nacional|a nivel nacional|red nacional|toda la red|todo el territorio nacional|toda la republica|diversas delegaciones|varias delegaciones|oficinas centrales y (?:unidades |delegaciones |oficinas )?regionales|red (?:fonadin|federal)|multiples (?:unidades|regiones|plazas)|varias (?:unidades|regiones|plazas))\b/;
+function hasNationalCleaningScope(procurement: NormalizedProcurement): boolean {
+  return matches([contractObject(procurement), raw(procurement, "alcance"), raw(procurement, "cobertura")].join(" "), NATIONAL_CLEANING_SCOPE);
+}
 function isCapufe(procurement: NormalizedProcurement): boolean {
   return matches(dependency(procurement), /^(?:capufe|caminos y puentes federales(?: de ingresos y servicios conexos)?)$/);
 }
@@ -72,25 +76,25 @@ function matchesObject(key: OperationalFocusKey, procurement: NormalizedProcurem
       return matches(title, /\b(?:ambulancias?|vehiculos? de emergencia|unidades? de emergencia|vehiculos? de auxilio vial|unidades? de auxilio vial|gruas? de arrastre|vehiculos? de rescate|unidades? de rescate|patrullas? de auxilio)\b/) &&
         !matches(title, MAINTENANCE);
     case OPERATIONAL_FOCUS_KEYS.capufeAdministrativeVehicles:
-      return matches(title, /\b(?:vehiculos? administrativos?|parque vehicular administrativo|automoviles?|camionetas?|pick ups?|vehiculos? utilitarios?|vehiculos? de transporte administrativo)\b/) &&
-        !matches(title, /\b(?:ambulancias?|emergencia|auxilio vial|rescate)\b/) &&
+      return matches(title, /\b(?:vehiculos?|unidades? vehiculares?|parque vehicular|flota vehicular|automoviles?|camionetas?|pick ups?|unidades? utilitarias?)\b/) &&
+        matches(title, ACQUISITION) &&
+        !matches(title, /\b(?:ambulancias?|emergencia|auxilio vial|rescate|gruas?|patrullas?|motocicletas? de vigilancia|llantas?|neumaticos?|combustible|seguros?|lavado|refacciones?)\b/) &&
         !matches(title, MAINTENANCE);
     case OPERATIONAL_FOCUS_KEYS.capufeGeneralCleaning:
       return matches(title, SERVICE) && matches(title, CLEANING) &&
         matches(title, /\b(?:integral|general|instalaciones|oficinas|inmuebles|plazas de cobro)\b/) &&
         !matches(title, CLEANING_SUPPLIES) &&
-        !matches(title, /\b(?:especial|especializado|extraordinari[ao])\b/);
+        !matches(title, /\b(?:especial|especializado|extraordinari[ao])\b/) &&
+        !hasNationalCleaningScope(procurement);
     case OPERATIONAL_FOCUS_KEYS.capufeFurniture:
       return matches(title, /\b(?:mobiliario|muebles? de oficina|sillas?|escritorios?|archiveros?|mesas? de trabajo|equipamiento de oficinas?)\b/) &&
         (!matches(title, MAINTENANCE) || matches(title, ACQUISITION)) &&
         !matches(title, /\b(?:refacciones?|reparacion)\b/);
     case OPERATIONAL_FOCUS_KEYS.capufeSpecialNationalCleaning: {
-      const scope = [title, raw(procurement, "alcance"), raw(procurement, "cobertura")].join(" ");
+      const explicitNational = hasNationalCleaningScope(procurement) ||
+        matches(title, /\b(?:limpieza|aseo).{0,60}\bnacional\b/);
       return matches(title, SERVICE) && matches(title, CLEANING) &&
-        matches(title, /\b(?:especial|especializado|extraordinari[ao]|profunda)\b/) &&
-        (matches(scope, /\b(?:alcance nacional|cobertura nacional|a nivel nacional|red nacional|toda la red|todo el territorio nacional|toda la republica|diversas delegaciones|varias delegaciones)\b/) ||
-          matches(title, /\b(?:limpieza|aseo).{0,60}\bnacional\b/)) &&
-        !matches(title, CLEANING_SUPPLIES);
+        explicitNational && !matches(title, CLEANING_SUPPLIES);
     }
     case OPERATIONAL_FOCUS_KEYS.imssCleaning:
       return matches(title, SERVICE) && matches(title, CLEANING) && !matches(title, CLEANING_SUPPLIES);
