@@ -3,13 +3,7 @@ import { createModuleLogger } from "../../core/logger";
 import { formatMexicoDate } from "../../core/time";
 import { getState, STATE_KEYS } from "../../core/system-state";
 import { getLastChangedSnapshot, getLatestSnapshot } from "./repository";
-import {
-  getResolvedTargets,
-  addDynamicTarget,
-  removeDynamicTarget,
-  listPersistentTargets,
-} from "./target-manager";
-import { runLicitacionWatchdog } from "./job";
+import { getResolvedTargets, removeDynamicTarget } from "./target-manager";
 import type { WatchdogTelemetry } from "./types";
 import { getEffectiveRadarMode } from "../control/sleep-mode";
 
@@ -152,47 +146,13 @@ export async function handleRadaresCommand(bot: TelegramBot, chatId: string): Pr
   }
 }
 
-export async function handleVigilarCommand(bot: TelegramBot, chatId: string, numeroInput: string): Promise<void> {
-  const numero = numeroInput.trim();
-  if (!numero) {
-    await bot.sendMessage(chatId, "⚠️ Uso: <code>/vigilar &lt;numero_procedimiento&gt;</code>", { parse_mode: "HTML" }).catch(() => {});
-    return;
-  }
-
-  await bot.sendMessage(chatId, `🔍 Buscando y resolviendo expediente <code>${escapeHtml(numero)}</code>...`, { parse_mode: "HTML" }).catch(() => {});
-
-  try {
-    const existing = (await listPersistentTargets(false))?.find(
-      (target) => target.numero.toLowerCase() === numero.toLowerCase(),
-    );
-    const target = await addDynamicTarget(numero);
-    const latest = await getLatestSnapshot(target.numero);
-    if (!latest) {
-      void runLicitacionWatchdog([target]).catch((err) => {
-        log.warn(
-          { err, targetId: target.id, numero: target.numero },
-          "Baseline inmediato falló; el scheduler watchdog reintentará",
-        );
-      });
-    }
-    const lines = [
-      existing?.active
-        ? `ℹ️ <b>Ya se encuentra bajo vigilancia</b>`
-        : `✅ <b>Watchdog activo</b>`,
-      `Alias: <b>${escapeHtml(target.alias)}</b>`,
-      `Número: <code>${escapeHtml(target.numero)}</code>`,
-      `UUID resuelto: <code>${escapeHtml(target.uuid)}</code>`,
-      `🔗 <a href="${escapeHtml(target.expedienteUrl)}">Ver en ComprasMX</a>`,
-      "",
-      latest
-        ? "<i>Se reutiliza el historial existente; solo se alertarán cambios posteriores.</i>"
-        : "<i>El baseline silencioso quedó programado; después se alertan cambios reales.</i>",
-    ];
-    await bot.sendMessage(chatId, lines.join("\n"), { parse_mode: "HTML", disable_web_page_preview: true }).catch(() => {});
-  } catch (err: any) {
-    log.error({ err, numero }, "Error en /vigilar");
-    await bot.sendMessage(chatId, `❌ No se pudo dar de alta el expediente: ${escapeHtml(err?.message || "Error desconocido")}`, { parse_mode: "HTML" }).catch(() => {});
-  }
+export async function handleVigilarCommand(bot: TelegramBot, chatId: string, _numeroInput: string): Promise<void> {
+  // Política octubre 2026: sólo una alerta NEW_MATCH enviada por Telegram
+  // puede dar de alta un objetivo. /vigilar nunca crea ni reactiva targets.
+  await bot.sendMessage(
+    chatId,
+    "🐕 El Watchdog ahora se activa automáticamente sólo después de enviar una alerta nueva de los 11 radares de CAPUFE e IMSS. /vigilar no permite altas manuales. Usa /watchdog para consultar el seguimiento.",
+  ).catch(() => {});
 }
 
 export async function handleNoVigilarCommand(bot: TelegramBot, chatId: string, idInput: string): Promise<void> {

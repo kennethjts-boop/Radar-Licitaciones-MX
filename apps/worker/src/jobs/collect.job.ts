@@ -40,6 +40,7 @@ import {
   upsertMatch,
 } from "../storage/match-alert.repo";
 import { getActiveRadars } from "../radars/index";
+import { activateWatchdogForSentAlert } from "../modules/licitacion-watchdog/auto-activation";
 import { evaluateAllRadars } from "../matchers/matcher";
 import { enrichMatch } from "../enrichers/match.enricher";
 import { evaluarModalidad, inferTipoContratacion } from "../topes/topes.service";
@@ -219,7 +220,14 @@ async function deliverQueuedNewTenderAlerts(maxPerCycle: number): Promise<number
     pending,
     maxPerCycle,
     (alert) => sendTelegramMessage(alert.telegramMessage, "HTML"),
-    (alert, messageId) => markAlertSent(alert.id, messageId),
+    async (alert, messageId) => {
+      await markAlertSent(alert.id, messageId);
+      // La entrega ya está confirmada. Si falla el alta, el scheduler la
+      // recuperará sin reenviar el mensaje ni bloquear las demás alertas.
+      await activateWatchdogForSentAlert(alert.id).catch((err) =>
+        log.warn({ err, alertId: alert.id }, "Watchdog automático pendiente de conciliación"),
+      );
+    },
   );
   if (result.remaining > 0) {
     log.info(

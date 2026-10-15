@@ -1,4 +1,3 @@
-import { getConfig } from "../../config/env";
 import { createModuleLogger } from "../../core/logger";
 import { nowISO } from "../../core/time";
 import { getSupabaseClient } from "../../storage/client";
@@ -75,45 +74,14 @@ export async function listPersistentTargets(
   return ((data ?? []) as WatchdogTargetRow[]).map(rowToTarget);
 }
 
-/** Retrocompatibilidad de arranque durante el despliegue anterior a la migración. */
-export function getStaticTargets(): WatchdogTarget[] {
-  const config = getConfig();
-  if (config.WATCHDOG_TARGETS?.trim()) {
-    try {
-      const parsed = JSON.parse(config.WATCHDOG_TARGETS) as Array<Record<string, string>>;
-      if (Array.isArray(parsed)) {
-        return parsed.map((item, index) => ({
-          id: item.id || `legacy-${index + 1}`,
-          alias: item.alias || item.numero || `Target ${index + 1}`,
-          numero: item.numero || item.numeroProcedimiento,
-          uuid: item.uuid || null,
-        }));
-      }
-    } catch (err) {
-      log.warn({ err }, "WATCHDOG_TARGETS inválido; se usa fallback legacy");
-    }
-  }
-  return config.WATCHDOG_EXPEDIENTES.split(",")
-    .map((numero) => numero.trim())
-    .filter(Boolean)
-    .map((numero) => ({
-      id: numero === "LA-09-J0U-009J0U001-N-68-2026" ? "capufe-n68" : `legacy-${numero}`,
-      alias: numero === "LA-09-J0U-009J0U001-N-68-2026" ? "CAPUFE · N-68" : numero,
-      numero,
-      uuid:
-        numero === "LA-09-J0U-009J0U001-N-68-2026"
-          ? "1daccbec8b4b4c4aba85c8793886a1bf"
-          : null,
-    }));
-}
-
 export async function getDynamicTargets(): Promise<WatchdogTarget[]> {
   return (await listPersistentTargets(false)) ?? [];
 }
 
 export async function getAllTargets(): Promise<WatchdogTarget[]> {
   const persisted = await listPersistentTargets(true);
-  return persisted ?? getStaticTargets();
+  // Fail-closed: jamás reactivar expedientes antiguos desde variables de entorno.
+  return persisted ?? [];
 }
 
 export async function getResolvedTargets(): Promise<ResolvedTarget[]> {
