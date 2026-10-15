@@ -229,10 +229,10 @@ describe("Telegram Commands - /noticias_comerciales", () => {
     expect(message).toContain("Circuitos watchdog:");
     expect(message).toContain("Watchdog:");
     expect(message).toContain("Saturación:");
-    expect(message).toContain("Radares: <b>4 activos");
-    expect(message).toContain("CAPUFE — Nacional");
+    expect(message).toContain("Radares: <b>11 activos");
+    expect(message).toContain("CAPUFE — Seguridad y vigilancia");
     expect(message).toContain("IMSS — Oaxtepec, Morelos");
-    expect(message).toContain("Morelos — cualquier dependencia");
+    expect(message).toContain("IMSS — Banco de sangre");
   });
 
   it("/estado cuenta y enumera targets watchdog persistentes", async () => {

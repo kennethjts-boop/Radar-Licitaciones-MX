@@ -119,7 +119,7 @@ export async function enableSleepMode(): Promise<{
 /**
  * Despierta el sistema (/despertar):
  * 1. Lee el snapshot `radar_pause_snapshot` de system_state.
- * 2. Restaura fuentes, pero aplica la política vigente de cuatro focos al radar.
+ * 2. Restaura fuentes, pero aplica la política vigente de once focos al radar.
  * 3. Persiste `radar_mode=full`, incluso si Railway conserva un env antiguo.
  */
 export async function wakeFromSleepMode(): Promise<{

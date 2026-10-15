@@ -8,6 +8,7 @@ import { nowISO } from "../core/time";
 import { createModuleLogger } from "../core/logger";
 import type { DbMatch, DbAlert } from "../types/database";
 import type { MatchResult, EnrichedAlert } from "../types/procurement";
+import { OPERATIONAL_FOCUS_KEYS } from "../radars/operational-focus.matcher";
 
 const log = createModuleLogger("match-alert-repo");
 
@@ -24,7 +25,7 @@ export async function upsertMatch(
 
   const { data: configVersion, error: configVersionError } = await db
     .from("radar_config_versions")
-    .select("id")
+    .select("id, version_key")
     .eq("radar_id", radarDbId)
     .is("effective_to", null)
     .single();
@@ -32,6 +33,15 @@ export async function upsertMatch(
   if (configVersionError || !configVersion) {
     throw new StorageError(
       `Configuración vigente no encontrada para radar ${radarDbId}: ${configVersionError?.message ?? "sin fila"}`,
+      "find_radar_config_version",
+    );
+  }
+  if (
+    Object.values(OPERATIONAL_FOCUS_KEYS).includes(match.radarKey as never) &&
+    configVersion.version_key !== "operational_20261014"
+  ) {
+    throw new StorageError(
+      `La migración de octubre no está activa para ${match.radarKey}`,
       "find_radar_config_version",
     );
   }
@@ -256,11 +266,12 @@ export interface PendingNewTenderAlertRow {
 export async function getPendingNewTenderAlerts(limit = 500): Promise<PendingNewTenderAlertRow[]> {
   const { data, error } = await getSupabaseClient()
     .from("alerts")
-    .select("id, telegram_message, procurements!inner(publication_date)")
+    .select("id, telegram_message, procurements!inner(publication_date), radars!inner(is_active)")
     .eq("alert_type", "new_match")
     .eq("telegram_status", "pending")
     .not("dedupe_key", "is", null)
-    .gte("procurements.publication_date", "2026-08-13")
+    .gte("procurements.publication_date", "2026-10-14")
+    .eq("radars.is_active", true)
     .order("created_at", { ascending: true })
     .limit(limit);
   if (error) throw new StorageError(error.message, "get_pending_new_alerts");

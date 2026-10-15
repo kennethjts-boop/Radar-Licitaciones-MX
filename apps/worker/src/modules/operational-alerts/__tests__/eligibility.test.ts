@@ -4,32 +4,37 @@ import {
 } from "../eligibility";
 
 describe("corte operativo de nuevas licitaciones", () => {
-  it("rechaza 12/08/2026 23:59 CDMX", () => {
-    expect(evaluateNewTenderPublication("12/08/2026 23:59").eligible).toBe(false);
+  it("rechaza 13/10/2026 23:59 CDMX", () => {
+    expect(evaluateNewTenderPublication("13/10/2026 23:59").eligible).toBe(false);
   });
 
-  it("acepta exactamente 13/08/2026 00:00 CDMX", () => {
-    const result = evaluateNewTenderPublication("13/08/2026 00:00");
+  it("acepta exactamente 14/10/2026 00:00 CDMX", () => {
+    const result = evaluateNewTenderPublication("14/10/2026 00:00");
     expect(result.eligible).toBe(true);
-    expect(result.publishedAt?.toISOString()).toBe("2026-08-13T06:00:00.000Z");
-    expect(OPERATIONAL_PUBLICATION_CUTOFF.toISOString()).toBe("2026-08-13T06:00:00.000Z");
+    expect(result.publishedAt?.toISOString()).toBe("2026-10-14T06:00:00.000Z");
+    expect(OPERATIONAL_PUBLICATION_CUTOFF.toISOString()).toBe("2026-10-14T06:00:00.000Z");
   });
 
-  it("acepta una publicación durante el 13/08", () => {
-    expect(evaluateNewTenderPublication("13/08/2026 14:30").eligible).toBe(true);
+  it("acepta una publicación durante el 14/10", () => {
+    expect(evaluateNewTenderPublication("14/10/2026 14:30").eligible).toBe(true);
   });
 
   it("rechaza una antigua aunque haya sido descubierta hoy", () => {
-    expect(evaluateNewTenderPublication("2026-08-12")).toMatchObject({
+    expect(evaluateNewTenderPublication("2026-10-13")).toMatchObject({
       eligible: false,
       reason: "published_before_cutoff",
     });
   });
 
   it("rechaza una antigua modificada hoy como alerta nueva", () => {
-    const modifiedToday = "2026-08-13T18:00:00-06:00";
-    expect(modifiedToday).toContain("2026-08-13");
-    expect(evaluateNewTenderPublication("2026-08-01").eligible).toBe(false);
+    const modifiedToday = "2026-10-14T18:00:00-06:00";
+    expect(modifiedToday).toContain("2026-10-14");
+    expect(evaluateNewTenderPublication("2026-10-01").eligible).toBe(false);
+  });
+
+  it("respeta el offset explícito aunque el día UTC sea distinto", () => {
+    expect(evaluateNewTenderPublication("2026-10-14T05:59:59Z").eligible).toBe(false);
+    expect(evaluateNewTenderPublication("2026-10-14T06:00:00Z").eligible).toBe(true);
   });
 
   it("rechaza fecha oficial ausente o inválida", () => {

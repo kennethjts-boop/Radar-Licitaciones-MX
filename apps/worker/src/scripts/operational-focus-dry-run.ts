@@ -3,11 +3,17 @@ import { evaluateAllRadars } from "../matchers/matcher";
 import { normalize } from "../normalizers/procurement.normalizer";
 
 const samples = [
-  { numero: "DRY-CAPUFE", siglas: "CAPUFE", state: "JALISCO", unit: "009J0U001" },
-  { numero: "DRY-IMSS-MOR", siglas: "IMSS", state: "MORELOS", unit: "050GYR007" },
-  { numero: "DRY-OAX", siglas: "IMSS", state: "MORELOS", unit: "050GYR085 - CENTRO VACACIONAL IMSS OAXTEPEC" },
-  { numero: "DRY-MOR", siglas: "ISSSTE", state: "MORELOS", unit: "Delegación estatal" },
-  { numero: "DRY-NO", siglas: "CFE", state: "PUEBLA", unit: "División centro" },
+  { numero: "01", siglas: "CAPUFE", title: "Servicio de seguridad y vigilancia", unit: "Oficinas centrales" },
+  { numero: "02", siglas: "CAPUFE", title: "Adquisición de ambulancias y unidades de auxilio vial", unit: "Oficinas centrales" },
+  { numero: "03", siglas: "CAPUFE", title: "Arrendamiento de vehículos administrativos", unit: "Oficinas centrales" },
+  { numero: "04", siglas: "CAPUFE", title: "Servicio integral de limpieza general", unit: "Oficinas centrales" },
+  { numero: "05", siglas: "CAPUFE", title: "Adquisición de mobiliario y equipamiento", unit: "Oficinas centrales" },
+  { numero: "06", siglas: "CAPUFE", title: "Servicio especial de limpieza de alcance nacional", unit: "Oficinas centrales" },
+  { numero: "07", siglas: "IMSS", title: "Servicio integral de limpieza", unit: "Oficinas centrales" },
+  { numero: "08", siglas: "IMSS", title: "Servicio de seguridad y vigilancia", unit: "Oficinas centrales" },
+  { numero: "09", siglas: "IMSS", title: "Servicio médico integral de estudios de laboratorio clínico", unit: "Oficinas centrales" },
+  { numero: "10", siglas: "IMSS", title: "Servicio médico integral de banco de sangre", unit: "Oficinas centrales" },
+  { numero: "11", siglas: "IMSS", title: "Suministro de alimentos", unit: "050GYR085 - CENTRO VACACIONAL IMSS OAXTEPEC" },
 ];
 
 const radars = getActiveRadars();
@@ -18,14 +24,13 @@ for (const sample of samples) {
     sourceUrl: `https://example.invalid/detalle/${sample.numero}/procedimiento`,
     externalId: sample.numero,
     procedureNumber: sample.numero,
-    title: "Fixture dry-run sin acceso de red",
+    title: sample.title,
     dependencyName: sample.siglas,
     buyingUnit: sample.unit,
-    state: sample.state,
+    state: null,
     rawJson: {
       siglas: sample.siglas,
       unidad_compradora: sample.unit,
-      entidad_federativa_contratacion: sample.state,
     },
   });
   const matches = evaluateAllRadars(procurement, radars, true);
