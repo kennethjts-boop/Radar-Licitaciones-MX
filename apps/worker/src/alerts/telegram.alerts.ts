@@ -815,6 +815,12 @@ function formatOperationalTelegramAlert(alert: EnrichedAlert): string {
   if (location !== "No disponible" && !location.endsWith(", No disponible")) {
     lines.push(`📍 ${escapeHtml(location)}`);
   }
+  if (p.buyingUnit?.trim()) {
+    lines.push(`🏢 <b>Unidad:</b> ${escapeHtml(compactTenderText(p.buyingUnit, 80))}`);
+  }
+  if (typeof p.amount === "number" && Number.isFinite(p.amount) && p.amount > 0) {
+    lines.push(`💰 <b>Monto registrado:</b> ${escapeHtml(formatCurrency(p.amount, p.currency ?? "MXN"))}`);
+  }
   if (formatPublicDate(publication) !== "No disponible") {
     lines.push(`📅 <b>Publicación:</b> ${escapeHtml(formatPublicDate(publication))}`);
   }
