@@ -63,7 +63,6 @@ import { extractTextFromPdf, chunkText } from "../utils/pdf.util";
 import { analyzeTenderDocument, generateEmbedding } from "../ai/openai.service";
 import { BUSINESS_PROFILE } from "../config/business_profile";
 import { sanitizeForKeywordRegex } from "../core/text";
-import { sendCapufePeajeDeepReportToTelegram } from "../scripts/capufe-peaje-deep-report";
 import { classifyAlert } from '../modules/alert-filter';
 import type { CycleMetrics } from '../modules/alert-filter';
 import { getConfig } from '../config/env';
@@ -98,7 +97,6 @@ const RAG_MATCH_THRESHOLD = 0.7;
 const RAG_MATCH_COUNT = 3;
 const MAX_HISTORICAL_CONTEXT_CHARS = 2_000;
 const CATEGORY_NONE = "NONE";
-const CAPUFE_DEEP_REPORT_TERMS = ["capufe", "peaje", "bolet", "papel term", "rollo term", "caseta"];
 
 // Source ID para comprasmx — resuelto en bootstrap y propagado aquí
 let _comprasMxSourceId: string | null = null;
@@ -165,9 +163,7 @@ async function recordCurrentHealthcheck(): Promise<void> {
 
 const COLLECT_TIMEOUT_MS = 25 * 60 * 1000; // 25 minutos
 const ATTACHMENT_PIPELINE_TIMEOUT_MS = 3 * 60 * 1000;
-const CAPUFE_DEEP_REPORT_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_ATTACHMENT_PIPELINES_PER_CYCLE = 5;
-const MAX_CAPUFE_DEEP_REPORTS_PER_CYCLE = 2;
 
 export interface CollectJobResult {
   status:
@@ -508,8 +504,6 @@ export async function runCollectJob(): Promise<CollectJobResult> {
     let itemsUpdated = 0;
     let totalMatches = 0;
     let attachmentPipelinesExecuted = 0;
-    let capufeDeepReportsAttempted = 0;
-    const capufeDeepReportsSent = new Set<string>();
     let alertsSentThisCycle = 0;
     const queuedProcurementIds = new Set<string>();
     const publicDocumentsByProcurementId = new Map<string, PublicTenderDocument[]>();
@@ -585,7 +579,7 @@ export async function runCollectJob(): Promise<CollectJobResult> {
           else if (upsertResult.isUpdated) itemsUpdated++;
 
           // Solo evaluar matches si es nuevo o cambió
-          if (!upsertResult.isNew && !upsertResult.isUpdated) continue;
+          if (!upsertResult.isNew && !upsertResult.isUpdated && item.rawJson.operational_replay !== true) continue;
 
           // Filtrar licitaciones vencidas: no generar alertas si ya pasó la fecha de apertura.
           // Excepción: las DESIERTA siempre pasan (classifyAlert decidirá si son recientes).
@@ -652,15 +646,9 @@ export async function runCollectJob(): Promise<CollectJobResult> {
             );
           }
 
-          const canonicalLower = item.canonicalText.toLowerCase();
-          const dependencyLower = (item.dependencyName ?? "").toLowerCase();
-          const isCapufeTender =
-            dependencyLower.includes("capufe") &&
-            CAPUFE_DEEP_REPORT_TERMS.some((term) => canonicalLower.includes(term));
-
           let fechaPublicacion: string | null = item.publicationDate;
           const shouldRunAttachmentPipeline =
-            publicationDecision.eligible && (matches.length > 0 || isCapufeTender);
+            publicationDecision.eligible && matches.length > 0;
           if (shouldRunAttachmentPipeline) {
             if (attachmentPipelinesExecuted < MAX_ATTACHMENT_PIPELINES_PER_CYCLE) {
               attachmentPipelinesExecuted++;
@@ -702,51 +690,6 @@ export async function runCollectJob(): Promise<CollectJobResult> {
               await updateOfficialPublicationDate(
                 upsertResult.procurementId,
                 formatInTimeZone(publicationDecision.publishedAt, MX_TIMEZONE, "yyyy-MM-dd"),
-              );
-            }
-          }
-
-          if (
-            publicationDecision.eligible &&
-            isCapufeTender &&
-            !capufeDeepReportsSent.has(upsertResult.procurementId)
-          ) {
-            if (capufeDeepReportsAttempted < MAX_CAPUFE_DEEP_REPORTS_PER_CYCLE) {
-              capufeDeepReportsAttempted++;
-              try {
-                const reportSent = await withTimeout(
-                  sendCapufePeajeDeepReportToTelegram({
-                    procurementId: upsertResult.procurementId,
-                    forceProcess: true,
-                  }),
-                  CAPUFE_DEEP_REPORT_TIMEOUT_MS,
-                  `capufe-deep-report:${item.externalId}`,
-                );
-                if (reportSent) {
-                  capufeDeepReportsSent.add(upsertResult.procurementId);
-                } else {
-                  log.info(
-                    { procurementId: upsertResult.procurementId, externalId: item.externalId },
-                    "Esperando documentos de CAPUFE...",
-                  );
-                }
-              } catch (deepReportErr) {
-                log.warn(
-                  {
-                    err: deepReportErr,
-                    procurementId: upsertResult.procurementId,
-                    externalId: item.externalId,
-                  },
-                  "Falló envío de Reporte Deep CAPUFE a Telegram",
-                );
-              }
-            } else {
-              log.warn(
-                {
-                  externalId: item.externalId,
-                  maxPerCycle: MAX_CAPUFE_DEEP_REPORTS_PER_CYCLE,
-                },
-                "Presupuesto de reportes CAPUFE agotado para este ciclo; se continúa con alertas",
               );
             }
           }
@@ -830,9 +773,10 @@ export async function runCollectJob(): Promise<CollectJobResult> {
               const radarDbId = radarDbIds.get(match.radarKey);
 
               // Persistir match en DB antes de alertar
-              if (radarDbId) {
-                await upsertMatch(enrichableMatch, radarDbId);
+              if (!radarDbId) {
+                throw new Error(`Radar ${match.radarKey} ausente en DB; se requiere migración de octubre`);
               }
+              await upsertMatch(enrichableMatch, radarDbId);
 
               if (!publicationDecision.eligible) {
                 log.info(

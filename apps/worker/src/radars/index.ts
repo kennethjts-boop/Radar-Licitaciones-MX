@@ -19,6 +19,24 @@ import { OPERATIONAL_FOCUS_KEYS } from "./operational-focus.matcher";
 
 const ACTIVE_FOCUS_KEYS = new Set<string>(Object.values(OPERATIONAL_FOCUS_KEYS));
 
+const OCTOBER_FOCUSES: Array<[string, string, string]> = [
+  [OPERATIONAL_FOCUS_KEYS.capufeSecurity, "CAPUFE — Seguridad y vigilancia", "Guardias y vigilancia presencial"],
+  [OPERATIONAL_FOCUS_KEYS.capufeEmergencyVehicles, "CAPUFE — Vehículos de emergencia y auxilio vial", "Vehículos de rescate y auxilio"],
+  [OPERATIONAL_FOCUS_KEYS.capufeAdministrativeVehicles, "CAPUFE — Vehículos administrativos", "Flota administrativa"],
+  [OPERATIONAL_FOCUS_KEYS.capufeGeneralCleaning, "CAPUFE — Limpieza integral general", "Servicios generales de limpieza"],
+  [OPERATIONAL_FOCUS_KEYS.capufeFurniture, "CAPUFE — Mobiliario y equipamiento", "Adquisición de mobiliario"],
+  [OPERATIONAL_FOCUS_KEYS.capufeSpecialNationalCleaning, "CAPUFE — Limpieza especial nacional", "Limpieza especial con cobertura nacional"],
+  [OPERATIONAL_FOCUS_KEYS.imssCleaning, "IMSS — Limpieza nacional", "Servicios de limpieza"],
+  [OPERATIONAL_FOCUS_KEYS.imssSecurity, "IMSS — Seguridad y vigilancia nacional", "Guardias y vigilancia presencial"],
+  [OPERATIONAL_FOCUS_KEYS.imssClinicalLaboratory, "IMSS — Estudios de laboratorio clínico", "Servicio médico integral de laboratorio"],
+  [OPERATIONAL_FOCUS_KEYS.imssBloodBank, "IMSS — Banco de sangre", "Servicio médico integral de banco de sangre"],
+];
+
+const OCTOBER_RADARS: RadarConfig[] = OCTOBER_FOCUSES.map(([key, name, description]) => ({
+  key, name, description, isActive: true, priority: 1, scheduleMinutes: 30,
+  minScore: 1, includeTerms: [], excludeTerms: [], geoTerms: [], entityTerms: [], rules: [],
+}));
+
 /**
  * Lista canónica de todos los radares.
  * El matcher itera sobre esta lista en cada ciclo.
@@ -35,15 +53,17 @@ const ALL_RADAR_DEFINITIONS: RadarConfig[] = [
   imssBienestarMorelosRadar,
   habitatMorelosRadar,
   ...BUSINESS_LINE_RADARS,
+  ...OCTOBER_RADARS,
 ];
 
 /**
  * Estado operativo canónico. Las definiciones históricas se conservan, pero
- * solamente los cuatro focos aprobados pueden participar en el matcher.
+ * solamente los once focos aprobados pueden participar en el matcher.
  */
 export const RADARS: RadarConfig[] = ALL_RADAR_DEFINITIONS.map((radar) => ({
   ...radar,
   isActive: ACTIVE_FOCUS_KEYS.has(radar.key),
+  priority: radar.key === OPERATIONAL_FOCUS_KEYS.imssOaxtepec ? 2 : radar.priority,
 }));
 
 /**

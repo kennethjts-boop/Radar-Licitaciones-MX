@@ -4,9 +4,8 @@
  * MODO 1 — Periodic Incremental Listing Scan:
  *   A. Listing Scan superficial desde COMPRASMX_SEED_URL
  *   B. Comparación de lightweight_fingerprint contra DB
- *   C. Detail Fetch solo si el expediente es nuevo o mutó
- *   D. Attachments solo si hubo Detail Fetch
- *   E. Stop Condition si se alcanza COMPRASMX_STOP_AFTER_KNOWN_STREAK consecutivos idénticos
+ *   C. Reevalúa expedientes conocidos que aún no tienen match de la versión vigente
+ *   D. El detalle y los adjuntos se resuelven más adelante sólo para candidatos
  *
  * MODO 2 — Daily Direct Recheck:
  *   Toma expedientes activos/en_proceso desde DB y entra directo a source_url
@@ -32,6 +31,8 @@ import { normalize } from "../../normalizers/procurement.normalizer";
 import { getConfig } from "../../config/env";
 import { getSupabaseClient } from "../../storage/client";
 import { withRetries, isRetryableNetworkError } from "../../utils/retry.util";
+import { detectOperationalFocus, OPERATIONAL_FOCUS_KEYS } from "../../radars/operational-focus.matcher";
+import { evaluateNewTenderPublication } from "../../modules/operational-alerts/eligibility";
 
 const log = createModuleLogger("collector-comprasmx");
 
@@ -127,10 +128,8 @@ export async function collectComprasMx(
   const config = getConfig();
   const baseUrl = config.COMPRASMX_SEED_URL;
   const maxPages = options.maxPages ?? config.COMPRASMX_MAX_LIST_PAGES;
-  const MAX_STREAK = config.COMPRASMX_STOP_AFTER_KNOWN_STREAK;
-
   log.info(
-    { mode: "listing_scan", baseUrl, maxPages, maxStreak: MAX_STREAK },
+    { mode: "listing_scan", baseUrl, maxPages },
     "Iniciando extracción ComprasMX",
   );
 
@@ -230,30 +229,56 @@ export async function collectComprasMx(
         // ── B. Comparar contra DB ──────────────────────────────────────────
         let needsDetail = true;
         let isMutation = false;
+        let replayKnown = false;
+        let replayPublicationDate: string | null = null;
 
         if (sourceId) {
           const { data: existing } = await db
             .from("procurements")
-            .select("id, lightweight_fingerprint, source_url")
+            .select("id, lightweight_fingerprint, source_url, publication_date")
             .eq("source_id", sourceId)
             .eq("external_id", row.externalId)
             .single();
 
           if (existing) {
             if (existing.lightweight_fingerprint === lightweightFingerprint) {
-              // ── C. Fingerprint coincide → saltar Detail Fetch ───────────
-              needsDetail = false;
-              knownStreak++;
-              log.info(
-                { externalId: row.externalId, knownStreak },
-                "⏩ skipping detail fetch fingerprint matched",
-              );
-              skippedByFingerprint++;
+              const apiRegistro = apiRegistros.get(row.externalId);
+              if (
+                apiRegistro &&
+                isActiveStatus(apiRegistro.estatus_alterno) &&
+                (!existing.publication_date || evaluateNewTenderPublication(existing.publication_date).eligible)
+              ) {
+                const preview = normalize(apiRegistroToRawInput(apiRegistro));
+                const relevant = Object.values(OPERATIONAL_FOCUS_KEYS).some((key) =>
+                  detectOperationalFocus(preview, key) !== null
+                );
+                if (relevant) {
+                  const { data: currentMatches, error: matchError } = await db
+                    .from("matches")
+                    .select("id, radar_config_versions!inner(version_key)")
+                    .eq("procurement_id", existing.id)
+                    .eq("radar_config_versions.version_key", "operational_20261014")
+                    .limit(1);
+                  if (matchError) {
+                    log.warn({ err: matchError, externalId: row.externalId }, "No se pudo verificar match vigente; reintentando candidato");
+                  }
+                  replayKnown = Boolean(!existing.publication_date || matchError || !currentMatches?.length);
+                  replayPublicationDate = existing.publication_date;
+                }
+              }
+              needsDetail = replayKnown;
+              isMutation = replayKnown;
+              if (!replayKnown) {
+                skippedByFingerprint++;
+                knownStreak++;
+              } else {
+                knownStreak = 0;
+              }
             } else {
               // ── C. Fingerprint cambió → sí Detail Fetch ────────────────
               needsDetail = true;
               isMutation = true;
-              knownStreak = 0; // Racha se rompe
+              knownStreak = 0;
               log.info(
                 { externalId: row.externalId },
                 "🔄 detail fetch triggered fingerprint changed",
@@ -263,22 +288,12 @@ export async function collectComprasMx(
             // ── C. Expediente nuevo → sí Detail Fetch ─────────────────────
             needsDetail = true;
             isMutation = false;
-            knownStreak = 0; // Racha se rompe
+            knownStreak = 0;
             log.info(
               { externalId: row.externalId },
               "🆕 detail fetch triggered new record",
             );
           }
-        }
-
-        // ── E. Stop Condition ──────────────────────────────────────────────
-        if (knownStreak >= MAX_STREAK) {
-          stopReason = `stop condition triggered — ${MAX_STREAK} consecutive known records with matching fingerprint`;
-          log.info(
-            { knownStreak, maxStreak: MAX_STREAK, pagesScanned },
-            stopReason,
-          );
-          break;
         }
 
         if (!needsDetail) continue;
@@ -319,6 +334,13 @@ export async function collectComprasMx(
           const normalized = normalize(rawInput);
           // Inyectar el fingerprint superficial calculado en listing
           normalized.lightweightFingerprint = lightweightFingerprint;
+          if (replayKnown) {
+            normalized.rawJson.operational_replay = true;
+            if (replayPublicationDate) {
+              normalized.publicationDate = replayPublicationDate;
+              normalized.rawJson.fecha_publicacion = replayPublicationDate;
+            }
+          }
 
           log.info(
             { externalId: row.externalId, sourceUrl: rawInput.sourceUrl },

@@ -2,7 +2,7 @@ import { isValid, parse, parseISO } from "date-fns";
 import { fromZonedTime } from "date-fns-tz";
 import { MX_TIMEZONE } from "../../core/time";
 
-export const OPERATIONAL_PUBLICATION_CUTOFF_LOCAL = "2026-08-13T00:00:00";
+export const OPERATIONAL_PUBLICATION_CUTOFF_LOCAL = "2026-10-14T00:00:00";
 export const OPERATIONAL_PUBLICATION_CUTOFF = fromZonedTime(
   OPERATIONAL_PUBLICATION_CUTOFF_LOCAL,
   MX_TIMEZONE,

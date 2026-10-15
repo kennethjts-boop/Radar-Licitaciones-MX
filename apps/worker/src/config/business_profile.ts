@@ -1,7 +1,7 @@
 export const BUSINESS_PROFILE = {
   // CAPA 1: EL MURO (Si existe alguna de estas, se ignora el archivo de inmediato)
   EXCLUDED_KEYWORDS: [
-    "limpieza", "jardinería", "jardineria", "vigilancia", "seguridad privada",
+    "jardinería", "jardineria",
     "fumigación", "fumigacion", "mensajería", "mensajeria", "fotocopiado",
     "copiado", "papelería", "papeleria", "cafetería", "cafeteria",
   ],
