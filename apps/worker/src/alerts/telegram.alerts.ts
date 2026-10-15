@@ -798,7 +798,9 @@ function formatOperationalTelegramAlert(alert: EnrichedAlert): string {
   const clarification = rawDate(raw, ["fecha_aclaraciones", "fecha_junta_aclaraciones", "fecha_junta"]);
   const opening = rawDate(raw, ["fecha_apertura", "fecha_presentacion_apertura"]) ?? p.openingDate;
   const reference = p.procedureNumber ?? p.licitationNumber ?? p.externalId;
-  const documents = (alert.publicDocuments ?? []).filter((doc) => doc.isAvailable && doc.publicUrl);
+  const documents = (alert.publicDocuments ?? []).filter(
+    (doc) => doc.isAvailable && /^https:\/\//i.test(doc.publicUrl),
+  );
   const location = buildPublicLocation(p.state, p.municipality);
   const sourceUrl = p.sourceUrl;
   const procedureType = inferPublicProcedureType(p).bodyLabel;
@@ -825,7 +827,13 @@ function formatOperationalTelegramAlert(alert: EnrichedAlert): string {
   lines.push(
     `📎 <b>Documentos:</b> ${documents.length > 0 ? `${documents.length} enlace(s) detectado(s)` : "Consultar expediente"}`,
   );
-  if (sourceUrl?.trim()) {
+  // Accesos inmediatos a dos anexos sin exponer URLs kilométricas.
+  for (const [index, doc] of documents.slice(0, 2).entries()) {
+    lines.push(
+      `  ↳ <a href="${escapeHtml(doc.publicUrl)}">${escapeHtml(compactTenderText(publicDocumentName(doc, index), 48))}</a>`,
+    );
+  }
+  if (sourceUrl?.trim() && /^https:\/\//i.test(sourceUrl)) {
     lines.push("", `🔗 <a href="${escapeHtml(sourceUrl)}"><b>Abrir expediente en ComprasMX</b></a>`);
   }
   return truncateForTelegram(lines.join("\n"));
