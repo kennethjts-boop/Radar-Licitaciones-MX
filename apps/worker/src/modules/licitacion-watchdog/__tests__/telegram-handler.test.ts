@@ -51,24 +51,13 @@ describe("comandos Telegram watchdog", () => {
     (removeDynamicTarget as jest.Mock).mockResolvedValue(true);
   });
 
-  it("/vigilar activa el target y programa baseline silencioso", async () => {
+  it("/vigilar no activa expedientes manualmente", async () => {
     await handleVigilarCommand(bot, "123", target.numero);
 
-    expect(addDynamicTarget).toHaveBeenCalledWith(target.numero);
-    expect(runLicitacionWatchdog).toHaveBeenCalledWith([target]);
-    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("Watchdog activo");
-    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("baseline silencioso");
-  });
-
-  it("/vigilar repetido no duplica ni reconstruye un baseline existente", async () => {
-    (listPersistentTargets as jest.Mock).mockResolvedValue([target]);
-    (getLatestSnapshot as jest.Mock).mockResolvedValue({ id: "snapshot-1" });
-
-    await handleVigilarCommand(bot, "123", target.numero);
-
+    expect(addDynamicTarget).not.toHaveBeenCalled();
     expect(runLicitacionWatchdog).not.toHaveBeenCalled();
-    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("Ya se encuentra bajo vigilancia");
-    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("reutiliza el historial");
+    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("automáticamente");
+    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("no permite altas manuales");
   });
 
   it("/novigilar desactiva sin afirmar que elimina historia", async () => {
