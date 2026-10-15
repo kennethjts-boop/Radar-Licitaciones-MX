@@ -41,8 +41,8 @@ export async function formatWatchdogNarrative(input: NarrativeInput): Promise<Re
       `${label.icon} <b>GOSS · ${label.title}</b>`,
       `<b>${safe(input.alias)}</b>`,
       "",
-      `📌 ${what}`,
-      `✅ <b>Revisar:</b> ${action}`,
+      `📌 ${safe(what.replace(/<\/?b>/g, ""))}`,
+      `✅ <b>Revisar:</b> ${safe(action)}`,
     ];
     const dateCategory = ["fecha_apertura", "fecha_junta", "fecha_fallo"].includes(deterministic.category);
     if (dateCategory && clean.length > 0) {
