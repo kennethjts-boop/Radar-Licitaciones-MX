@@ -17,6 +17,45 @@ const MAX_TECHNICAL_DETAIL_LINES = 20;
 export async function formatWatchdogNarrative(input: NarrativeInput): Promise<RenderedNarrative> {
   const deterministic = buildDeterministicNarrative(input);
 
+  // Cambios reconocidos: aviso breve, accionable y sin llamada de IA.
+  // No reducir los casos desconocidos: conservan detalle técnico para auditoría.
+  if (deterministic.category !== "desconocido") {
+    const original = deterministic.text.split("\n");
+    const changedIdx = original.indexOf("¿QUÉ PASÓ?");
+    const actionIdx = original.indexOf("¿QUÉ DEBO HACER?");
+    const what = changedIdx >= 0 ? (original[changedIdx + 1] ?? "") : "";
+    const action = actionIdx >= 0 ? (original[actionIdx + 1] ?? "").replace(/^1\.\s*/, "") : "";
+    const safe = (value: string) => value
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const labels: Record<string, { icon: string; title: string }> = {
+      cambio_estatus: { icon: "🔄", title: "ESTATUS MODIFICADO" },
+      fecha_apertura: { icon: "⏰", title: "CAMBIÓ LA APERTURA" },
+      fecha_junta: { icon: "🗣", title: "JUNTA DE ACLARACIONES" },
+      fecha_fallo: { icon: "📋", title: "NOVEDADES DEL FALLO" },
+      documento_nuevo: { icon: "📎", title: "DOCUMENTACIÓN ACTUALIZADA" },
+      tabla_modificada: { icon: "🧾", title: "PARTIDAS MODIFICADAS" },
+    };
+    const label = labels[deterministic.category] ?? { icon: "🔔", title: "CAMBIO DETECTADO" };
+    const clean = filterAndDeduplicateChanges(input.changes);
+    const lines = [
+      `${label.icon} <b>GOSS · ${label.title}</b>`,
+      `<b>${safe(input.alias)}</b>`,
+      "",
+      `📌 ${safe(what.replace(/<\/?b>/g, ""))}`,
+      `✅ <b>Revisar:</b> ${safe(action)}`,
+    ];
+    const dateCategory = ["fecha_apertura", "fecha_junta", "fecha_fallo"].includes(deterministic.category);
+    if (dateCategory && clean.length > 0) {
+      const date = extractDateFromChange(clean[0]);
+      if (date) lines.push(`🕒 <b>Fecha señalada:</b> ${safe(date)}`);
+    }
+    if (clean.length > 1) lines.push(`📑 ${clean.length} cambios detectados; consultar expediente completo.`);
+    if (/^https:\/\//.test(input.expedienteUrl)) {
+      lines.push("", `🔗 <a href="${safe(input.expedienteUrl)}"><b>Abrir expediente en ComprasMX</b></a>`);
+    }
+    return { text: lines.join("\n"), category: deterministic.category };
+  }
+
   // Extraer las líneas base del mensaje determinista
   const lines = deterministic.text.split("\n");
   const quePasoIdx = lines.findIndex((l) => l === "¿QUÉ PASÓ?");

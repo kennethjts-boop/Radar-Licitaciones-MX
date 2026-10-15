@@ -25,6 +25,7 @@ import {
   recordTelegramSendSuccess,
 } from "../core/telegram-commands-health";
 import { detectPriorityAlertProfile } from "../modules/priority-alerts";
+import { OPERATIONAL_FOCUS_KEYS } from "../radars/operational-focus.matcher";
 import { telegramBotConstructorOptions } from "../core/telegram-client-options";
 import { writeTelegramLog } from "../storage/telegram-log.repo";
 
@@ -764,9 +765,93 @@ function formatPublicTenderAlert(
 }
 
 /**
+ * Tarjeta compacta exclusivamente para los 11 radares operativos de octubre.
+ * No modifica formatos legacy ni WhatsApp.
+ * Nunca afirma que los documentos ya se descargaron ni que el watchdog
+ * ya se activó: ambas operaciones ocurren fuera de este formateador.
+ */
+const OPERATIONAL_TELEGRAM_LABELS: Readonly<Record<string, { icon: string; label: string }>> = {
+  [OPERATIONAL_FOCUS_KEYS.capufeSecurity]: { icon: "🛡️", label: "CAPUFE · Vigilancia" },
+  [OPERATIONAL_FOCUS_KEYS.capufeEmergencyVehicles]: { icon: "🚑", label: "CAPUFE · Emergencias" },
+  [OPERATIONAL_FOCUS_KEYS.capufeAdministrativeVehicles]: { icon: "🚙", label: "CAPUFE · Vehículos administrativos" },
+  [OPERATIONAL_FOCUS_KEYS.capufeGeneralCleaning]: { icon: "🧹", label: "CAPUFE · Limpieza general" },
+  [OPERATIONAL_FOCUS_KEYS.capufeFurniture]: { icon: "🪑", label: "CAPUFE · Mobiliario" },
+  [OPERATIONAL_FOCUS_KEYS.capufeSpecialNationalCleaning]: { icon: "🧼", label: "CAPUFE · Limpieza nacional" },
+  [OPERATIONAL_FOCUS_KEYS.imssCleaning]: { icon: "🧹", label: "IMSS · Limpieza" },
+  [OPERATIONAL_FOCUS_KEYS.imssSecurity]: { icon: "🛡️", label: "IMSS · Vigilancia" },
+  [OPERATIONAL_FOCUS_KEYS.imssClinicalLaboratory]: { icon: "🧪", label: "IMSS · Laboratorio clínico" },
+  [OPERATIONAL_FOCUS_KEYS.imssBloodBank]: { icon: "🩸", label: "IMSS · Banco de sangre" },
+  [OPERATIONAL_FOCUS_KEYS.imssOaxtepec]: { icon: "📍", label: "IMSS · Oaxtepec" },
+};
+
+function compactTenderText(value: string | null | undefined, maxLength = 175): string {
+  const text = (value ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "Objeto no disponible";
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function formatOperationalTelegramAlert(alert: EnrichedAlert): string {
+  const p = alert.procurement;
+  const meta = OPERATIONAL_TELEGRAM_LABELS[alert.radarKey];
+  const raw = p.rawJson as Record<string, unknown>;
+  const publication = rawDate(raw, ["fecha_publicacion", "visibleDate"]) ?? p.publicationDate;
+  const clarification = rawDate(raw, ["fecha_aclaraciones", "fecha_junta_aclaraciones", "fecha_junta"]);
+  const opening = rawDate(raw, ["fecha_apertura", "fecha_presentacion_apertura"]) ?? p.openingDate;
+  const reference = p.procedureNumber ?? p.licitationNumber ?? p.externalId;
+  const documents = (alert.publicDocuments ?? []).filter(
+    (doc) => doc.isAvailable && /^https:\/\//i.test(doc.publicUrl),
+  );
+  const location = buildPublicLocation(p.state, p.municipality);
+  const sourceUrl = p.sourceUrl;
+  const procedureType = inferPublicProcedureType(p).bodyLabel;
+  const lines = [
+    "🚨 <b>GOSS · NUEVA LICITACIÓN</b>",
+    `${meta.icon} <b>${escapeHtml(meta.label)}</b>`,
+    "",
+    `<b>${escapeHtml(compactTenderText(p.title))}</b>`,
+    `🔢 <code>${escapeHtml(reference || "Sin número")}</code>`,
+    `🏷 ${escapeHtml(procedureType)}`,
+  ];
+  if (location !== "No disponible" && !location.endsWith(", No disponible")) {
+    lines.push(`📍 ${escapeHtml(location)}`);
+  }
+  if (p.buyingUnit?.trim()) {
+    lines.push(`🏢 <b>Unidad:</b> ${escapeHtml(compactTenderText(p.buyingUnit, 80))}`);
+  }
+  if (typeof p.amount === "number" && Number.isFinite(p.amount) && p.amount > 0) {
+    lines.push(`💰 <b>Monto registrado:</b> ${escapeHtml(formatCurrency(p.amount, p.currency ?? "MXN"))}`);
+  }
+  if (formatPublicDate(publication) !== "No disponible") {
+    lines.push(`📅 <b>Publicación:</b> ${escapeHtml(formatPublicDate(publication))}`);
+  }
+  if (formatPublicDate(clarification) !== "No disponible") {
+    lines.push(`🗣 <b>Junta:</b> ${escapeHtml(formatPublicDate(clarification))}`);
+  }
+  if (formatPublicDate(opening) !== "No disponible") {
+    lines.push(`⏰ <b>Apertura:</b> ${escapeHtml(formatPublicDate(opening))}`);
+  }
+  lines.push(
+    `📎 <b>Documentos:</b> ${documents.length > 0 ? `${documents.length} enlace(s) detectado(s)` : "Consultar expediente"}`,
+  );
+  // Accesos inmediatos a dos anexos sin exponer URLs kilométricas.
+  for (const [index, doc] of documents.slice(0, 2).entries()) {
+    lines.push(
+      `  ↳ <a href="${escapeHtml(doc.publicUrl)}">${escapeHtml(compactTenderText(publicDocumentName(doc, index), 48))}</a>`,
+    );
+  }
+  if (sourceUrl?.trim() && /^https:\/\//i.test(sourceUrl)) {
+    lines.push("", `🔗 <a href="${escapeHtml(sourceUrl)}"><b>Abrir expediente en ComprasMX</b></a>`);
+  }
+  return truncateForTelegram(lines.join("\n"));
+}
+
+/**
  * Construye el mensaje HTML para alerta de nuevo match.
  */
 export function formatMatchAlert(alert: EnrichedAlert): string {
+  if (Object.prototype.hasOwnProperty.call(OPERATIONAL_TELEGRAM_LABELS, alert.radarKey)) {
+    return formatOperationalTelegramAlert(alert);
+  }
   return formatPublicTenderAlert(alert, { escapeHtmlEntities: true });
 }
 

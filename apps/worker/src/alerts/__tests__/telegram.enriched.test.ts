@@ -483,6 +483,63 @@ describe("formatMatchAlert public tender format", () => {
     expect(msg).toContain("🎯 Perfil detectado: Mantenimiento Peaje/Telepeaje CAPUFE-FONADIN");
   });
 
+  it.each([
+    ["capufe_seguridad_20261014", "🛡️", "CAPUFE · Vigilancia"],
+    ["capufe_emergencia_vehiculos_20261014", "🚑", "CAPUFE · Emergencias"],
+    ["capufe_vehiculos_administrativos_20261014", "🚙", "CAPUFE · Vehículos administrativos"],
+    ["capufe_limpieza_general_20261014", "🧹", "CAPUFE · Limpieza general"],
+    ["capufe_mobiliario_20261014", "🪑", "CAPUFE · Mobiliario"],
+    ["capufe_limpieza_especial_nacional_20261014", "🧼", "CAPUFE · Limpieza nacional"],
+    ["imss_limpieza_20261014", "🧹", "IMSS · Limpieza"],
+    ["imss_seguridad_20261014", "🛡️", "IMSS · Vigilancia"],
+    ["imss_laboratorio_clinico_20261014", "🧪", "IMSS · Laboratorio clínico"],
+    ["imss_banco_sangre_20261014", "🩸", "IMSS · Banco de sangre"],
+    ["imss_bienestar_morelos", "📍", "IMSS · Oaxtepec"],
+  ])("mensaje compacto para el foco %s", (radarKey, icon, label) => {
+    const msg = formatMatchAlert(makeAlert({
+      radarKey,
+      procurement: makeProcurement({
+        title: "Servicio integral <nuevo> & limpieza",
+        publicationDate: "2026-10-14",
+        openingDate: "2026-10-27T10:00:00",
+        sourceUrl: "https://comprasmx.example/detalle/123?x=1&y=2",
+        rawJson: { fecha_aclaraciones: "2026-10-20T11:00:00" },
+      }),
+      publicDocuments: [makePublicDoc("Anexo técnico", "https://files.example/anexo.pdf")],
+    }));
+
+    expect(msg).toContain("🚨 <b>GOSS · NUEVA LICITACIÓN</b>");
+    expect(msg).toContain(`${icon} <b>${label}</b>`);
+    expect(msg).toContain("Servicio integral &lt;nuevo&gt; &amp; limpieza");
+    expect(msg).toContain("📅 <b>Publicación:</b>");
+    expect(msg).toContain("🗣 <b>Junta:</b>");
+    expect(msg).toContain("⏰ <b>Apertura:</b>");
+    expect(msg).toContain("1 enlace(s) detectado(s)");
+    expect(msg).toContain('<a href="https://comprasmx.example/detalle/123?x=1&amp;y=2">');
+    expect(msg).not.toContain("Techo presupuestal");
+    expect(msg).not.toContain("Watchdog activo");
+    expect(msg.length).toBeLessThan(1100);
+  });
+
+  it("aviso compacto omite fechas no verificadas y no presume documentos descargados", () => {
+    const msg = formatMatchAlert(makeAlert({
+      radarKey: "imss_limpieza_20261014",
+      procurement: makeProcurement({
+        publicationDate: null,
+        openingDate: null,
+        state: null,
+        municipality: null,
+        rawJson: {},
+      }),
+      publicDocuments: [],
+    }));
+    expect(msg).not.toContain("📅 <b>Publicación:</b>");
+    expect(msg).not.toContain("⏰ <b>Apertura:</b>");
+    expect(msg).not.toContain("📍 No disponible");
+    expect(msg).toContain("📎 <b>Documentos:</b> Consultar expediente");
+    expect(msg).not.toContain("descargados");
+  });
+
   it("formato prioritario incluye links visibles de anexos", () => {
     const msg = formatMatchAlert(makeAlert({
       procurement: makeProcurement({
