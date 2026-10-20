@@ -32,6 +32,7 @@ import { getConfig } from "../../config/env";
 import { getSupabaseClient } from "../../storage/client";
 import { withRetries, isRetryableNetworkError } from "../../utils/retry.util";
 import { detectOperationalFocus, OPERATIONAL_FOCUS_KEYS } from "../../radars/operational-focus.matcher";
+import { OPERATIONAL_RADAR_VERSION_KEY } from "../../radars/operational-version";
 import { evaluateNewTenderPublication } from "../../modules/operational-alerts/eligibility";
 
 const log = createModuleLogger("collector-comprasmx");
@@ -257,7 +258,7 @@ export async function collectComprasMx(
                     .from("matches")
                     .select("id, radar_config_versions!inner(version_key)")
                     .eq("procurement_id", existing.id)
-                    .eq("radar_config_versions.version_key", "operational_20261014")
+                    .eq("radar_config_versions.version_key", OPERATIONAL_RADAR_VERSION_KEY)
                     .limit(1);
                   if (matchError) {
                     log.warn({ err: matchError, externalId: row.externalId }, "No se pudo verificar match vigente; reintentando candidato");

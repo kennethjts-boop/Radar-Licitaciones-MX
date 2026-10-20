@@ -6,6 +6,7 @@
 import { getSupabaseClient } from "../../storage/client";
 import { createModuleLogger } from "../../core/logger";
 import { OPERATIONAL_FOCUS_KEYS } from "../../radars/operational-focus.matcher";
+import { OPERATIONAL_RADAR_VERSION_KEY } from "../../radars/operational-version";
 import {
   evaluateNewTenderPublication,
   OPERATIONAL_PUBLICATION_CUTOFF,
@@ -13,7 +14,6 @@ import {
 import { activateWatchdogTarget, listPersistentTargets } from "./target-manager";
 
 const log = createModuleLogger("licitacion-watchdog:auto-activation");
-const OCTOBER_VERSION = "operational_20261014";
 const ALLOWED_RADARS = new Set<string>(Object.values(OPERATIONAL_FOCUS_KEYS));
 
 interface AlertCandidate {
@@ -35,11 +35,18 @@ function single<T>(value: T | T[] | null): T | null {
 function isEligibleAlert(row: AlertCandidate): boolean {
   const radar = single(row.radars);
   const procurement = single(row.procurements);
+  // La fecha de publicación puede estar ausente (`publication_date` NULL): la
+  // existencia de la alerta `new_match` ya demuestra que fue evaluada como
+  // elegible en el momento de crearse, así que no se descarta la vigilancia
+  // por un dato que hoy no está disponible.
+  const publicationDate = procurement?.publication_date ?? null;
+  const publicationEligible =
+    publicationDate === null || evaluateNewTenderPublication(publicationDate).eligible;
   return row.alert_type === "new_match" &&
     row.telegram_status === "sent" &&
     Boolean(row.procurement_id && row.radar_id && row.sent_at) &&
     Boolean(radar?.is_active && ALLOWED_RADARS.has(radar.key)) &&
-    Boolean(procurement && evaluateNewTenderPublication(procurement.publication_date).eligible) &&
+    publicationEligible &&
     Date.parse(row.created_at) >= OPERATIONAL_PUBLICATION_CUTOFF.getTime() &&
     Date.parse(row.sent_at ?? "") >= OPERATIONAL_PUBLICATION_CUTOFF.getTime();
 }
@@ -50,7 +57,7 @@ async function hasCurrentOctoberMatch(row: AlertCandidate): Promise<boolean> {
     .select("id, radar_config_versions!inner(version_key)")
     .eq("procurement_id", row.procurement_id!)
     .eq("radar_id", row.radar_id!)
-    .eq("radar_config_versions.version_key", OCTOBER_VERSION)
+    .eq("radar_config_versions.version_key", OPERATIONAL_RADAR_VERSION_KEY)
     .limit(1);
   if (error) throw new Error(`No se pudo comprobar match de octubre: ${error.message}`);
   return Boolean(data?.length);
@@ -104,7 +111,6 @@ export async function reconcileWatchdogFromSentAlerts(): Promise<number> {
     .eq("telegram_status", "sent")
     .eq("radars.is_active", true)
     .gte("created_at", OPERATIONAL_PUBLICATION_CUTOFF.toISOString())
-    .gte("procurements.publication_date", "2026-10-14")
     .order("sent_at", { ascending: false })
     .limit(300);
   if (error) throw new Error(`No se pudieron conciliar alertas watchdog: ${error.message}`);
