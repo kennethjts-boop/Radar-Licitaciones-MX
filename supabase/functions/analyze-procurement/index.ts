@@ -11,6 +11,12 @@ const PROCUREMENT_COOLDOWN_MS = 10 * 60 * 1000;
 /** Tope de peticiones por ventana para un mismo llamador. */
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 10;
+/**
+ * Presupuesto GLOBAL de análisis nuevos por hora (todas las instancias). Se
+ * cuenta en `saas_analyses`, sin infraestructura adicional. Configurable con
+ * `ANALYZE_MAX_PER_HOUR`.
+ */
+const DEFAULT_MAX_ANALYSES_PER_HOUR = 20;
 
 const EXPERT_SYSTEM_PROMPT = `Eres un Consultor Experto en Licitaciones Públicas Mexicanas con 20 años de experiencia ayudando a empresas privadas a ganar contratos gubernamentales.
 
@@ -95,8 +101,12 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 /**
- * Ventana de tasa en memoria por llamador. Es una protección de coste, no un
- * control de seguridad per se: la autenticación es la barrera real.
+ * Ventana de tasa en memoria por llamador autenticado.
+ *
+ * NO es una protección global: cada isolate de Edge Functions tiene su propio
+ * mapa y se reinicia con él. Sólo amortigua ráfagas de un mismo llamador. Los
+ * topes reales de gasto son la autenticación con lista blanca, la caché/
+ * enfriamiento por expediente y el presupuesto horario global en BD.
  */
 const rateBuckets = new Map<string, { count: number; resetAt: number }>();
 
@@ -116,26 +126,40 @@ function isRateLimited(key: string): boolean {
   return bucket.count > RATE_LIMIT_MAX_REQUESTS;
 }
 
+function parseList(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 /**
- * Autenticación del llamador.
+ * Autenticación y autorización del llamador.
  *
- * Se aceptan dos mecanismos, en este orden:
- *  1. Secreto compartido `ANALYZE_PROCUREMENT_SECRET` en la cabecera
- *     `x-analyze-secret` (comparación en tiempo constante).
- *  2. Sesión de Supabase Auth válida (`Authorization: Bearer <jwt>`) con un
- *     usuario no anónimo.
+ * No existe autorización granular por expediente (no hay relación usuario ↔
+ * licitación), así que una sesión de Supabase Auth por sí sola NO autoriza:
+ * cualquiera que pueda registrarse obtendría acceso a todos los expedientes y
+ * al gasto de IA. Se aceptan sólo:
+ *  1. Secreto compartido `ANALYZE_PROCUREMENT_SECRET` en `x-analyze-secret`
+ *     (comparación en tiempo constante).
+ *  2. Sesión de Supabase Auth NO anónima cuyo `user.id` esté en la lista
+ *     blanca `ANALYZE_PROCUREMENT_ALLOWED_USER_IDS` (separada por comas).
  *
- * Si no hay ningún mecanismo configurado, la función responde 503 y NO llama
- * al modelo: una ruta sin autenticación que consume créditos de IA no debe
- * quedar disponible por omisión.
+ * Sin ninguno configurado responde 503 y NO llama al modelo (fail-closed).
  */
 async function authorize(req: Request, supabaseUrl: string, anonKey: string): Promise<
   { ok: true; caller: string } | { ok: false; status: number; error: string }
 > {
-  const secret = Deno.env.get("ANALYZE_PROCUREMENT_SECRET");
-  if (secret && secret.trim().length > 0) {
-    const provided = req.headers.get("x-analyze-secret") ?? "";
-    if (provided.length > 0 && timingSafeEqual(provided.trim(), secret.trim())) {
+  const secret = (Deno.env.get("ANALYZE_PROCUREMENT_SECRET") ?? "").trim();
+  const allowedUserIds = parseList(Deno.env.get("ANALYZE_PROCUREMENT_ALLOWED_USER_IDS"));
+
+  if (secret.length === 0 && allowedUserIds.length === 0) {
+    return { ok: false, status: 503, error: "Función no disponible" };
+  }
+
+  if (secret.length > 0) {
+    const provided = (req.headers.get("x-analyze-secret") ?? "").trim();
+    if (provided.length > 0 && timingSafeEqual(provided, secret)) {
       return { ok: true, caller: "secret" };
     }
   }
@@ -144,23 +168,45 @@ async function authorize(req: Request, supabaseUrl: string, anonKey: string): Pr
   const token = authorization.toLowerCase().startsWith("bearer ")
     ? authorization.slice(7).trim()
     : "";
-  if (token.length > 0) {
+  if (token.length > 0 && allowedUserIds.length > 0 && anonKey.length > 0) {
     const authClient = createClient(supabaseUrl, anonKey);
     const { data, error } = await authClient.auth.getUser(token);
-    if (!error && data.user) {
-      return { ok: true, caller: `user:${data.user.id}` };
+    const user = data?.user;
+    if (
+      !error &&
+      user &&
+      user.is_anonymous !== true &&
+      allowedUserIds.includes(user.id)
+    ) {
+      return { ok: true, caller: `user:${user.id}` };
     }
   }
 
-  if (!secret || secret.trim().length === 0) {
-    return {
-      ok: false,
-      status: 503,
-      error:
-        "Función no configurada: define ANALYZE_PROCUREMENT_SECRET o habilita Supabase Auth para habilitarla.",
-    };
-  }
   return { ok: false, status: 401, error: "No autorizado" };
+}
+
+/**
+ * Presupuesto global: cuenta los análisis generados en la última hora. Si la
+ * consulta falla se rechaza (fail-closed) en vez de llamar al proveedor.
+ */
+async function isGlobalBudgetExhausted(
+  // deno-lint-ignore no-explicit-any
+  db: any,
+): Promise<boolean> {
+  const configured = Number(Deno.env.get("ANALYZE_MAX_PER_HOUR"));
+  const maxPerHour = Number.isFinite(configured) && configured >= 0
+    ? Math.floor(configured)
+    : DEFAULT_MAX_ANALYSES_PER_HOUR;
+  const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const { count, error } = await db
+    .from("saas_analyses")
+    .select("procurement_id", { count: "exact", head: true })
+    .gte("created_at", since);
+  if (error || count === null) {
+    console.error("Edge Function: no se pudo verificar el presupuesto global", error?.message);
+    return true;
+  }
+  return count >= maxPerHour;
 }
 
 Deno.serve(async (req: Request) => {
@@ -186,11 +232,9 @@ Deno.serve(async (req: Request) => {
     const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
 
-    if (!OPENROUTER_API_KEY) {
-      return jsonResponse({ error: "OPENROUTER_API_KEY no configurada" }, 500, origin);
-    }
     if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
-      return jsonResponse({ error: "Variables de Supabase no configuradas" }, 500, origin);
+      console.error("Edge Function: variables de Supabase no configuradas");
+      return jsonResponse({ error: "Función no disponible" }, 503, origin);
     }
 
     const auth = await authorize(req, SUPABASE_URL, SUPABASE_ANON_KEY ?? "");
@@ -199,8 +243,15 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: auth.error }, auth.status, origin);
     }
 
-    const clientKey = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "desconocida";
-    if (isRateLimited(`${auth.caller}:${clientKey}`)) {
+    // La configuración del proveedor sólo se revela a llamadores autorizados.
+    if (!OPENROUTER_API_KEY) {
+      console.error("Edge Function: OPENROUTER_API_KEY no configurada");
+      return jsonResponse({ error: "Función no disponible" }, 503, origin);
+    }
+
+    // Clave por identidad autenticada: `x-forwarded-for` lo controla el
+    // cliente y permitiría abrir un bucket nuevo en cada petición.
+    if (isRateLimited(auth.caller)) {
       return jsonResponse(
         { error: "Demasiadas solicitudes. Intenta de nuevo en un minuto." },
         429,
@@ -267,6 +318,16 @@ Deno.serve(async (req: Request) => {
           origin,
         );
       }
+    }
+
+    // Último control antes de gastar: presupuesto horario global (todas las
+    // instancias), independiente del mapa en memoria de este isolate.
+    if (await isGlobalBudgetExhausted(db)) {
+      return jsonResponse(
+        { error: "Se alcanzó el límite de análisis por hora. Intenta más tarde." },
+        429,
+        origin,
+      );
     }
 
     // Los documentos ya analizados por el worker se leen a través de

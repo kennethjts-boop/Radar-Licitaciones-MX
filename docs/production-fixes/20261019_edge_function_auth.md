@@ -19,17 +19,25 @@ Rama: `security/analyze-procurement-auth` (base: `origin/main` @ `3be523a`).
 
 ## Corrección
 
-- **Autenticación obligatoria**: secreto compartido `ANALYZE_PROCUREMENT_SECRET`
-  en la cabecera `x-analyze-secret` (comparación en tiempo constante) **o**
-  sesión de Supabase Auth válida (`Authorization: Bearer <jwt>`). Si no hay
-  ningún mecanismo configurado la función responde **503** y **no** llama al
-  modelo.
+- **Autenticación y autorización obligatorias** (revisión de cierre): secreto
+  compartido `ANALYZE_PROCUREMENT_SECRET` en `x-analyze-secret` (comparación
+  en tiempo constante) **o** sesión de Supabase Auth **no anónima** cuyo
+  `user.id` figure en `ANALYZE_PROCUREMENT_ALLOWED_USER_IDS`. Una sesión de
+  Supabase Auth por sí sola **no** autoriza: no existe relación usuario ↔
+  expediente, así que cualquier cuenta registrada tendría acceso a todos los
+  expedientes y al gasto de IA. Sin secreto ni lista blanca la función
+  responde **503** y **no** llama al modelo.
 - **Validación previa**: `procurement_id` debe ser un UUID y el expediente
   debe existir; la comprobación ocurre **antes** de cualquier llamada al
   modelo.
 - **Control de gasto**: reutiliza un análisis reciente del mismo expediente
-  (caché de 30 min) y rechaza el re-análisis inmediato (enfriamiento de
-  10 min). Límite de 10 peticiones por minuto y llamador.
+  (caché de 30 min). **Presupuesto global por hora** contado en
+  `saas_analyses` (todas las instancias; `ANALYZE_MAX_PER_HOUR`, por defecto
+  20); si no puede verificarse, se rechaza sin llamar al proveedor
+  (fail-closed). Límite en memoria de 10 peticiones/min **por identidad
+  autenticada** (ya no por `x-forwarded-for`, que controla el cliente).
+  **Ese límite en memoria NO es global**: es por isolate y se pierde al
+  reciclarse; sólo amortigua ráfagas.
 - **CORS por lista blanca** (`ALLOWED_ORIGINS`); sin origen configurado no se
   devuelve ninguna cabecera CORS.
 - **Higiene de errores**: el detalle del proveedor y de la base de datos se
@@ -42,8 +50,10 @@ Rama: `security/analyze-procurement-auth` (base: `origin/main` @ `3be523a`).
 ## Despliegue (NO ejecutado)
 
 ```bash
-# 1. Secreto obligatorio si no se usa Supabase Auth
+# 1. Al menos uno de los dos (sin ninguno la función queda cerrada: 503)
 supabase secrets set ANALYZE_PROCUREMENT_SECRET='<secreto largo y aleatorio>'
+supabase secrets set ANALYZE_PROCUREMENT_ALLOWED_USER_IDS='<uuid1>,<uuid2>'   # opcional
+supabase secrets set ANALYZE_MAX_PER_HOUR='20'                               # opcional
 
 # 2. Sólo si se llama desde un navegador
 supabase secrets set ALLOWED_ORIGINS='https://<origen-real>'
@@ -64,3 +74,13 @@ desplegado** y que además ya-usaba el nombre de campo equivocado
 (`procurementId` en lugar de `procurement_id`), por lo que siempre recibía un
 HTTP 400. No hay ningún consumidor legítimo en producción que se breakee con
 este cambio.
+
+## Riesgos residuales
+
+- Las llamadas al proveedor que fallan (5xx, JSON inválido) no escriben en
+  `saas_analyses` y por tanto no cuentan para el presupuesto global; quedan
+  acotadas por la autorización (sólo llamadores de confianza) y el límite por
+  identidad.
+- Dos peticiones simultáneas del mismo expediente pueden generar dos llamadas
+  antes de que exista caché (sin bloqueo distribuido, que exigiría nueva
+  infraestructura).
