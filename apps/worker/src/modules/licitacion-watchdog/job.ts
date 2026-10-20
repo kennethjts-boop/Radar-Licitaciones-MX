@@ -27,6 +27,11 @@ import {
 import { diffSnapshots, hashSnapshot } from "./snapshot";
 import { structuralChangeGuard } from "./structural-guard";
 import { sendPendingNotification } from "./telegram";
+import {
+  detectProcedureCompletion,
+  formatCompletionMessage,
+  type WatchdogCompletion,
+} from "./completion";
 import { recordNetworkFailure } from "../alerting/saturation";
 import { allCircuits } from "../resilience/circuit-breaker";
 import { getEffectiveRadarMode } from "../control/sleep-mode";
@@ -50,7 +55,12 @@ import {
   type ResolvedTarget,
   type WatchdogTarget,
 } from "./target-resolver";
-import { getAllTargets, getResolvedTargets, updateTargetCheck } from "./target-manager";
+import {
+  deactivateWatchdogTarget,
+  getAllTargets,
+  getResolvedTargets,
+  updateTargetCheck,
+} from "./target-manager";
 
 const log = createModuleLogger("licitacion-watchdog:job");
 const TRANSIENT_RENDER_RETRY_DELAYS_MS = [20_000, 40_000, 60_000] as const;
@@ -185,6 +195,7 @@ async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
   }
   const hash = hashSnapshot(snapshot);
   const latest = await getLatestSnapshot(numeroProcedimiento);
+  const completion = detectProcedureCompletion(snapshot);
 
   if (!latest) {
     const baseline = await insertSnapshot({
@@ -202,6 +213,7 @@ async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
       hash,
       changes: 0,
       deploymentSha: snapshot.deploymentSha,
+      ...(completion ? { completion } : {}),
     };
   }
 
@@ -215,6 +227,7 @@ async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
       hash,
       changes: 0,
       deploymentSha: snapshot.deploymentSha,
+      ...(completion ? { completion } : {}),
     };
   }
 
@@ -301,7 +314,54 @@ async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
     deploymentSha: snapshot.deploymentSha,
     structuralConfirmation: structuralConfirmation ?? null,
     snapshotId: changed.id,
+    ...(completion ? { completion } : {}),
   };
+}
+
+/**
+ * Retira la vigilancia de un expediente cuyo procedimiento terminó de forma
+ * definitiva (desierto, cancelado o anulado).
+ *
+ * El objetivo sólo se desactiva: nunca se borra la fila, los snapshots ni el
+ * historial de cambios, de modo que `/watchdog` y las auditorías siguen
+ * mostrando lo que ocurrió. Un fallo aquí no debe interrumpir el ciclo.
+ */
+async function retireCompletedTarget(
+  target: ResolvedTarget,
+  result: JsonObject,
+): Promise<void> {
+  const completion = result.completion as unknown as WatchdogCompletion | undefined;
+  if (!completion) return;
+  if (!target.procurementId) {
+    log.info(
+      { numeroProcedimiento: target.numero, status: completion.status },
+      "Procedimiento terminado en un objetivo sin persistencia; no se retira",
+    );
+    return;
+  }
+  try {
+    const deactivated = await deactivateWatchdogTarget(target.id);
+    if (!deactivated) return;
+    log.info(
+      {
+        targetId: target.id,
+        numeroProcedimiento: target.numero,
+        status: completion.status,
+        kind: completion.kind,
+      },
+      "Watchdog retirado: el procedimiento ya no admite seguimiento",
+    );
+    const alias = target.alias && target.alias !== target.numero ? target.alias : target.numero;
+    await sendTelegramMessage(
+      formatCompletionMessage(alias, target.numero, completion, target.expedienteUrl),
+      "HTML",
+    );
+  } catch (err) {
+    log.error(
+      { err, numeroProcedimiento: target.numero },
+      "No se pudo retirar el objetivo watchdog tras detectar procedimiento terminado",
+    );
+  }
 }
 
 export async function runLicitacionWatchdog(expedientesOrTargets?: (string | ResolvedTarget)[]): Promise<void> {
@@ -412,6 +472,7 @@ export async function runLicitacionWatchdog(expedientesOrTargets?: (string | Res
               typeof result.snapshotId === "string" ? result.snapshotId : undefined,
           });
         }
+        await retireCompletedTarget(target, result);
       } catch (err) {
         const message = watchdogErrorMessage(err);
         results[target.numero] = {

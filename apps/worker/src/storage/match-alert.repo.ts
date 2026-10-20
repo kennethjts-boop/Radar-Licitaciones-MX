@@ -9,6 +9,8 @@ import { createModuleLogger } from "../core/logger";
 import type { DbMatch, DbAlert } from "../types/database";
 import type { MatchResult, EnrichedAlert } from "../types/procurement";
 import { OPERATIONAL_FOCUS_KEYS } from "../radars/operational-focus.matcher";
+import { OPERATIONAL_RADAR_VERSION_KEY } from "../radars/operational-version";
+import { OPERATIONAL_PUBLICATION_CUTOFF_DATE } from "../modules/operational-alerts/eligibility";
 
 const log = createModuleLogger("match-alert-repo");
 
@@ -38,10 +40,12 @@ export async function upsertMatch(
   }
   if (
     Object.values(OPERATIONAL_FOCUS_KEYS).includes(match.radarKey as never) &&
-    configVersion.version_key !== "operational_20261014"
+    configVersion.version_key !== OPERATIONAL_RADAR_VERSION_KEY
   ) {
     throw new StorageError(
-      `La migración de octubre no está activa para ${match.radarKey}`,
+      `La migración de octubre no está activa para ${match.radarKey} ` +
+      `(versión vigente: ${configVersion.version_key ?? "desconocida"}, ` +
+      `esperada: ${OPERATIONAL_RADAR_VERSION_KEY})`,
       "find_radar_config_version",
     );
   }
@@ -210,19 +214,14 @@ export async function ensurePendingNewTenderAlert(
     throw new StorageError(findError.message, "find_new_alert");
   }
   if (existing) {
-    if (existing.telegram_status === "failed") {
-      const { error: retryError } = await db
-        .from("alerts")
-        .update({ telegram_status: "pending" })
-        .eq("id", existing.id);
-      if (retryError) throw new StorageError(retryError.message, "retry_new_alert");
-    }
+    // Una alerta marcada como 'failed' es terminal: se registró porque Telegram
+    // la rechazó de forma definitiva (payload inválido, chat bloqueado) y
+    // reintentarla en automático sólo produce el mismo rechazo una y otra vez.
+    // La recuperación es explícita y queda a cargo del operador vía /perdidas.
     return {
       alertId: existing.id,
       created: false,
-      status: existing.telegram_status === "failed"
-        ? "pending"
-        : existing.telegram_status as "pending" | "sent",
+      status: existing.telegram_status as "pending" | "sent" | "failed",
     };
   }
 
@@ -263,6 +262,16 @@ export interface PendingNewTenderAlertRow {
   telegramMessage: string;
 }
 
+/**
+ * Lee la cola de alertas nuevas pendientes de entrega.
+ *
+ * El corte de publicación se evalúa en memoria y NO con `.gte()` en la consulta:
+ * `publication_date` puede quedar en NULL cuando el listado de ComprasMX no
+ * expone la fecha (sólo el detalle la trae) y ese NULL hacía que la alerta
+ * quedara huérfana en la base, invisible para la cola y sin ningún reintento
+ * posterior. Una alerta que llegó a crearse ya fue evaluada como elegible en
+ * su momento, así que un NULL actual no debe ocultarla.
+ */
 export async function getPendingNewTenderAlerts(limit = 500): Promise<PendingNewTenderAlertRow[]> {
   const { data, error } = await getSupabaseClient()
     .from("alerts")
@@ -270,15 +279,34 @@ export async function getPendingNewTenderAlerts(limit = 500): Promise<PendingNew
     .eq("alert_type", "new_match")
     .eq("telegram_status", "pending")
     .not("dedupe_key", "is", null)
-    .gte("procurements.publication_date", "2026-10-14")
     .eq("radars.is_active", true)
     .order("created_at", { ascending: true })
     .limit(limit);
   if (error) throw new StorageError(error.message, "get_pending_new_alerts");
-  return (data ?? []).map((row) => ({
-    id: row.id,
-    telegramMessage: row.telegram_message,
-  }));
+  return (data ?? [])
+    .filter((row) => isPublicationDateWithinOperationalCutoff(row.procurements))
+    .map((row) => ({
+      id: row.id,
+      telegramMessage: row.telegram_message,
+    }));
+}
+
+/**
+ * Una alerta es entregable si su fecha de publicación es posterior al corte
+ * operativo o si la fecha no es verificable (nunca se vació un dato ya
+ * confirmado; ver `upsertProcurement`).
+ */
+function isPublicationDateWithinOperationalCutoff(
+  procurement:
+    | { publication_date?: string | null }
+    | Array<{ publication_date?: string | null }>
+    | null
+    | undefined,
+): boolean {
+  const first = Array.isArray(procurement) ? procurement[0] : procurement;
+  const publicationDate = first?.publication_date;
+  if (!publicationDate) return true;
+  return publicationDate >= OPERATIONAL_PUBLICATION_CUTOFF_DATE;
 }
 
 /**
@@ -319,10 +347,27 @@ export async function markAlertSent(
   }
 }
 
-export async function markAlertFailed(alertId: string): Promise<void> {
+/**
+ * Marca una alerta como no entregable.
+ *
+ * `telegramMessageId` se registra cuando el mensaje **sí** llegó a Telegram y
+ * lo que falló fue el bookkeeping en base de datos. Conservar ese identificador
+ * permite distinguir "nunca se entregó" de "se entregó pero no se pudo asentar"
+ * y evita que la recuperación manual reenvíe un mensaje ya visto por el
+ * operador (duplicado).
+ */
+export async function markAlertFailed(
+  alertId: string,
+  telegramMessageId?: number | null,
+): Promise<void> {
+  const update: Record<string, unknown> = { telegram_status: "failed" };
+  if (typeof telegramMessageId === "number" && Number.isFinite(telegramMessageId)) {
+    update.telegram_message_id = telegramMessageId;
+    update.sent_at = nowISO();
+  }
   const { error } = await getSupabaseClient()
     .from("alerts")
-    .update({ telegram_status: "failed" })
+    .update(update)
     .eq("id", alertId);
 
   if (error) {

@@ -67,6 +67,15 @@ jest.mock("../../modules/licitacion-watchdog/repository", () => ({
   getLastChangedSnapshot: jest.fn().mockResolvedValue(null),
 }));
 
+const mockHandleNoVigilarCommand = jest.fn();
+const mockHandleVigilarCommand = jest.fn();
+jest.mock("../../modules/licitacion-watchdog/telegram-handler", () => ({
+  handleWatchdogCommand: jest.fn(),
+  handleRadaresCommand: jest.fn(),
+  handleVigilarCommand: (...args: unknown[]) => mockHandleVigilarCommand(...args),
+  handleNoVigilarCommand: (...args: unknown[]) => mockHandleNoVigilarCommand(...args),
+}));
+
 // Mock config
 jest.mock("../../config/env", () => {
   const config = {
@@ -384,6 +393,56 @@ describe("Telegram Commands - /noticias_comerciales", () => {
     expect(isManualScanOkStatus("empty_result")).toBe(true);
     expect(isManualScanOkStatus("degraded")).toBe(false);
     expect(isManualScanOkStatus("error")).toBe(false);
+  });
+
+  it("rechaza /novigilar por user id no autorizado: no desactiva vigilancia alguna", async () => {
+    mockHandleNoVigilarCommand.mockClear();
+    const handler = findTextHandler(botInstance, "\\/novigilar");
+
+    await handler(
+      {
+        chat: { id: 123456 },
+        from: { id: 123, username: "intruso" },
+        text: "/novigilar LA-50-GYR-050GYR007-N-173-2026",
+      },
+      ["/novigilar LA-50-GYR-050GYR007-N-173-2026", undefined, "LA-50-GYR-050GYR007-N-173-2026"],
+    );
+
+    expect(mockHandleNoVigilarCommand).not.toHaveBeenCalled();
+    expect(mockSendMessage.mock.calls.at(-1)?.[1]).toContain("No estás autorizado");
+  });
+
+  it("permite /novigilar a un administrador autorizado", async () => {
+    mockHandleNoVigilarCommand.mockClear();
+    const handler = findTextHandler(botInstance, "\\/novigilar");
+
+    await handler(
+      {
+        chat: { id: 123456 },
+        from: { id: 999, username: "admin" },
+        text: "/novigilar LA-50-GYR-050GYR007-N-173-2026",
+      },
+      ["/novigilar LA-50-GYR-050GYR007-N-173-2026", undefined, "LA-50-GYR-050GYR007-N-173-2026"],
+    );
+
+    expect(mockHandleNoVigilarCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechaza /perdidas por user id no autorizado: no consulta ni reenvía alertas", async () => {
+    mockFrom.mockClear();
+    const handler = findTextHandler(botInstance, "\\/perdidas");
+
+    await handler(
+      {
+        chat: { id: 123456 },
+        from: { id: 123, username: "intruso" },
+        text: "/perdidas",
+      },
+      ["/perdidas", undefined],
+    );
+
+    expect(mockFrom).not.toHaveBeenCalled();
+    expect(mockSendMessage.mock.calls.at(-1)?.[1]).toContain("No estás autorizado");
   });
 
   it("rechaza /pausa por user id no autorizado aunque llegue del chat configurado", async () => {

@@ -36,6 +36,7 @@ import { startCollectRun, finishCollectRun } from "../storage/collect-run.repo";
 import {
   ensurePendingNewTenderAlert,
   getPendingNewTenderAlerts,
+  markAlertFailed,
   markAlertSent,
   upsertMatch,
 } from "../storage/match-alert.repo";
@@ -220,19 +221,36 @@ async function deliverQueuedNewTenderAlerts(maxPerCycle: number): Promise<number
     pending,
     maxPerCycle,
     (alert) => sendTelegramMessage(alert.telegramMessage, "HTML"),
-    async (alert, messageId) => {
-      await markAlertSent(alert.id, messageId);
-      // La entrega ya está confirmada. Si falla el alta, el scheduler la
-      // recuperará sin reenviar el mensaje ni bloquear las demás alertas.
-      await activateWatchdogForSentAlert(alert.id).catch((err) =>
-        log.warn({ err, alertId: alert.id }, "Watchdog automático pendiente de conciliación"),
-      );
+    {
+      markSent: async (alert, messageId) => {
+        await markAlertSent(alert.id, messageId);
+        // La entrega ya está confirmada. Si falla el alta, el scheduler la
+        // recuperará sin reenviar el mensaje ni bloquear las demás alertas.
+        await activateWatchdogForSentAlert(alert.id).catch((err) =>
+          log.warn({ err, alertId: alert.id }, "Watchdog automático pendiente de conciliación"),
+        );
+      },
+      markFailed: async (alert, messageId) => {
+        await markAlertFailed(alert.id, messageId);
+      },
     },
   );
   if (result.remaining > 0) {
     log.info(
-      { sent: result.sent, remaining: result.remaining, limit: maxPerCycle },
+      { sent: result.sent, failed: result.failed, remaining: result.remaining, limit: maxPerCycle },
       "Alertas nuevas pendientes se conservarán para el siguiente ciclo",
+    );
+  }
+  if (result.unrecorded > 0) {
+    log.error(
+      { unrecorded: result.unrecorded },
+      "Alertas entregadas sin asiento en BD; se reintentará el asiento sin reenviarlas",
+    );
+  }
+  if (result.failed > 0) {
+    log.error(
+      { failed: result.failed, sent: result.sent },
+      "Alertas marcadas como no entregables; requieren recuperación manual (/perdidas)",
     );
   }
   return result.sent;

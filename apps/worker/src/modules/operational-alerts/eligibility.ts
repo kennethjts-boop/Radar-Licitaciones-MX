@@ -2,7 +2,14 @@ import { isValid, parse, parseISO } from "date-fns";
 import { fromZonedTime } from "date-fns-tz";
 import { MX_TIMEZONE } from "../../core/time";
 
-export const OPERATIONAL_PUBLICATION_CUTOFF_LOCAL = "2026-10-14T00:00:00";
+/**
+ * Fecha de corte operativa (inclusive) de los radares de octubre 2026.
+ * Se expone como literal de texto (`yyyy-MM-dd`) porque se compara contra la
+ * columna `procurements.publication_date`, que se persiste en ese formato.
+ */
+export const OPERATIONAL_PUBLICATION_CUTOFF_DATE = "2026-10-14";
+
+export const OPERATIONAL_PUBLICATION_CUTOFF_LOCAL = `${OPERATIONAL_PUBLICATION_CUTOFF_DATE}T00:00:00`;
 export const OPERATIONAL_PUBLICATION_CUTOFF = fromZonedTime(
   OPERATIONAL_PUBLICATION_CUTOFF_LOCAL,
   MX_TIMEZONE,

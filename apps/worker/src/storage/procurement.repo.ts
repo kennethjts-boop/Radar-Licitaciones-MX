@@ -232,7 +232,11 @@ export async function upsertProcurement(
       buying_unit: normalized.buyingUnit,
       procedure_type: normalized.procedureType,
       status: normalized.status,
-      publication_date: normalized.publicationDate,
+      // La fecha de publicación sólo existe en el detalle de ComprasMX; el
+      // listado la omite. Sobrescribir una fecha ya verificada con `null`
+      // vaciaba el dato y dejaba la alerta asociada invisible para la cola
+      // (que la filtra por fecha) y para la activación del watchdog.
+      publication_date: normalized.publicationDate ?? existing.publication_date,
       opening_date: normalized.openingDate,
       award_date: normalized.awardDate,
       state: normalized.state,
