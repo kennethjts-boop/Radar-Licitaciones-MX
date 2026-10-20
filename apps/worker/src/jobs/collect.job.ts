@@ -241,6 +241,12 @@ async function deliverQueuedNewTenderAlerts(maxPerCycle: number): Promise<number
       "Alertas nuevas pendientes se conservarán para el siguiente ciclo",
     );
   }
+  if (result.unrecorded > 0) {
+    log.error(
+      { unrecorded: result.unrecorded },
+      "Alertas entregadas sin asiento en BD; se reintentará el asiento sin reenviarlas",
+    );
+  }
   if (result.failed > 0) {
     log.error(
       { failed: result.failed, sent: result.sent },

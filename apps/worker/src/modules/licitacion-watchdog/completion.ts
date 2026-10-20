@@ -2,7 +2,7 @@
  * COMPLETION — detección de expedientes que ya no deben seguir vigilados.
  *
  * Un target del watchdog permanece activo hasta que alguien ejecuta
- * `/novigilar`. Sin este módulo, un expediente desiert o cancelado seguía
+ * `/novigilar`. Sin este módulo, un expediente desierto o cancelado seguía
  * consultándose en cada ciclo del watchdog (navegación, extracción y
  * consumo de navegador) indefinidamente, sin aportar información nueva.
  *
@@ -25,14 +25,31 @@ export interface WatchdogCompletion extends JsonObject {
 const STATUS_FIELD = "Estatus del procedimiento de contratación";
 
 /**
- * Estados que terminan el procedimiento de forma definitiva.
- * Se comparan sobre el texto normalizado (mayúsculas, sin acentos).
+ * Estatus que terminan el procedimiento de forma definitiva.
+ *
+ * Coincidencia EXACTA sobre el texto normalizado (mayúsculas, sin acentos ni
+ * puntuación): nunca por subcadena. Así no retiran la vigilancia variantes
+ * ambiguas o negadas como "NO DESIERTA", "DESIERTA PARCIALMENTE",
+ * "PARTIDAS DESIERTAS", "CANCELACION EN REVISION" o "ADJUDICADA (CANCELADA
+ * PARTIDA 2)". Un estatus desconocido nunca retira: sólo deja de vigilarse lo
+ * que el portal declara nulo sin matices.
  */
-const TERMINAL_PATTERNS: Array<{ kind: WatchdogCompletionKind; pattern: RegExp }> = [
-  { kind: "desierta", pattern: /DESIERT/ },
-  { kind: "cancelada", pattern: /CANCELAD/ },
-  { kind: "anulada", pattern: /ANULAD/ },
-];
+const TERMINAL_STATUSES: ReadonlyMap<string, WatchdogCompletionKind> = new Map([
+  ["DESIERTA", "desierta"],
+  ["DESIERTO", "desierta"],
+  ["DECLARADA DESIERTA", "desierta"],
+  ["DECLARADO DESIERTO", "desierta"],
+  ["PROCEDIMIENTO DESIERTO", "desierta"],
+  ["LICITACION DESIERTA", "desierta"],
+  ["CANCELADA", "cancelada"],
+  ["CANCELADO", "cancelada"],
+  ["PROCEDIMIENTO CANCELADO", "cancelada"],
+  ["LICITACION CANCELADA", "cancelada"],
+  ["ANULADA", "anulada"],
+  ["ANULADO", "anulada"],
+  ["PROCEDIMIENTO ANULADO", "anulada"],
+  ["LICITACION ANULADA", "anulada"],
+]);
 
 function normalizeStatus(value: string): string {
   return value
@@ -40,6 +57,8 @@ function normalizeStatus(value: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase()
     .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.,;:!]+$/, "")
     .trim();
 }
 
@@ -51,10 +70,13 @@ function normalizeStatus(value: string): string {
 export function readProcedureStatus(snapshot: WatchdogSnapshot): string | null {
   const fields = snapshot.visibleFields ?? {};
   const raw = fields[STATUS_FIELD];
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  if (typeof value !== "string") return null;
-  const normalized = normalizeStatus(value);
-  return normalized.length > 0 ? normalized : null;
+  // Varios valores distintos para el mismo campo son ambiguos: no se decide.
+  const values = (Array.isArray(raw) ? raw : [raw])
+    .filter((value): value is string => typeof value === "string")
+    .map(normalizeStatus)
+    .filter((value) => value.length > 0);
+  const distinct = Array.from(new Set(values));
+  return distinct.length === 1 ? distinct[0] : null;
 }
 
 /**
@@ -67,10 +89,8 @@ export function detectProcedureCompletion(
 ): WatchdogCompletion | null {
   const status = readProcedureStatus(snapshot);
   if (!status) return null;
-  for (const { kind, pattern } of TERMINAL_PATTERNS) {
-    if (pattern.test(status)) return { status, kind };
-  }
-  return null;
+  const kind = TERMINAL_STATUSES.get(status);
+  return kind ? { status, kind } : null;
 }
 
 /**
@@ -97,7 +117,7 @@ export function formatCompletionMessage(
   expedienteUrl: string,
 ): string {
   const motivo: Record<WatchdogCompletionKind, string> = {
-    desierta: "El procedimiento fue declarado desiert.",
+    desierta: "El procedimiento fue declarado desierto.",
     cancelada: "El procedimiento fue cancelado.",
     anulada: "El procedimiento fue anulado.",
   };

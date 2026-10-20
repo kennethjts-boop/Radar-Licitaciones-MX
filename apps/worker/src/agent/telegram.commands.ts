@@ -1844,12 +1844,17 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       // Una alerta sin `sent` pero con `telegram_message_id` ya fue entregada a
       // Telegram: lo que falló fue el asiento en base de datos. Reenviarla
       // duplicaría el aviso en el canal, así que se reporta y no se reenvía.
+      // También cuentan las que el ciclo de entrega ya llevó a Telegram en este
+      // proceso y sólo esperan su asiento en BD.
+      const { isDeliveredAwaitingRecord } = await import("../modules/operational-alerts/delivery");
       const deliveredWithoutLedger = alerts.filter(
-        a => a.telegram_status !== "sent" && typeof a.telegram_message_id === "number",
+        a => a.telegram_status !== "sent"
+          && (typeof a.telegram_message_id === "number" || isDeliveredAwaitingRecord(String(a.id))),
       );
       const lost = alerts.filter(
         a => a.telegram_status !== "sent"
           && typeof a.telegram_message_id !== "number"
+          && !isDeliveredAwaitingRecord(String(a.id))
           && RECOVERABLE_ALERT_TYPES.includes(String(a.alert_type)),
       );
 

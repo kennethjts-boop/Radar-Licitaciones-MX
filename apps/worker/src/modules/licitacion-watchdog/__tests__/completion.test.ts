@@ -51,6 +51,36 @@ describe("detección de expedientes concluidos", () => {
     expect(detectProcedureCompletion(buildSnapshot("CONTRATO FIRMADO"))).toBeNull();
   });
 
+  it("no retira por coincidencias parciales, negaciones ni estados ambiguos", () => {
+    for (const status of [
+      "NO DESIERTA",
+      "DESIERTA PARCIALMENTE",
+      "PARCIALMENTE DESIERTA",
+      "PARTIDAS DESIERTAS",
+      "ADJUDICADA (CANCELADA PARTIDA 2)",
+      "CANCELACION EN REVISION",
+      "SOLICITUD DE CANCELACION",
+      "NO ANULADA",
+      "EN EVALUACION",
+      "PUBLICADA",
+    ]) {
+      expect(detectProcedureCompletion(buildSnapshot(status))).toBeNull();
+    }
+  });
+
+  it("acepta variantes exactas con puntuación final y espacios", () => {
+    expect(detectProcedureCompletion(buildSnapshot("  Declarado desierto. "))?.kind).toBe("desierta");
+    expect(detectProcedureCompletion(buildSnapshot("Cancelado"))?.kind).toBe("cancelada");
+  });
+
+  it("no decide con valores distintos para el mismo campo", () => {
+    const snapshot = buildSnapshot(null);
+    (snapshot.visibleFields as Record<string, unknown>)[
+      "Estatus del procedimiento de contratación"
+    ] = ["DESIERTA", "VIGENTE"];
+    expect(detectProcedureCompletion(snapshot)).toBeNull();
+  });
+
   it("no decide nada cuando el portal no expone el estatus", () => {
     expect(readProcedureStatus(buildSnapshot(null))).toBeNull();
     expect(detectProcedureCompletion(buildSnapshot(null))).toBeNull();
@@ -72,7 +102,7 @@ describe("mensaje de finalización del watchdog", () => {
     expect(message).toContain("Watchdog finalizado");
     expect(message).toContain("LA-50-GYR-050GYR007-N-173-2026");
     expect(message).toContain("DESIERTA");
-    expect(message).toContain("desiert");
+    expect(message).toContain("declarado desierto.");
     expect(message).toContain("ya no se vigilará");
   });
 

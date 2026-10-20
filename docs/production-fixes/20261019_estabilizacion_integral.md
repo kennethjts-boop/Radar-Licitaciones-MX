@@ -82,12 +82,23 @@ métrica y sin registro del identificador de la alerta**. Consecuencias:
 **Corrección.**
 
 - Observabilidad: cada fallo se registra con su `alertId` y su clasificación.
-- Sin duplicados: si el mensaje ya fue entregado y sólo falla el asiento, la
-  alerta se marca `failed` **conservando el `telegram_message_id`**, de modo que
-  la recuperación manual no vuelve a enviar un mensaje ya visto.
-- Carta muerta: un rechazo **definitivo** de la API de Telegram (4xx sin
-  reintento) marca la alerta como `failed` y deja de reintentarse. Los fallos
-  transitorios (red, timeout, 5xx, 429) siguen en `pending`.
+- Sin duplicados (revisión de cierre): si el mensaje ya fue entregado y sólo
+  falla el asiento, el `message_id` se guarda en un registro en memoria del
+  proceso; la alerta **sigue en `pending`** y en los ciclos siguientes sólo se
+  reintenta `markSent` (que además activa el watchdog elegible), **sin reenviar**.
+  Ya no se marca `failed`: eso la sacaba de la conciliación del watchdog y, si
+  la BD seguía caída, `markFailed` también fallaba y la alerta se reenviaba.
+  `/perdidas` excluye también esas alertas.
+- **Límite documentado:** Telegram no ofrece envío idempotente. Si el worker se
+  reinicia después de entregar y antes de poder asentar (BD caída todo ese
+  tiempo), el registro en memoria se pierde y la alerta se reenvía **una vez**.
+  Garantía: exactamente una vez sin reinicios; al menos una vez con reinicio.
+  Se prefiere un duplicado improbable a perder una oportunidad.
+- Carta muerta: sólo un **HTTP 400 atribuible al mensaje** (formato, longitud)
+  marca la alerta como `failed`. Errores de canal/configuración (401, 403, 404,
+  `chat not found`, bot expulsado) y los transitorios (red, timeout, 5xx, 429)
+  siguen en `pending`: un token o chat mal configurado ya no descarta alertas
+  legítimas en bloque.
 - Techo de trabajo por ciclo (`2 × ALERT_MAX_PER_CYCLE`).
 - `markAlertFailed` ya existía pero **nunca se llamaba**; ahora se usa, y una
   alerta `failed` deja de "resucitar" automáticamente en
@@ -102,9 +113,13 @@ cada ciclo (navegación, extracción, navegador) indefinidamente.
 **Corrección.** Nuevo módulo `licitacion-watchdog/completion.ts`:
 
 - Se lee `Estatus del procedimiento de contratación` del snapshot verificado.
-- Estados **definitivos** (`DESIERTA`, `CANCELADA`, `ANULADA`, con
-  normalización de acentos y mayúsculas) → el objetivo se **desactiva** y el
-  operador recibe un aviso neutro con el motivo.
+- Estados **definitivos** (`DESIERTA`, `CANCELADA`, `ANULADA` y variantes
+  exactas como `DECLARADO DESIERTO` o `PROCEDIMIENTO CANCELADO`, con
+  normalización de acentos, mayúsculas y puntuación final) → el objetivo se
+  **desactiva** y el operador recibe un aviso neutro con el motivo.
+- Coincidencia **exacta**, nunca por subcadena: `NO DESIERTA`,
+  `DESIERTA PARCIALMENTE`, `PARTIDAS DESIERTAS`, `SOLICITUD DE CANCELACION` o
+  valores múltiples contradictorios **no** retiran la vigilancia.
 - **Criterio conservador deliberado:** un `FALLO`, `ADJUDICADO`, `EN FIRMA` o
   `CONTRATO FIRMADO` **no** retiran la vigilancia, porque después del fallo se
   publican el contrato y sus anexos, que es justo lo que el operador quiere
