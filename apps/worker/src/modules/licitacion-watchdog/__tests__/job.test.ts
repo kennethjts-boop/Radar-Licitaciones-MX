@@ -21,6 +21,8 @@ import {
 } from "../repository";
 import { hashSnapshot } from "../snapshot";
 import { sendPendingNotification } from "../telegram";
+import { deactivateWatchdogTarget, getResolvedTargets } from "../target-manager";
+import { sendTelegramMessage } from "../../../alerts/telegram.alerts";
 import type { WatchdogDocument, WatchdogSnapshot, WatchdogSnapshotRow } from "../types";
 
 jest.mock("../../../core/system-state", () => ({
@@ -88,10 +90,14 @@ jest.mock("../repository", () => ({
   resolveExpediente: jest.fn(),
 }));
 jest.mock("../telegram", () => ({ sendPendingNotification: jest.fn() }));
+jest.mock("../../../alerts/telegram.alerts", () => ({
+  sendTelegramMessage: jest.fn().mockResolvedValue(1),
+}));
 jest.mock("../target-manager", () => ({
   getAllTargets: jest.fn().mockResolvedValue([{ id: "PROC-1", alias: "PROC-1", numero: "PROC-1", uuid: "uuid" }]),
   getResolvedTargets: jest.fn().mockResolvedValue([{ id: "PROC-1", alias: "PROC-1", numero: "PROC-1", uuid: "uuid", expedienteUrl: "https://comprasmx.example/detalle/uuid/procedimiento" }]),
   updateTargetCheck: jest.fn().mockResolvedValue(undefined),
+  deactivateWatchdogTarget: jest.fn().mockResolvedValue(true),
 }));
 const mockedExtract = jest.mocked(extractWatchdogSnapshot);
 const mockedLatest = jest.mocked(getLatestSnapshot);
@@ -107,6 +113,9 @@ const mockedNotifyHealth = jest.mocked(notifyWatchdogHealthIfNeeded);
 const mockedReconcileHealth = jest.mocked(reconcileWatchdogColdStartHealth);
 const mockedResolveHealth = jest.mocked(resolveWatchdogHealthDecision);
 const mockedTransitionHealth = jest.mocked(transitionWatchdogHealth);
+const mockedDeactivate = jest.mocked(deactivateWatchdogTarget);
+const mockedResolvedTargets = jest.mocked(getResolvedTargets);
+const mockedSendTelegram = jest.mocked(sendTelegramMessage);
 
 function documents(count: number): WatchdogDocument[] {
   return Array.from({ length: count }, (_, index) => ({
@@ -501,5 +510,73 @@ describe("licitacion-watchdog job structural guard", () => {
       "licitacion_watchdog_telemetry",
       expect.objectContaining({ status: "error" }),
     );
+  });
+  it("retira la vigilancia de un expediente cuyo procedimiento fue declarado desierto", async () => {
+    const deserted = snapshot();
+    deserted.visibleFields = {
+      "Estatus del procedimiento de contratación": "DESIERTA",
+      "Número de procedimiento de contratación": "PROC-1",
+    };
+    mockedExtract.mockResolvedValue(deserted);
+    mockedLatest.mockResolvedValue(null);
+    mockedInsert.mockResolvedValue({
+      id: "snapshot-1",
+      numero_procedimiento: "PROC-1",
+      snapshot_hash: hashSnapshot(deserted),
+      snapshot_json: deserted,
+      detected_changes: { changes: [], notification: { kind: "baseline", status: "sent" } },
+      created_at: "2026-10-19T12:00:00.000Z",
+    });
+    mockedResolvedTargets.mockResolvedValue([
+      {
+        id: "target-1",
+        procurementId: "proc-1",
+        alias: "IMSS · Laboratorios",
+        numero: "PROC-1",
+        uuid: "uuid",
+        expedienteUrl: "https://comprasmx.example/detalle/uuid/procedimiento",
+      } as never,
+    ]);
+
+    await runLicitacionWatchdog();
+
+    expect(mockedDeactivate).toHaveBeenCalledWith("target-1");
+    expect(mockedSendTelegram).toHaveBeenCalledTimes(1);
+    const message = mockedSendTelegram.mock.calls[0][0] as string;
+    expect(message).toContain("Watchdog finalizado");
+    expect(message).toContain("DESIERTA");
+  });
+
+  it("mantiene la vigilancia cuando el procedimiento sigue vigente", async () => {
+    const active = snapshot();
+    active.visibleFields = {
+      "Estatus del procedimiento de contratación": "VIGENTE",
+      "Número de procedimiento de contratación": "PROC-1",
+    };
+    mockedExtract.mockResolvedValue(active);
+    mockedLatest.mockResolvedValue(null);
+    mockedInsert.mockResolvedValue({
+      id: "snapshot-1",
+      numero_procedimiento: "PROC-1",
+      snapshot_hash: hashSnapshot(active),
+      snapshot_json: active,
+      detected_changes: { changes: [], notification: { kind: "baseline", status: "sent" } },
+      created_at: "2026-10-19T12:00:00.000Z",
+    });
+    mockedResolvedTargets.mockResolvedValue([
+      {
+        id: "target-1",
+        procurementId: "proc-1",
+        alias: "IMSS · Laboratorios",
+        numero: "PROC-1",
+        uuid: "uuid",
+        expedienteUrl: "https://comprasmx.example/detalle/uuid/procedimiento",
+      } as never,
+    ]);
+
+    await runLicitacionWatchdog();
+
+    expect(mockedDeactivate).not.toHaveBeenCalled();
+    expect(mockedSendTelegram).not.toHaveBeenCalled();
   });
 });
