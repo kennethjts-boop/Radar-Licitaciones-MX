@@ -1,73 +1,34 @@
-# React + TypeScript + Vite
+# Panel web — PROTOTIPO NO DESPLEGADO
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+> **Estado: prototipo.** Este panel **no forma parte del producto desplegado
+> actualmente**. No hay configuración de despliegue para él (`railway.toml` sólo
+> construye `apps/worker`), por lo que no debe publicarse tal cual.
 
-Currently, two official plugins are available:
+## Advertencias de seguridad conocidas
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Antes de exponerlo hay que corregir, como mínimo:
 
-## React Compiler
+1. **El login es del lado del cliente y no es control de acceso.**
+   `src/App.tsx` asigna `role: "admin"` y `tokens: 999999` si el correo
+   coincide con `admin@radar.com`; la contraseña no se valida y el resultado se
+   guarda en `localStorage`. Cualquiera puede suplantar esa sesión desde el
+   navegador. Debe reemplazarse por Supabase Auth (`signInWithPassword`) y el
+   rol/los permisos deben resolverse en el servidor.
+2. **Las credenciales de demostración se imprimen en la pantalla de login.**
+   Deben desaparecer.
+3. **El panel lee `procurements` con la clave `anon`.** Tras la migración
+   `20260707_lock_public_rls.sql` los privilegios de `anon`/`authenticated`
+   fueron revocados, así que estas lecturas ya no funcionan con el esquema
+   bloqueado: el panel está hoy roto contra la base de datos real, no sólo
+   inseguro.
+4. **El contrato con la Edge Function es incorrecto.** El panel envía
+   `procurementId`, pero `analyze-procurement` espera `procurement_id`.
+5. **`analyze-procurement` exige autenticación** (secreto compartido o sesión
+   de Supabase Auth). El panel debe enviar la credencial correspondiente.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Reglas de esta estabilización (2026-10-19)
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+No se corrigió el panel: está fuera del alcance operativo actual. No se
+publicó, no se añadieron endpoints y no se tocaron sus contratos más allá de
+documentar los problemas verificables. Ver
+`docs/production-fixes/20261019_estabilizacion_integral.md`.
