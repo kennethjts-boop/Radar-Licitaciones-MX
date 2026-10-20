@@ -1625,6 +1625,10 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     const chatIdPartial = String(msg.chat.id).slice(-4);
     log.info({ command: msg.text, chatIdPartial, from: msg.from?.username }, "command_received");
     if (String(msg.chat.id) !== chatId) return;
+    // Desactiva la vigilancia de un expediente: es una escritura que silencia
+    // alertas futuras, por lo que exige autorización de administrador y no
+    // basta con pertenecer al chat configurado.
+    if (!(await authorizeWriteCommand(bot, msg))) return;
     const query = match?.[1] ?? "";
     try {
       const { handleNoVigilarCommand } = await import("../modules/licitacion-watchdog/telegram-handler");
@@ -1804,10 +1808,14 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     const chatIdPartial = String(msg.chat.id).slice(-4);
     log.info({ command: msg.text, chatIdPartial, from: msg.from?.username }, "command_received");
     if (String(msg.chat.id) !== chatId) return;
+    // Reenvía alertas al canal y además modifica el estado de entrega en la
+    // base de datos: es una escritura y exige autorización de administrador.
+    if (!(await authorizeWriteCommand(bot, msg))) return;
 
     const rawHours = parseInt(match?.[1] ?? "6", 10);
     const hours = Number.isFinite(rawHours) && rawHours > 0 ? Math.min(rawHours, 48) : 6;
     const MAX_RESEND = 10;
+    const RECOVERABLE_ALERT_TYPES = ["new_match", "daily_summary"];
 
     try {
       const { getSupabaseClient } = await import("../storage/client");
@@ -1816,7 +1824,7 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
 
       const { data: alerts, error } = await db
         .from("alerts")
-        .select("id, telegram_message, telegram_status, alert_type, created_at, sent_at")
+        .select("id, telegram_message, telegram_status, alert_type, created_at, sent_at, telegram_message_id")
         .gte("created_at", since)
         .order("created_at", { ascending: true })
         .limit(50);
@@ -1833,7 +1841,17 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
       }
 
       const sent = alerts.filter(a => a.telegram_status === "sent");
-      const lost = alerts.filter(a => a.telegram_status !== "sent");
+      // Una alerta sin `sent` pero con `telegram_message_id` ya fue entregada a
+      // Telegram: lo que falló fue el asiento en base de datos. Reenviarla
+      // duplicaría el aviso en el canal, así que se reporta y no se reenvía.
+      const deliveredWithoutLedger = alerts.filter(
+        a => a.telegram_status !== "sent" && typeof a.telegram_message_id === "number",
+      );
+      const lost = alerts.filter(
+        a => a.telegram_status !== "sent"
+          && typeof a.telegram_message_id !== "number"
+          && RECOVERABLE_ALERT_TYPES.includes(String(a.alert_type)),
+      );
 
       const headerLines = [
         `📬 <b>MATCHES — últimas ${hours}h</b>`,
@@ -1842,6 +1860,12 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
         `✅ Alertados correctamente: <b>${sent.length}</b>`,
         `⚠️ No enviados: <b>${lost.length}</b>`,
       ];
+
+      if (deliveredWithoutLedger.length > 0) {
+        headerLines.push(
+          `📨 Entregadas sin asiento en BD (no se reenvían): <b>${deliveredWithoutLedger.length}</b>`,
+        );
+      }
 
       if (lost.length === 0) {
         headerLines.push("", "✅ No hubo alertas perdidas en este período.");
