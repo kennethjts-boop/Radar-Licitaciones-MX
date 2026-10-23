@@ -13,6 +13,7 @@ import {
   runLicitacionWatchdog,
 } from "../job";
 import {
+  getLatestHydratedSnapshot,
   getLatestSnapshot,
   getPendingSnapshots,
   insertSnapshot,
@@ -83,6 +84,7 @@ jest.mock("../health", () => ({
   transitionWatchdogHealth: jest.fn((previous) => previous),
 }));
 jest.mock("../repository", () => ({
+  getLatestHydratedSnapshot: jest.fn(),
   getLatestSnapshot: jest.fn(),
   getPendingSnapshots: jest.fn().mockResolvedValue([]),
   insertSnapshot: jest.fn(),
@@ -101,6 +103,7 @@ jest.mock("../target-manager", () => ({
 }));
 const mockedExtract = jest.mocked(extractWatchdogSnapshot);
 const mockedLatest = jest.mocked(getLatestSnapshot);
+const mockedHydrated = jest.mocked(getLatestHydratedSnapshot);
 const mockedPending = jest.mocked(getPendingSnapshots);
 const mockedInsert = jest.mocked(insertSnapshot);
 const mockedMarkSent = jest.mocked(markNotificationSent);
@@ -152,6 +155,12 @@ function snapshot(partidas = 12, documentCount = 30): WatchdogSnapshot {
       },
     ],
   };
+}
+
+function placeholderSnapshot(): WatchdogSnapshot {
+  const empty = snapshot();
+  empty.visibleTables[1].rows = [["No se encontraron resultados para tu búsqueda."]];
+  return empty;
 }
 
 function transientRenderSnapshot(): WatchdogSnapshot {
@@ -298,6 +307,46 @@ describe("licitacion-watchdog job structural guard", () => {
     }));
     expect(mockedSend).toHaveBeenCalledWith(inserted);
     expect(mockedMarkSent).toHaveBeenCalledWith(inserted, receipt);
+  });
+
+  it("descarta sin alerta la fila de relleno 'sin resultados' que sustituye partidas reales", async () => {
+    mockedLatest.mockResolvedValue(row(snapshot()));
+    mockedExtract.mockResolvedValue(placeholderSnapshot());
+
+    await runLicitacionWatchdog(["PROC-1"]);
+    await runLicitacionWatchdog(["PROC-1"]);
+
+    expect(mockedInsert).not.toHaveBeenCalled();
+    expect(mockedSend).not.toHaveBeenCalled();
+    expect(mockedSetState).toHaveBeenLastCalledWith(
+      "licitacion_watchdog_telemetry",
+      expect.objectContaining({
+        results: expect.objectContaining({
+          "PROC-1": expect.objectContaining({ status: "structural_incomplete" }),
+        }),
+      }),
+    );
+  });
+
+  it("registra en silencio la restauración de partidas tras una fila de relleno guardada", async () => {
+    const full = snapshot();
+    const latest = row(placeholderSnapshot());
+    latest.id = "placeholder-id";
+    mockedLatest.mockResolvedValue(latest);
+    mockedHydrated.mockResolvedValue(row(full));
+    mockedExtract.mockResolvedValue(full);
+    const restored = row(full);
+    restored.id = "restored-id";
+    mockedInsert.mockResolvedValue(restored);
+
+    await runLicitacionWatchdog(["PROC-1"]);
+
+    expect(mockedInsert).toHaveBeenCalledWith(expect.objectContaining({
+      changes: [],
+      notificationKind: "baseline",
+      suppressNotification: true,
+    }));
+    expect(mockedSend).not.toHaveBeenCalled();
   });
 
   it("reintenta notificaciones históricas pendientes antes de extraer", async () => {

@@ -64,6 +64,23 @@ function hashJson(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+const EMPTY_RESULTS_PLACEHOLDER =
+  /^(?:no se encontraron (?:resultados|registros)|sin (?:resultados|registros)|no hay (?:datos|registros|resultados))/i;
+
+/**
+ * ComprasMX pinta una fila única de relleno ("No se encontraron resultados
+ * para tu búsqueda.") mientras la tabla aún no hidrata. No es contenido real.
+ */
+export function isEmptyResultsPlaceholder(table: VisibleTableSnapshot): boolean {
+  if (table.rows.length !== 1) return false;
+  const cells = table.rows[0].filter((cell) => cell !== "");
+  return cells.length === 1 && EMPTY_RESULTS_PLACEHOLDER.test(cells[0]);
+}
+
+export function hasEmptyResultsPlaceholder(snapshot: WatchdogSnapshot): boolean {
+  return snapshot.visibleTables.some(isEmptyResultsPlaceholder);
+}
+
 export function tableContentSignature(table: VisibleTableSnapshot): string {
   return hashJson({ headers: table.headers, rows: table.rows });
 }
