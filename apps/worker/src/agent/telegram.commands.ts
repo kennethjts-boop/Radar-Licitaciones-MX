@@ -215,11 +215,11 @@ type TelegramBotWithDeleteWebHookOptions = TelegramBot & {
   ): Promise<boolean>;
 };
 
-function deleteWebhookDroppingUpdates(bot: TelegramBot): Promise<boolean> {
-  // El runtime acepta el formulario; la intersección conecta la declaración de
+function deleteWebhookPreservingUpdates(bot: TelegramBot): Promise<boolean> {
+  // Conserva respuestas Sí/No recibidas durante un reinicio. La intersección conecta la declaración de
   // módulo local con la firma antigua de @types/node-telegram-bot-api.
   return (bot as TelegramBotWithDeleteWebHookOptions).deleteWebHook({
-    drop_pending_updates: true,
+    drop_pending_updates: false,
   });
 }
 
@@ -262,7 +262,7 @@ async function initializeCommandBot(): Promise<TelegramBot> {
 
   // La definición local amplía los @types desactualizados: runtime sí acepta
   // drop_pending_updates en deleteWebHook().
-  await deleteWebhookDroppingUpdates(bot);
+  await deleteWebhookPreservingUpdates(bot);
   if (shuttingDown) {
     throw new Error(
       "Inicialización Telegram commands cancelada durante shutdown",
@@ -477,7 +477,7 @@ export function schedulePollingRetry(
           if (conflict) {
             // Orden obligatorio de recuperación 409:
             // stopPolling(cancel) → backoff → deleteWebHook(drop) → lock → polling.
-            await deleteWebhookDroppingUpdates(bot);
+            await deleteWebhookPreservingUpdates(bot);
           }
           if (shuttingDown) return false;
           return tryStartPolling(bot);
@@ -922,6 +922,16 @@ async function pausedConfirmationPrompt(
 // ─── Registro de comandos ─────────────────────────────────────────────────────
 
 function registerCommands(bot: TelegramBot, chatId: string): void {
+  bot.on("callback_query", (query) => {
+    void import("../modules/licitacion-watchdog/consent")
+      .then(({ handleWatchdogConsentCallback }) => handleWatchdogConsentCallback(bot, query))
+      .catch((err) => log.warn({ err }, "Error contenido en autorización watchdog"));
+  });
+  bot.on("message", (msg) => {
+    void import("../modules/licitacion-watchdog/consent")
+      .then(({ handleWatchdogConsentReply }) => handleWatchdogConsentReply(bot, msg))
+      .catch((err) => log.warn({ err }, "Error contenido en respuesta watchdog"));
+  });
   // ── /prueba | /estado ────────────────────────────────────────────────────
   bot.onText(/\/(prueba|estado)/, async (msg) => {
     const chatIdPartial = String(msg.chat.id).slice(-4);

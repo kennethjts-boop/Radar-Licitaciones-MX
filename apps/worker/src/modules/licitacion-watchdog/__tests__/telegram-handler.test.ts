@@ -56,7 +56,7 @@ describe("comandos Telegram watchdog", () => {
 
     expect(addDynamicTarget).not.toHaveBeenCalled();
     expect(runLicitacionWatchdog).not.toHaveBeenCalled();
-    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("automáticamente");
+    expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("autorización");
     expect(sendMessage.mock.calls.at(-1)?.[1]).toContain("no permite altas manuales");
   });
 

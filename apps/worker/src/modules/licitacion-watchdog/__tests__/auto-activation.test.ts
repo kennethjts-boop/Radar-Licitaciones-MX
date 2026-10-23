@@ -4,6 +4,11 @@ import {
 } from "../auto-activation";
 import { activateWatchdogTarget, listPersistentTargets } from "../target-manager";
 
+import { requestWatchdogConsent, activateApprovedConsent } from "../consent";
+import { getWatchdogConsent } from "../consent-store";
+jest.mock("../consent", () => ({ requestWatchdogConsent: jest.fn(), activateApprovedConsent: jest.fn() }));
+jest.mock("../consent-store", () => ({ getWatchdogConsent: jest.fn() }));
+
 const mockState = {
   alert: {
     id: "alert-1",
@@ -47,9 +52,11 @@ jest.mock("../target-manager", () => ({
   listPersistentTargets: jest.fn(),
 }));
 
-describe("watchdog automático por alerta enviada", () => {
+describe("watchdog pide autorización por alerta enviada", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    (getWatchdogConsent as jest.Mock).mockResolvedValue(null);
+    (requestWatchdogConsent as jest.Mock).mockResolvedValue(true);
     mockState.alert.telegram_status = "sent";
     mockState.alert.created_at = "2026-10-15T08:00:00Z";
     mockState.alert.sent_at = "2026-10-15T08:05:00Z";
@@ -61,9 +68,26 @@ describe("watchdog automático por alerta enviada", () => {
     (activateWatchdogTarget as jest.Mock).mockResolvedValue({ active: true });
   });
 
-  it("activa una sola vez después de la entrega válida", async () => {
+  it("pide autorización sin activar después de la entrega válida", async () => {
     expect(await activateWatchdogForSentAlert("alert-1")).toBe(true);
-    expect(activateWatchdogTarget).toHaveBeenCalledWith("proc-1");
+    expect(requestWatchdogConsent).toHaveBeenCalledWith("proc-1", "proc-1");
+    expect(activateWatchdogTarget).not.toHaveBeenCalled();
+  });
+
+  it("no vuelve a preguntar tras un No y no activa", async () => {
+    (getWatchdogConsent as jest.Mock).mockResolvedValue({ status: "declined" });
+    expect(await reconcileWatchdogFromSentAlerts()).toBe(0);
+    expect(requestWatchdogConsent).not.toHaveBeenCalled();
+    expect(activateWatchdogTarget).not.toHaveBeenCalled();
+  });
+
+  it("sólo recupera el alta cuando ya existe aprobación", async () => {
+    const consent = { status: "approved" };
+    (getWatchdogConsent as jest.Mock).mockResolvedValue(consent);
+    (activateApprovedConsent as jest.Mock).mockResolvedValue(true);
+    expect(await activateWatchdogForSentAlert("alert-1")).toBe(true);
+    expect(activateApprovedConsent).toHaveBeenCalledWith(consent);
+    expect(requestWatchdogConsent).not.toHaveBeenCalled();
   });
 
   it("no activa alerta pendiente ni publicada antes del corte", async () => {
@@ -96,6 +120,7 @@ describe("watchdog automático por alerta enviada", () => {
 
   it("la conciliación recupera una alerta enviada con alta pendiente", async () => {
     expect(await reconcileWatchdogFromSentAlerts()).toBe(1);
-    expect(activateWatchdogTarget).toHaveBeenCalledTimes(1);
+    expect(requestWatchdogConsent).toHaveBeenCalledTimes(1);
+    expect(activateWatchdogTarget).not.toHaveBeenCalled();
   });
 });

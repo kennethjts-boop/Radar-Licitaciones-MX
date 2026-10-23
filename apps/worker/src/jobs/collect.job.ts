@@ -224,10 +224,10 @@ async function deliverQueuedNewTenderAlerts(maxPerCycle: number): Promise<number
     {
       markSent: async (alert, messageId) => {
         await markAlertSent(alert.id, messageId);
-        // La entrega ya está confirmada. Si falla el alta, el scheduler la
+        // La entrega ya está confirmada. Si falla la solicitud de autorización, el scheduler la
         // recuperará sin reenviar el mensaje ni bloquear las demás alertas.
         await activateWatchdogForSentAlert(alert.id).catch((err) =>
-          log.warn({ err, alertId: alert.id }, "Watchdog automático pendiente de conciliación"),
+          log.warn({ err, alertId: alert.id }, "Solicitud de autorización watchdog pendiente de conciliación"),
         );
       },
       markFailed: async (alert, messageId) => {

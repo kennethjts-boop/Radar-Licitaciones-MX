@@ -151,7 +151,7 @@ export async function handleVigilarCommand(bot: TelegramBot, chatId: string, _nu
   // puede dar de alta un objetivo. /vigilar nunca crea ni reactiva targets.
   await bot.sendMessage(
     chatId,
-    "🐕 El Watchdog ahora se activa automáticamente sólo después de enviar una alerta nueva de los 11 radares de CAPUFE e IMSS. /vigilar no permite altas manuales. Usa /watchdog para consultar el seguimiento.",
+    "🐕 El Watchdog pide tu autorización después de una alerta nueva de los 11 radares de CAPUFE e IMSS. Pulsa Sí/No o responde a la solicitud con sí o no. Sin tu Sí no se vigila. /vigilar no permite altas manuales. Usa /watchdog para consultar el seguimiento.",
   ).catch(() => {});
 }
 

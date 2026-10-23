@@ -1,3 +1,5 @@
+import { approvedWatchdogIds } from "../consent-store";
+jest.mock("../consent-store", () => ({ approvedWatchdogIds: jest.fn() }));
 import {
   activateWatchdogTarget,
   deactivateWatchdogTarget,
@@ -77,6 +79,20 @@ jest.mock("../../../storage/client", () => ({
 describe("watchdog targets persistentes", () => {
   beforeEach(() => {
     mockState.targets.length = 0;
+    (approvedWatchdogIds as jest.Mock).mockResolvedValue(new Set([mockState.procurements[0].id]));
+  });
+
+  it("excluye incluso targets activos históricos mientras no tengan un Sí", async () => {
+    await activateWatchdogTarget(mockState.procurements[0].id);
+    (approvedWatchdogIds as jest.Mock).mockResolvedValue(new Set());
+    expect(await getAllTargets()).toEqual([]);
+    expect(mockState.targets[0].active).toBe(true);
+  });
+
+  it("falla cerrado si no se pueden leer los consentimientos", async () => {
+    await activateWatchdogTarget(mockState.procurements[0].id);
+    (approvedWatchdogIds as jest.Mock).mockRejectedValue(new Error("DB offline"));
+    await expect(getAllTargets()).rejects.toThrow("DB offline");
   });
 
   it("activar dos veces es idempotente y crea un solo target", async () => {

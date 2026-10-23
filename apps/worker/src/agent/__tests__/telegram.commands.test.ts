@@ -741,7 +741,7 @@ describe("Telegram Commands - ciclo de vida del polling", () => {
     expect(first).toBe(second);
     await expect(first).resolves.toBeInstanceOf(TelegramBot);
     expect(deleteWebhook).toHaveBeenCalledWith({
-      drop_pending_updates: true,
+      drop_pending_updates: false,
     });
     expect(mockAcquirePollingLock).toHaveBeenCalledTimes(1);
     expect(mockStartHeartbeat).toHaveBeenCalledTimes(1);
@@ -808,7 +808,7 @@ describe("Telegram Commands - ciclo de vida del polling", () => {
     await Promise.resolve();
 
     expect(bot.deleteWebHook).toHaveBeenCalledWith({
-      drop_pending_updates: true,
+      drop_pending_updates: false,
     });
     expect(calls).toEqual(["stop", "delete", "start"]);
   });
