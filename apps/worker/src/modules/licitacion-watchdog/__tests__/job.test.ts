@@ -22,7 +22,7 @@ import {
 } from "../repository";
 import { hashSnapshot } from "../snapshot";
 import { sendPendingNotification } from "../telegram";
-import { deactivateWatchdogTarget, getResolvedTargets } from "../target-manager";
+import { deactivateWatchdogTarget, getAllTargets, getResolvedTargets } from "../target-manager";
 import { sendTelegramMessage } from "../../../alerts/telegram.alerts";
 import type { WatchdogDocument, WatchdogSnapshot, WatchdogSnapshotRow } from "../types";
 
@@ -96,7 +96,7 @@ jest.mock("../../../alerts/telegram.alerts", () => ({
   sendTelegramMessage: jest.fn().mockResolvedValue(1),
 }));
 jest.mock("../target-manager", () => ({
-  getAllTargets: jest.fn().mockResolvedValue([{ id: "PROC-1", alias: "PROC-1", numero: "PROC-1", uuid: "uuid" }]),
+  getAllTargets: jest.fn().mockResolvedValue(["PROC-1", "PROC-2"].map((numero) => ({ id: numero, alias: numero, numero, uuid: "uuid" }))),
   getResolvedTargets: jest.fn().mockResolvedValue([{ id: "PROC-1", alias: "PROC-1", numero: "PROC-1", uuid: "uuid", expedienteUrl: "https://comprasmx.example/detalle/uuid/procedimiento" }]),
   updateTargetCheck: jest.fn().mockResolvedValue(undefined),
   deactivateWatchdogTarget: jest.fn().mockResolvedValue(true),
@@ -307,6 +307,13 @@ describe("licitacion-watchdog job structural guard", () => {
     }));
     expect(mockedSend).toHaveBeenCalledWith(inserted);
     expect(mockedMarkSent).toHaveBeenCalledWith(inserted, receipt);
+  });
+
+  it("una llamada manual no vigila una licitación sin consentimiento", async () => {
+    jest.mocked(getAllTargets).mockResolvedValueOnce([]);
+    await runLicitacionWatchdog(["UNAPPROVED-PROC"]);
+    expect(mockedExtract).not.toHaveBeenCalled();
+    expect(mockedSend).not.toHaveBeenCalled();
   });
 
   it("descarta sin alerta la fila de relleno 'sin resultados' que sustituye partidas reales", async () => {

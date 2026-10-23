@@ -1,5 +1,6 @@
 /**
- * El Watchdog sólo se activa por alertas NEW_MATCH realmente entregadas.
+ * El Watchdog solicita permiso por alertas NEW_MATCH realmente entregadas.
+ * Sólo un Sí persistido permite activar la vigilancia.
  * Este módulo es idempotente y vuelve a conciliar las entregas si el alta
  * falló después de enviar Telegram (evita reenviar avisos para reintentar).
  */
@@ -11,7 +12,10 @@ import {
   evaluateNewTenderPublication,
   OPERATIONAL_PUBLICATION_CUTOFF,
 } from "../operational-alerts/eligibility";
-import { activateWatchdogTarget, listPersistentTargets } from "./target-manager";
+import { listPersistentTargets } from "./target-manager";
+
+import { requestWatchdogConsent, activateApprovedConsent } from "./consent";
+import { getWatchdogConsent } from "./consent-store";
 
 const log = createModuleLogger("licitacion-watchdog:auto-activation");
 const ALLOWED_RADARS = new Set<string>(Object.values(OPERATIONAL_FOCUS_KEYS));
@@ -25,7 +29,7 @@ interface AlertCandidate {
   created_at: string;
   sent_at: string | null;
   radars: { key: string; is_active: boolean } | Array<{ key: string; is_active: boolean }> | null;
-  procurements: { publication_date: string | null } | Array<{ publication_date: string | null }> | null;
+  procurements: { publication_date: string | null; procedure_number?: string | null } | Array<{ publication_date: string | null; procedure_number?: string | null }> | null;
 }
 
 function single<T>(value: T | T[] | null): T | null {
@@ -72,7 +76,9 @@ async function activateCandidate(
   const targets = existingTargets ?? await listPersistentTargets(false);
   if (!targets) throw new Error("No existe tabla persistente watchdog_targets");
   const previous = targets.find((target) => target.procurementId === row.procurement_id);
-  if (previous?.active) return false;
+  const consent = await getWatchdogConsent(row.procurement_id!);
+  if (consent?.status === "approved") return activateApprovedConsent(consent);
+  if (consent?.status === "declined") return false;
 
   // /novigilar tiene precedencia sobre esta misma alerta, incluso al reconciliar.
   if (previous?.deactivatedAt &&
@@ -80,19 +86,16 @@ async function activateCandidate(
     return false;
   }
 
-  await activateWatchdogTarget(row.procurement_id!);
-  log.info(
-    { procurementId: row.procurement_id, alertId: row.id },
-    "Watchdog activado por alerta de octubre enviada a Telegram",
-  );
-  return true;
+  const procurement = single(row.procurements);
+  const label = previous?.alias || procurement?.procedure_number || row.procurement_id!;
+  return requestWatchdogConsent(row.procurement_id!, label);
 }
 
 /** Inmediato: se invoca sólo DESPUÉS de marcar la entrega exitosa. */
 export async function activateWatchdogForSentAlert(alertId: string): Promise<boolean> {
   const { data, error } = await getSupabaseClient()
     .from("alerts")
-    .select("id,procurement_id,radar_id,alert_type,telegram_status,created_at,sent_at,radars!inner(key,is_active),procurements!inner(publication_date)")
+    .select("id,procurement_id,radar_id,alert_type,telegram_status,created_at,sent_at,radars!inner(key,is_active),procurements!inner(publication_date,procedure_number)")
     .eq("id", alertId)
     .maybeSingle();
   if (error) throw new Error(`No se pudo consultar alerta watchdog: ${error.message}`);
@@ -100,13 +103,13 @@ export async function activateWatchdogForSentAlert(alertId: string): Promise<boo
 }
 
 /**
- * Recupera activaciones tras cortes de red sin volver a enviar Telegram.
+ * Recupera solicitudes pendientes y altas ya aprobadas tras cortes de red.
  * Sólo revisa alertas de octubre ya entregadas y con radar vigente.
  */
 export async function reconcileWatchdogFromSentAlerts(): Promise<number> {
   const { data, error } = await getSupabaseClient()
     .from("alerts")
-    .select("id,procurement_id,radar_id,alert_type,telegram_status,created_at,sent_at,radars!inner(key,is_active),procurements!inner(publication_date)")
+    .select("id,procurement_id,radar_id,alert_type,telegram_status,created_at,sent_at,radars!inner(key,is_active),procurements!inner(publication_date,procedure_number)")
     .eq("alert_type", "new_match")
     .eq("telegram_status", "sent")
     .eq("radars.is_active", true)
@@ -121,6 +124,7 @@ export async function reconcileWatchdogFromSentAlerts(): Promise<number> {
   let activated = 0;
   for (const row of (data ?? []) as AlertCandidate[]) {
     try {
+      if (activated >= 10) break;
       if (await activateCandidate(row, targets)) {
         activated++;
         // Evita múltiples upserts de una misma licitación en esta pasada.
@@ -128,7 +132,7 @@ export async function reconcileWatchdogFromSentAlerts(): Promise<number> {
         if (target) targets.splice(0, targets.length, ...target);
       }
     } catch (err) {
-      log.warn({ err, alertId: row.id }, "No se pudo recuperar un alta automática watchdog");
+      log.warn({ err, alertId: row.id }, "No se pudo conciliar una autorización watchdog");
     }
   }
   return activated;

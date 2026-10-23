@@ -426,22 +426,11 @@ export async function runLicitacionWatchdog(expedientesOrTargets?: (string | Res
     if (Array.isArray(expedientesOrTargets) && expedientesOrTargets.length > 0) {
       const allTargetsMap = new Map((await getAllTargets()).map((t: WatchdogTarget) => [t.numero, t]));
       for (const item of expedientesOrTargets) {
-        if (typeof item === "string") {
-          const existing = allTargetsMap.get(item) || {
-            id: item,
-            alias: item,
-            numero: item,
-            uuid: null,
-          };
-          const uuid = existing.uuid || (process.env.NODE_ENV === "test" ? "dummy-uuid" : (await resolveTargetUuid(existing)) || "dummy-uuid");
-          resolvedTargets.push({
-            ...existing,
-            uuid,
-            expedienteUrl: buildExpedienteUrl(uuid),
-          });
-        } else {
-          resolvedTargets.push(item);
-        }
+        const existing = allTargetsMap.get(typeof item === "string" ? item : item.numero);
+        // Ninguna llamada manual puede saltarse el consentimiento persistido.
+        if (!existing) continue;
+        const uuid = existing.uuid || await resolveTargetUuid(existing);
+        if (uuid) resolvedTargets.push({ ...existing, uuid, expedienteUrl: buildExpedienteUrl(uuid) });
       }
     } else {
       resolvedTargets = await getResolvedTargets();

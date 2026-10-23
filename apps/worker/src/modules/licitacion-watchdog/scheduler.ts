@@ -32,7 +32,7 @@ export function startLicitacionWatchdogScheduler(): void {
         try {
           await reconcileWatchdogFromSentAlerts();
         } catch (err) {
-          log.warn({ err }, "Conciliación de alertas watchdog pendiente; se mantienen los targets actuales");
+          log.warn({ err }, "Conciliación pendiente; sólo se revisan targets con consentimiento persistido");
         }
         await runLicitacionWatchdog();
       })().catch((err) => {
@@ -65,7 +65,7 @@ export function startLicitacionWatchdogScheduler(): void {
     };
     scheduleNext(20_000);
     log.info(
-      { source: "watchdog_targets.active", intervalMinutes: config.WATCHDOG_INTERVAL_MINUTES },
+      { source: "watchdog_targets.active + consentimiento aprobado", intervalMinutes: config.WATCHDOG_INTERVAL_MINUTES },
       "Scheduler watchdog independiente iniciado",
     );
   } catch (err) {

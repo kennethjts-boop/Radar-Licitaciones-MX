@@ -9,6 +9,8 @@ import {
   type ResolvedTarget,
 } from "./target-resolver";
 
+import { approvedWatchdogIds } from "./consent-store";
+
 const log = createModuleLogger("licitacion-watchdog:target-manager");
 
 interface WatchdogTargetRow {
@@ -81,7 +83,9 @@ export async function getDynamicTargets(): Promise<WatchdogTarget[]> {
 export async function getAllTargets(): Promise<WatchdogTarget[]> {
   const persisted = await listPersistentTargets(true);
   // Fail-closed: jamás reactivar expedientes antiguos desde variables de entorno.
-  return persisted ?? [];
+  if (!persisted) return [];
+  const approved = await approvedWatchdogIds(persisted.map((target) => target.procurementId));
+  return persisted.filter((target) => approved.has(target.procurementId));
 }
 
 export async function getResolvedTargets(): Promise<ResolvedTarget[]> {
