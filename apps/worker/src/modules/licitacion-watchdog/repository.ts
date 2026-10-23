@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { getSupabaseClient } from "../../storage/client";
 import { nowISO } from "../../core/time";
+import { hasEmptyResultsPlaceholder } from "./snapshot";
 import type { TelegramDeliveryReceipt } from "../../alerts/telegram.alerts";
 import type {
   StoredDetectedChanges,
@@ -79,6 +80,20 @@ export async function getPendingSnapshots(numeroProcedimiento: string): Promise<
   return ((data ?? []) as WatchdogSnapshotRow[])
     .filter((row) => row.detected_changes?.notification?.status === "pending")
     .reverse();
+}
+
+/** Último snapshot cuyas tablas no muestran la fila de relleno "sin resultados". */
+export async function getLatestHydratedSnapshot(numeroProcedimiento: string): Promise<WatchdogSnapshotRow | null> {
+  const { data, error } = await getSupabaseClient()
+    .from("watchdog_snapshots")
+    .select("*")
+    .eq("numero_procedimiento", numeroProcedimiento)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (error) throw new Error(`No se pudo leer snapshot watchdog hidratado: ${error.message}`);
+  return ((data ?? []) as WatchdogSnapshotRow[]).find((row) =>
+    !hasEmptyResultsPlaceholder(row.snapshot_json),
+  ) ?? null;
 }
 
 export async function getLastChangedSnapshot(numeroProcedimiento: string): Promise<WatchdogSnapshotRow | null> {

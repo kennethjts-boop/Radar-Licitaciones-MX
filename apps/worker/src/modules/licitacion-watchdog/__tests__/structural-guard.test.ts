@@ -47,6 +47,20 @@ function clone(snapshot: WatchdogSnapshot): WatchdogSnapshot {
 }
 
 describe("StructuralChangeGuard", () => {
+  it("nunca confirma la fila de relleno 'sin resultados' en lugar de partidas reales", () => {
+    const guard = new StructuralChangeGuard();
+    const previous = baseline();
+    const placeholder = clone(previous);
+    placeholder.visibleTables[3].rows = [["No se encontraron resultados para tu búsqueda."]];
+
+    const first = guard.evaluate(previous.numeroProcedimiento, previous, placeholder);
+    const second = guard.evaluate(previous.numeroProcedimiento, previous, placeholder);
+
+    expect(first.action).toBe("reject_incomplete");
+    expect(second.action).toBe("reject_incomplete");
+    expect(first.analysis.reasons).toContain("tabla sin resultados transitoria (12 filas previas)");
+  });
+
   it("rechaza el snapshot antiguo sin partial y sin las 12 partidas", () => {
     const guard = new StructuralChangeGuard();
     const previous = baseline();

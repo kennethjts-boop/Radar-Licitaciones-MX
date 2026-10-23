@@ -1,5 +1,5 @@
 import { nowISO } from "../../core/time";
-import { snapshotStructureSignature } from "./snapshot";
+import { isEmptyResultsPlaceholder, snapshotStructureSignature } from "./snapshot";
 import type { WatchdogSnapshot } from "./types";
 
 const SIGNIFICANT_LOSS_RATIO = 0.5;
@@ -11,6 +11,8 @@ interface PendingStructuralLoss {
 
 export interface StructuralLossAnalysis {
   suspicious: boolean;
+  /** Una tabla con filas reales pasó a mostrar sólo la fila de relleno. */
+  transientEmpty: boolean;
   reasons: string[];
   signature: string;
 }
@@ -25,15 +27,24 @@ function tableKey(headers: string[], occurrence: number): string {
   return `${JSON.stringify(headers)}#${occurrence}`;
 }
 
-function indexTables(snapshot: WatchdogSnapshot): Map<string, number> {
+interface IndexedTable {
+  rows: number;
+  placeholder: boolean;
+}
+
+function indexTables(snapshot: WatchdogSnapshot): Map<string, IndexedTable> {
   const occurrences = new Map<string, number>();
-  const tables = new Map<string, number>();
+  const tables = new Map<string, IndexedTable>();
 
   for (const table of snapshot.visibleTables) {
     const headers = JSON.stringify(table.headers);
     const occurrence = occurrences.get(headers) ?? 0;
     occurrences.set(headers, occurrence + 1);
-    tables.set(tableKey(table.headers, occurrence), table.rows.length);
+    const placeholder = isEmptyResultsPlaceholder(table);
+    tables.set(tableKey(table.headers, occurrence), {
+      rows: placeholder ? 0 : table.rows.length,
+      placeholder,
+    });
   }
   return tables;
 }
@@ -48,18 +59,25 @@ export function analyzeStructuralLoss(
   current: WatchdogSnapshot,
 ): StructuralLossAnalysis {
   const reasons: string[] = [];
+  let transientEmpty = false;
   const previousTables = indexTables(previous);
   const currentTables = indexTables(current);
 
-  for (const [key, previousRows] of previousTables) {
+  for (const [key, { rows: previousRows }] of previousTables) {
     if (previousRows === 0) continue;
-    const currentRows = currentTables.get(key);
-    if (currentRows === undefined) {
+    const currentTable = currentTables.get(key);
+    if (currentTable === undefined) {
       reasons.push(`tabla ausente (${previousRows} filas previas)`);
       continue;
     }
+    const currentRows = currentTable.rows;
     if (currentRows === 0) {
-      reasons.push(`tabla vacía (${previousRows} filas previas)`);
+      if (currentTable.placeholder) transientEmpty = true;
+      reasons.push(
+        currentTable.placeholder
+          ? `tabla sin resultados transitoria (${previousRows} filas previas)`
+          : `tabla vacía (${previousRows} filas previas)`,
+      );
       continue;
     }
     if (isSignificantLoss(previousRows, currentRows)) {
@@ -75,6 +93,7 @@ export function analyzeStructuralLoss(
 
   return {
     suspicious: reasons.length > 0,
+    transientEmpty,
     reasons,
     signature: snapshotStructureSignature(current),
   };
@@ -90,7 +109,9 @@ export class StructuralChangeGuard {
   ): StructuralGuardDecision {
     const analysis = analyzeStructuralLoss(previous, current);
 
-    if (current.partial !== false) {
+    // La fila de relleno sustituye filas reales sólo durante la hidratación:
+    // nunca se confirma como cambio, o el expediente alterna lleno/vacío.
+    if (current.partial !== false || analysis.transientEmpty) {
       this.pending.delete(numeroProcedimiento);
       return { action: "reject_incomplete", analysis };
     }

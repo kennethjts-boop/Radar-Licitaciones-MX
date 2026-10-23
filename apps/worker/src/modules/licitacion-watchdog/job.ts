@@ -18,13 +18,14 @@ import {
   type WatchdogHealthDecision,
 } from "./health";
 import {
+  getLatestHydratedSnapshot,
   getLatestSnapshot,
   getPendingSnapshots,
   insertSnapshot,
   markNotificationSent,
   resolveExpediente,
 } from "./repository";
-import { diffSnapshots, hashSnapshot } from "./snapshot";
+import { diffSnapshots, hasEmptyResultsPlaceholder, hashSnapshot } from "./snapshot";
 import { structuralChangeGuard } from "./structural-guard";
 import { sendPendingNotification } from "./telegram";
 import {
@@ -271,6 +272,39 @@ async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
       reasons: structuralDecision.analysis.reasons,
       deploymentSha: snapshot.deploymentSha,
     };
+  }
+
+  // Si lo guardado era una captura con la fila de relleno y ahora vuelve el
+  // contenido idéntico a la última captura hidratada, no hay novedad real.
+  if (
+    hasEmptyResultsPlaceholder(latest.snapshot_json) &&
+    !hasEmptyResultsPlaceholder(snapshot)
+  ) {
+    const hydrated = await getLatestHydratedSnapshot(numeroProcedimiento);
+    if (hydrated?.snapshot_hash === hash) {
+      const restored = await insertSnapshot({
+        ...(target.procurementId ? { targetId: target.id } : {}),
+        numeroProcedimiento,
+        hash,
+        snapshot,
+        changes: [],
+        notificationKind: "baseline",
+        suppressNotification: true,
+      });
+      log.info(
+        { numeroProcedimiento, snapshotId: restored.id },
+        "Tabla restaurada tras fila de relleno transitoria; sin alerta",
+      );
+      return {
+        status: "unchanged",
+        hash,
+        changes: 0,
+        deploymentSha: snapshot.deploymentSha,
+        restoredFromPlaceholder: true,
+        snapshotId: restored.id,
+        ...(completion ? { completion } : {}),
+      };
+    }
   }
 
   const changes = diffSnapshots(latest.snapshot_json, snapshot);
