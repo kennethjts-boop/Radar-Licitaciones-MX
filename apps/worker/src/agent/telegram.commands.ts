@@ -923,11 +923,17 @@ async function pausedConfirmationPrompt(
 
 function registerCommands(bot: TelegramBot, chatId: string): void {
   bot.on("callback_query", (query) => {
+    void import("../modules/edomex/job")
+      .then(({ handleEdomexCallback }) => handleEdomexCallback(bot, query))
+      .catch((err) => log.warn({ err }, "Error contenido en autorización Edomex"));
     void import("../modules/licitacion-watchdog/consent")
       .then(({ handleWatchdogConsentCallback }) => handleWatchdogConsentCallback(bot, query))
       .catch((err) => log.warn({ err }, "Error contenido en autorización watchdog"));
   });
   bot.on("message", (msg) => {
+    void import("../modules/edomex/job")
+      .then(({ handleEdomexReply }) => handleEdomexReply(bot, msg))
+      .catch((err) => log.warn({ err }, "Error contenido en respuesta Edomex"));
     void import("../modules/licitacion-watchdog/consent")
       .then(({ handleWatchdogConsentReply }) => handleWatchdogConsentReply(bot, msg))
       .catch((err) => log.warn({ err }, "Error contenido en respuesta watchdog"));

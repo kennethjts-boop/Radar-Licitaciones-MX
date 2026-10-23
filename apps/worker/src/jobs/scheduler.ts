@@ -42,6 +42,7 @@ import {
 } from "../modules/alerting/verdict";
 
 import { getEffectiveRadarMode } from "../modules/control/sleep-mode";
+import { runEdomexJob } from "../modules/edomex/job";
 
 const log = createModuleLogger("scheduler");
 
@@ -288,6 +289,19 @@ async function catchUpDailySummaryIfMissed(summaryHour: number): Promise<void> {
 
 export function startScheduler(): void {
   healthTracker.setSchedulerStatus("active");
+
+  // Canal estatal independiente de ComprasMX: candidatos y vigilancia del PDF
+  // únicamente tras consentimiento. Respeta las pausas existentes.
+  const runEdomex = async () => {
+    try {
+      const mode = await getEffectiveRadarMode();
+      const discover = mode !== "watchdog_only" && !(await cycleIsPaused("collector", "edomex_discovery"));
+      const watch = !(await cycleIsPaused("watchdog", "edomex_watchdog"));
+      if (discover || watch) await runEdomexJob({ discover, watch });
+    } catch (err) { log.warn({ err }, "Ciclo Edomex pendiente; se reintentará"); }
+  };
+  cron.schedule("*/30 * * * *", runEdomex, { timezone: "America/Mexico_City" });
+  setTimeout(() => { void runEdomex(); }, 20_000);
 
   const config = getConfig();
   const intervalMinutes = config.COLLECT_INTERVAL_MINUTES;
