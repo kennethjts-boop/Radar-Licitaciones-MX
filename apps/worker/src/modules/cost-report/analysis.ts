@@ -5,7 +5,11 @@
  * - Revisión: valor > promedio × (1 + pct) Y valor − promedio > mínimo
  *   absoluto, con al menos minDays días comparables. Es una señal para
  *   revisar, no prueba de fraude.
+ * - Métricas que dependen del registro de IA sólo se comparan si el día
+ *   actual y cada día de historial tienen cobertura completa: un día sin
+ *   datos o parcial no es gasto cero ni entra a promedios.
  */
+import { isAiComplete } from "./coverage";
 import { previousDates, shiftDate } from "./period";
 import type {
   AnomalyThresholds,
@@ -34,6 +38,7 @@ export function computeTotals(lines: ProviderLine[]): CostTotals {
     estimatedUsd: estimated.length ? sum(estimated.map((l) => l.estimatedUsd as number)) : null,
     estimatedProviders: estimated.map((l) => l.provider),
     estimateExcludes: lines.filter((l) => l.estimatedUsd === null).map((l) => l.provider),
+    estimatePartial: estimated.filter((l) => l.coverage?.status === "partial").map((l) => l.provider),
   };
 }
 
@@ -57,7 +62,7 @@ const WHERE: Record<string, string> = {
   "openrouter.reported": "openrouter.ai/activity",
   "ai.requests": "ai_usage_events por operation/model; jobs de enriquecimiento y análisis",
   "ai.errors": "ai_usage_events.error_kind y logs ai-service del worker",
-  "ai.retries": "ai_usage_events attempt>1 (pool de modelos / reintentos)",
+  "ai.retries": "ai_usage_events attempt>1 (pool de modelos) y http_attempts>1 (reintentos del SDK)",
 };
 
 interface MetricSpec {
@@ -65,6 +70,8 @@ interface MetricSpec {
   label: string;
   unit: "usd" | "count";
   get: (m: DayCostMetrics) => number | null;
+  /** Depende de ai_usage_events: exige cobertura completa. */
+  aiDerived: boolean;
 }
 
 function providerMetric(p: CostProvider, kind: "reported" | "estimated"): MetricSpec {
@@ -72,6 +79,7 @@ function providerMetric(p: CostProvider, kind: "reported" | "estimated"): Metric
     key: `${p}.${kind}`,
     label: `${providerLabel(p)} ${kind === "reported" ? "reportado" : "estimado"}`,
     unit: "usd",
+    aiDerived: kind === "estimated",
     get: (m) => {
       const line = m.providers.find((l) => l.provider === p);
       if (!line) return null;
@@ -81,14 +89,20 @@ function providerMetric(p: CostProvider, kind: "reported" | "estimated"): Metric
 }
 
 export const METRICS: MetricSpec[] = [
-  { key: "total.confirmed", label: "Total confirmado", unit: "usd", get: (m) => m.totals.confirmedUsd },
-  { key: "total.estimated", label: "Total estimado", unit: "usd", get: (m) => m.totals.estimatedUsd },
+  { key: "total.confirmed", label: "Total confirmado", unit: "usd", aiDerived: false, get: (m) => m.totals.confirmedUsd },
+  { key: "total.estimated", label: "Total estimado", unit: "usd", aiDerived: true, get: (m) => m.totals.estimatedUsd },
   providerMetric("openai", "estimated"),
   providerMetric("openrouter", "reported"),
   providerMetric("openrouter", "estimated"),
-  { key: "ai.requests", label: "Solicitudes IA", unit: "count", get: (m) => m.ai?.requests ?? null },
-  { key: "ai.errors", label: "Errores IA", unit: "count", get: (m) => m.ai?.errors ?? null },
-  { key: "ai.retries", label: "Reintentos IA", unit: "count", get: (m) => m.ai?.retries ?? null },
+  { key: "ai.requests", label: "Solicitudes IA", unit: "count", aiDerived: true, get: (m) => m.ai?.requests ?? null },
+  { key: "ai.errors", label: "Errores IA", unit: "count", aiDerived: true, get: (m) => m.ai?.errors ?? null },
+  {
+    key: "ai.retries",
+    label: "Reintentos IA",
+    unit: "count",
+    aiDerived: true,
+    get: (m) => (m.ai ? m.ai.retries + (m.ai.httpRetries ?? 0) : null),
+  },
 ];
 
 function minDelta(key: string, t: AnomalyThresholds): number {
@@ -118,9 +132,12 @@ export function compareMetrics(
   for (const spec of METRICS) {
     const value = spec.get(current);
     if (value === null) continue;
-    const comparable = prior.filter((d) => sameComposition(spec.key, current, d));
+    if (spec.aiDerived && !isAiComplete(current)) continue;
+    const comparable = prior.filter(
+      (d) => sameComposition(spec.key, current, d) && (!spec.aiDerived || isAiComplete(d)),
+    );
     const values = comparable.map(spec.get).filter((v): v is number => v !== null);
-    const prevDay = yesterday && sameComposition(spec.key, current, yesterday) ? spec.get(yesterday) : null;
+    const prevDay = yesterday && comparable.includes(yesterday) ? spec.get(yesterday) : null;
     const average = values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
 
     let status: MetricComparison["status"] = "ok";

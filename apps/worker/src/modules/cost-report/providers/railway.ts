@@ -8,6 +8,11 @@
  * por minuto: el costo queda "no disponible" y Railway no entra en totales
  * monetarios ni en anomalías. Los valores se muestran tal como los devuelve
  * la API, sin unidad.
+ *
+ * Fuente oficial de COSTO por servicio: la CLI de Railway
+ * (`railway usage projects --project <proyecto>`, desglose por servicio del
+ * periodo de facturación) y Workspace → Usage. Ambas son acumulados del
+ * periodo, no diarios, y requieren acceso al workspace; no se integran aquí.
  */
 import type { ProviderLine } from "../types";
 import type { ProviderContext } from "./context";
@@ -25,7 +30,7 @@ const USAGE_QUERY = `query RadarCostUsage($projectId: String!, $startDate: DateT
 }`;
 
 export const RAILWAY_COST_UNAVAILABLE =
-  "Railway costo: no disponible (esquema y unidades de la consulta usage sin documentación oficial; no se convierte a USD)";
+  "Railway costo: sin API documentada; fuente oficial = `railway usage projects --project <Radar>` o Workspace → Usage (acumulado del periodo, por servicio). El consumo no se convierte a USD";
 
 interface UsageEntry {
   measurement: string;

@@ -6,6 +6,7 @@ export interface ProviderEnv {
   RAILWAY_API_TOKEN?: string;
   RAILWAY_PROJECT_ID?: string;
   RAILWAY_SERVICE_ID?: string;
+  SUPABASE_COMPUTE_SIZE?: string;
 }
 
 export interface ProviderContext {
