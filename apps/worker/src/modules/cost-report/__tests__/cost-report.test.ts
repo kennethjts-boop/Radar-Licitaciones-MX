@@ -68,8 +68,8 @@ describe("cálculo", () => {
   it("buildUsageRow sólo guarda metadatos mínimos", () => {
     const row = buildUsageRow({ provider: "openai", model: "gpt-4o-mini", operation: "x", status: "ok", inputTokens: 10, outputTokens: 5 });
     expect(Object.keys(row).sort()).toEqual([
-      "attempt", "cost_estimated_usd", "cost_reported_usd", "error_kind", "input_tokens",
-      "model", "occurred_at", "operation", "output_tokens", "provider", "status",
+      "attempt", "cost_estimated_usd", "cost_reported_usd", "error_kind", "http_attempts", "input_tokens",
+      "key_id", "model", "occurred_at", "operation", "output_tokens", "provider", "status",
     ]);
   });
 
@@ -208,8 +208,9 @@ function day(date: string, estimated: number, requests = 100): DayCostMetrics {
     periodStartUtc: mexicoDayBounds(date).startUtc.toISOString(),
     periodEndUtc: mexicoDayBounds(date).endUtc.toISOString(),
     providers,
-    ai: { requests, errors: 0, retries: 0, inputTokens: 0, outputTokens: 0, unpricedRequests: 0, unverifiedPricingModels: [], errorKinds: {}, byModel: [] },
+    ai: { requests, errors: 0, retries: 0, httpRetries: 0, retriesUnobserved: 0, inputTokens: 0, outputTokens: 0, unpricedRequests: 0, unverifiedPricingModels: [], errorKinds: {}, byModel: [] },
     totals: computeTotals(providers),
+    coverage: { status: "complete", since: "2026-10-01T00:00:00.000Z", droppedEvents: 0 },
   };
 }
 

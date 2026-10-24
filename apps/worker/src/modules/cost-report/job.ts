@@ -19,8 +19,17 @@ import {
   sendTelegramMessageSingleAttempt,
 } from "../../alerts/telegram.alerts";
 import { parseAdminUserIds } from "../control/authorization";
-import { aggregateAiUsage, fetchAiUsageRows } from "./ai-usage";
+import { aggregateAiUsage, fetchAiUsageRows, probeAiUsageTable, type AiUsageRow } from "./ai-usage";
 import { compareMetrics, computeTotals } from "./analysis";
+import {
+  classifyCoverage,
+  COVERAGE_KEY,
+  coverageNote,
+  ensureCoverageMarker,
+  gapKey,
+  type CoverageMarker,
+  type GapRecord,
+} from "./coverage";
 import { formatCostReport } from "./format";
 import { mexicoClock, mexicoDateOf, mexicoDayBounds, previousDates, reportDateFor, shiftDate } from "./period";
 import { collectOpenAi } from "./providers/openai";
@@ -29,6 +38,7 @@ import {
   fetchOpenRouterUsage,
   openRouterDayDelta,
   openRouterKeyId,
+  openRouterReconciliation,
   snapshotDatesFor,
   type OpenRouterDelta,
   type OpenRouterSnapshot,
@@ -44,7 +54,7 @@ import {
   type ReportState,
   type StateStore,
 } from "./report-state";
-import type { AiStats, AnomalyThresholds, DayCostMetrics } from "./types";
+import type { AiStats, AnomalyThresholds, DayCostMetrics, DayCoverage, ProviderLine } from "./types";
 
 const log = createModuleLogger("cost-report");
 const HTTP_TIMEOUT_MS = 10_000;
@@ -62,6 +72,7 @@ function providerEnv(): ProviderEnv {
     RAILWAY_API_TOKEN: c.RAILWAY_API_TOKEN,
     RAILWAY_PROJECT_ID: c.RAILWAY_PROJECT_ID,
     RAILWAY_SERVICE_ID: c.RAILWAY_SERVICE_ID,
+    SUPABASE_COMPUTE_SIZE: c.SUPABASE_COMPUTE_SIZE,
   };
 }
 
@@ -118,10 +129,23 @@ function sumEstimated(ai: AiStats | null, provider: "openai" | "openrouter"): nu
   return models.reduce((s, m) => s + (m.estimatedUsd as number), 0);
 }
 
+/** Aplica la cobertura del registro de IA a una línea que depende de él. */
+function applyAiCoverage(line: ProviderLine, coverage: DayCoverage): ProviderLine {
+  line.coverage = { status: coverage.status, note: coverageNote(coverage) };
+  if (coverage.status === "none") {
+    line.estimatedUsd = null;
+    line.estimateDetail = undefined;
+  }
+  return line;
+}
+
+export type ReadAiRows = (start: Date, end: Date) => Promise<AiUsageRow[]>;
+
 export async function collectDayMetrics(
   date: string,
   store: StateStore,
   fetchImpl: typeof fetch = fetch,
+  readRows: ReadAiRows = fetchAiUsageRows,
 ): Promise<DayCostMetrics> {
   const bounds = mexicoDayBounds(date);
   const ctx: ProviderContext = {
@@ -133,11 +157,26 @@ export async function collectDayMetrics(
     timeoutMs: HTTP_TIMEOUT_MS,
   };
 
-  let ai: AiStats | null = null;
+  // Cobertura: sin marcador o gap ilegible → se asume lo más conservador.
+  let marker: CoverageMarker | null = null;
+  let gap: GapRecord | null = null;
   try {
-    ai = aggregateAiUsage(await fetchAiUsageRows(bounds.startUtc, bounds.endUtc));
+    const states = await store.readMany<CoverageMarker | GapRecord>([COVERAGE_KEY, gapKey(date)]);
+    marker = (states.get(COVERAGE_KEY) as CoverageMarker | undefined) ?? null;
+    gap = (states.get(gapKey(date)) as GapRecord | undefined) ?? null;
   } catch (err) {
-    log.warn({ err: err instanceof Error ? err.message : String(err) }, "Sin acceso a ai_usage_events");
+    log.warn({ err: err instanceof Error ? err.message : String(err) }, "No se pudo leer la cobertura de medición");
+  }
+  const coverage = classifyCoverage(date, marker, gap);
+
+  // Un día sin cobertura no se consulta: 0 filas no significa 0 gasto.
+  let ai: AiStats | null = null;
+  if (coverage.status !== "none") {
+    try {
+      ai = aggregateAiUsage(await readRows(bounds.startUtc, bounds.endUtc));
+    } catch (err) {
+      log.warn({ err: err instanceof Error ? err.message : String(err) }, "Sin acceso a ai_usage_events");
+    }
   }
 
   let delta: OpenRouterDelta | null = null;
@@ -149,15 +188,29 @@ export async function collectDayMetrics(
     delta = { usd: null, aligned: false, problem: "no se pudieron leer los cortes" };
   }
 
+  // Contraste OpenRouter: eventos del periodo REAL de los cortes.
+  let periodRows: AiUsageRow[] | null = null;
+  const covered = marker?.since && delta?.periodStart && new Date(marker.since) <= new Date(delta.periodStart);
+  if (covered && delta?.usd !== null && delta?.periodEnd) {
+    try {
+      periodRows = await readRows(new Date(delta.periodStart as string), new Date(delta.periodEnd));
+    } catch {
+      periodRows = null;
+    }
+  }
+
   const [openai, railway] = await Promise.all([
-    collectOpenAi(ctx, sumEstimated(ai, "openai")),
+    collectOpenAi(ctx, sumEstimated(ai, "openai"), coverage.status === "complete" ? ai?.byModel ?? null : null),
     collectRailway(ctx),
   ]);
+  const openrouter = buildOpenRouterLine(ctx, delta, sumEstimated(ai, "openrouter"));
+  openrouter.reconciliation = openRouterReconciliation(delta, periodRows, marker?.since ?? null);
+  railway.coverage = { status: "not_applicable" };
   const providers = [
-    openai,
-    buildOpenRouterLine(ctx, delta, sumEstimated(ai, "openrouter")),
+    applyAiCoverage(openai, coverage),
+    applyAiCoverage(openrouter, coverage),
     railway,
-    supabaseLine(),
+    supabaseLine(ctx.env.SUPABASE_COMPUTE_SIZE),
   ];
   return {
     date,
@@ -166,7 +219,18 @@ export async function collectDayMetrics(
     providers,
     ai,
     totals: computeTotals(providers),
+    coverage,
   };
+}
+
+/** Registra el inicio de la medición confiable (una sola vez). Nunca lanza. */
+export async function ensureMeasurementCoverage(store: StateStore = supabaseStateStore()): Promise<void> {
+  try {
+    const marker = await ensureCoverageMarker(store, probeAiUsageTable, instanceId);
+    if (!marker) log.warn("ai_usage_events no responde: la medición confiable aún no inicia");
+  } catch (err) {
+    log.warn({ err: err instanceof Error ? err.message : String(err) }, "No se pudo registrar la cobertura de medición");
+  }
 }
 
 // ─── Destino ─────────────────────────────────────────────────────────────────
@@ -350,11 +414,13 @@ export function startCostReportScheduler(): void {
     );
   const safeSnapshot = () =>
     captureMidnightSnapshots().catch((err) => log.warn({ err }, "Error en corte de medianoche"));
+  const safeCoverage = () => ensureMeasurementCoverage();
 
   cron.schedule("*/5 0 * * *", safeSnapshot, { timezone: "America/Mexico_City" });
   cron.schedule(
     `0 ${hour}-23 * * *`,
     async () => {
+      await safeCoverage();
       await safeSnapshot();
       await safeRun();
     },
@@ -362,8 +428,11 @@ export function startCostReportScheduler(): void {
   );
   // Catch-up tras reinicio: corte del día si falta y reporte pendiente.
   setTimeout(() => {
-    void safeSnapshot();
-    void safeRun();
+    void (async () => {
+      await safeCoverage();
+      await safeSnapshot();
+      await safeRun();
+    })();
   }, 30_000).unref();
 
   log.info({ cron: `0 ${hour}-23 * * *`, snapshotCron: "*/5 0 * * *" }, "Reporte de gastos programado");

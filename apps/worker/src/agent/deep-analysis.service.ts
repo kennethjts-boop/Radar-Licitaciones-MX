@@ -10,7 +10,7 @@ import { BrowserManager } from "../collectors/comprasmx/browser.manager";
 import { ComprasMxNavigator } from "../collectors/comprasmx/comprasmx.navigator";
 import { extractTextFromPdf } from "../utils/pdf.util";
 import { getSupabaseClient } from "../storage/client";
-import { trackAiCall } from "../modules/cost-report/ai-usage";
+import { keyFingerprint, observedFetch, trackAiCall } from "../modules/cost-report/ai-usage";
 
 const log = createModuleLogger("agent-deep-analysis");
 
@@ -40,7 +40,7 @@ function getOpenAIClient(): any {
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY no configurada para Deep Analysis");
   }
-  return new OpenAI({ apiKey });
+  return new OpenAI({ apiKey, fetch: observedFetch });
 }
 
 async function getCapufeHistoricalContext(): Promise<string> {
@@ -181,7 +181,7 @@ async function runStrategicPrompt(input: {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const response = await trackAiCall<any>(
-    { provider: "openai", model: "gpt-4o", operation: "deep_analysis" },
+    { provider: "openai", model: "gpt-4o", operation: "deep_analysis", keyId: keyFingerprint(process.env.OPENAI_API_KEY ?? "") },
     () => client.chat.completions.create({
     model: "gpt-4o",
     response_format: {
