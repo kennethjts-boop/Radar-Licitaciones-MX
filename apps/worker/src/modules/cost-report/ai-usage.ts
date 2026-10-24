@@ -28,24 +28,43 @@ export interface AiUsageInput {
 }
 
 interface UsageLike {
-  prompt_tokens?: number;
-  completion_tokens?: number;
-  cost?: number;
+  prompt_tokens?: unknown;
+  completion_tokens?: unknown;
+  total_tokens?: unknown;
+  cost?: unknown;
 }
 
-/** Extrae tokens y costo (OpenRouter `usage.cost`) de una respuesta. */
-export function usageFromResponse(response: unknown): {
+export type UsageKind = "chat" | "embedding";
+
+/**
+ * Extrae tokens y costo (OpenRouter `usage.cost`) de una respuesta.
+ * Embeddings: `usage` trae prompt_tokens/total_tokens y no completion_tokens;
+ * la salida es 0 por definición y la entrada cae a total_tokens si falta
+ * prompt_tokens. En chat, la ausencia de completion_tokens queda como null.
+ */
+export function usageFromResponse(
+  response: unknown,
+  kind: UsageKind = "chat",
+): {
   inputTokens: number | null;
   outputTokens: number | null;
   reportedCostUsd: number | null;
 } {
   const usage = (response as { usage?: UsageLike } | null)?.usage;
-  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
-  return {
-    inputTokens: num(usage?.prompt_tokens),
-    outputTokens: num(usage?.completion_tokens),
-    reportedCostUsd: num(usage?.cost),
-  };
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null);
+  const prompt = num(usage?.prompt_tokens);
+  const completion = num(usage?.completion_tokens);
+  const total = num(usage?.total_tokens);
+
+  let inputTokens = prompt;
+  let outputTokens = completion;
+  if (kind === "embedding") {
+    inputTokens = prompt ?? total;
+    outputTokens = inputTokens !== null ? (completion ?? 0) : null;
+  } else if (inputTokens === null && total !== null && completion !== null) {
+    inputTokens = Math.max(0, total - completion);
+  }
+  return { inputTokens, outputTokens, reportedCostUsd: num(usage?.cost) };
 }
 
 /** Clasificación corta del error, sin texto libre. */
@@ -106,15 +125,18 @@ function warnThrottled(reason: string): void {
 
 /** Ejecuta una llamada de IA y registra su consumo; propaga el error original. */
 export async function trackAiCall<T>(
-  meta: Omit<AiUsageInput, "status" | "inputTokens" | "outputTokens" | "reportedCostUsd" | "errorKind">,
+  meta: Omit<AiUsageInput, "status" | "inputTokens" | "outputTokens" | "reportedCostUsd" | "errorKind"> & {
+    usageKind?: UsageKind;
+  },
   call: () => Promise<T>,
 ): Promise<T> {
+  const { usageKind = "chat", ...base } = meta;
   try {
     const response = await call();
-    recordAiUsage({ ...meta, status: "ok", ...usageFromResponse(response) });
+    recordAiUsage({ ...base, status: "ok", ...usageFromResponse(response, usageKind) });
     return response;
   } catch (err) {
-    recordAiUsage({ ...meta, status: "error", errorKind: classifyAiError(err) });
+    recordAiUsage({ ...base, status: "error", errorKind: classifyAiError(err) });
     throw err;
   }
 }

@@ -1,18 +1,19 @@
 /**
- * Railway — ESTIMACIÓN con la consulta `usage` de la API pública GraphQL
- * (uso agregado del proyecto en [startDate, endDate), agrupado por servicio)
- * × tarifas públicas por minuto. No es la factura: no descuenta créditos
- * incluidos del plan ni suscripción. Railway no expone el monto facturado
- * por día en su API pública.
+ * Railway — sólo MÉTRICAS, sin costo.
  *
- * Unidades asumidas (validar contra la factura la primera semana):
- * CPU_USAGE = vCPU·minuto, MEMORY_USAGE_GB = GB·minuto, NETWORK_TX_GB = GB.
+ * La consulta `usage` de la API pública GraphQL existe (changelog de Railway,
+ * 2023-02-17), pero Railway no documenta oficialmente su esquema ni las
+ * unidades de CPU_USAGE / MEMORY_USAGE_GB / NETWORK_TX_GB (verificado
+ * 2026-10-24). Sin unidades acreditadas no se puede multiplicar por la tarifa
+ * por minuto: el costo queda "no disponible" y Railway no entra en totales
+ * monetarios ni en anomalías. Los valores se muestran tal como los devuelve
+ * la API, sin unidad.
  */
-import { RAILWAY_PRICES } from "../pricing";
 import type { ProviderLine } from "../types";
 import type { ProviderContext } from "./context";
 
 const GRAPHQL_URL = "https://backboard.railway.com/graphql/v2";
+const MEASUREMENTS = ["CPU_USAGE", "MEMORY_USAGE_GB", "NETWORK_TX_GB"] as const;
 
 const USAGE_QUERY = `query RadarCostUsage($projectId: String!, $startDate: DateTime!, $endDate: DateTime!) {
   usage(projectId: $projectId, startDate: $startDate, endDate: $endDate,
@@ -23,42 +24,49 @@ const USAGE_QUERY = `query RadarCostUsage($projectId: String!, $startDate: DateT
   }
 }`;
 
+export const RAILWAY_COST_UNAVAILABLE =
+  "Railway costo: no disponible (esquema y unidades de la consulta usage sin documentación oficial; no se convierte a USD)";
+
 interface UsageEntry {
   measurement: string;
   value: number;
   tags?: { serviceId?: string | null };
 }
 
-export function estimateRailwayCost(entries: UsageEntry[], serviceId: string) {
-  const pick = (m: string) =>
-    entries
-      .filter((e) => e.measurement === m && e.tags?.serviceId === serviceId)
-      .reduce((sum, e) => sum + (Number.isFinite(e.value) ? e.value : 0), 0);
-  const cpu = pick("CPU_USAGE");
-  const mem = pick("MEMORY_USAGE_GB");
-  const egress = pick("NETWORK_TX_GB");
-  const usd =
-    cpu * RAILWAY_PRICES.vcpuMinuteUsd +
-    mem * RAILWAY_PRICES.memoryGbMinuteUsd +
-    egress * RAILWAY_PRICES.egressGbUsd;
-  const found = entries.some((e) => e.tags?.serviceId === serviceId);
-  return { usd, cpu, mem, egress, found };
+/** Suma por medición del servicio; null si la API no devolvió nada para él. */
+export function railwayServiceMetrics(entries: UsageEntry[], serviceId: string): Record<string, number> | null {
+  const own = entries.filter((e) => e.tags?.serviceId === serviceId && Number.isFinite(e.value));
+  if (!own.length) return null;
+  const out: Record<string, number> = {};
+  for (const m of MEASUREMENTS) {
+    const values = own.filter((e) => e.measurement === m);
+    if (values.length) out[m] = values.reduce((sum, e) => sum + e.value, 0);
+  }
+  return out;
+}
+
+export function formatRailwayMetrics(metrics: Record<string, number>): string {
+  const parts = Object.entries(metrics).map(([k, v]) => `${k}=${Number(v.toFixed(3))}`);
+  return `${parts.join(" · ")} (valores crudos de la API, sin unidad acreditada)`;
 }
 
 export async function collectRailway(ctx: ProviderContext): Promise<ProviderLine> {
-  const line: ProviderLine = { provider: "railway", reportedUsd: null, estimatedUsd: null, missing: [] };
+  const line: ProviderLine = {
+    provider: "railway",
+    reportedUsd: null,
+    estimatedUsd: null,
+    missing: [RAILWAY_COST_UNAVAILABLE],
+  };
   const token = ctx.env.RAILWAY_API_TOKEN?.trim();
   const projectId = ctx.env.RAILWAY_PROJECT_ID?.trim();
   const serviceId = ctx.env.RAILWAY_SERVICE_ID?.trim();
 
   if (!token) {
-    line.missing.push(
-      "Railway: falta RAILWAY_API_TOKEN (token de workspace del equipo dueño del proyecto; se envía como Bearer)",
-    );
+    line.missing.push("Railway métricas: RAILWAY_API_TOKEN no configurado (opcional; sólo para mostrar uso)");
     return line;
   }
   if (!projectId || !serviceId) {
-    line.missing.push("Railway: faltan RAILWAY_PROJECT_ID/RAILWAY_SERVICE_ID (Railway los inyecta en el servicio)");
+    line.missing.push("Railway métricas: faltan RAILWAY_PROJECT_ID/RAILWAY_SERVICE_ID (Railway los inyecta en el servicio)");
     return line;
   }
 
@@ -77,23 +85,22 @@ export async function collectRailway(ctx: ProviderContext): Promise<ProviderLine
       signal: AbortSignal.timeout(ctx.timeoutMs),
     });
     if (!res.ok) {
-      line.missing.push(`Railway API respondió HTTP ${res.status}`);
+      line.missing.push(`Railway métricas: API respondió HTTP ${res.status}`);
       return line;
     }
-    const body = (await res.json()) as { data?: { usage?: UsageEntry[] }; errors?: Array<{ message?: string }> };
-    if (body.errors?.length || !body.data?.usage) {
-      line.missing.push("Railway API devolvió error GraphQL (revisar permisos del token)");
+    const body = (await res.json()) as { data?: { usage?: UsageEntry[] }; errors?: unknown[] };
+    if (body.errors?.length || !Array.isArray(body.data?.usage)) {
+      line.missing.push("Railway métricas: la API devolvió error GraphQL o un esquema distinto al esperado");
       return line;
     }
-    const est = estimateRailwayCost(body.data.usage, serviceId);
-    if (!est.found) {
-      line.missing.push("Railway: sin uso registrado para el servicio en el periodo (posible retraso)");
+    const metrics = railwayServiceMetrics(body.data.usage, serviceId);
+    if (!metrics) {
+      line.missing.push("Railway métricas: sin datos para el servicio en el periodo (posible retraso)");
       return line;
     }
-    line.estimatedUsd = est.usd;
-    line.estimateDetail = `CPU ${est.cpu.toFixed(1)} vCPU·min · RAM ${est.mem.toFixed(0)} GB·min · salida ${est.egress.toFixed(2)} GB`;
+    line.metricsDetail = formatRailwayMetrics(metrics);
   } catch (err) {
-    line.missing.push(`Railway API no respondió (${err instanceof Error ? err.name : "error"})`);
+    line.missing.push(`Railway métricas: API no respondió (${err instanceof Error ? err.name : "error"})`);
   }
   return line;
 }

@@ -28,7 +28,9 @@ import {
   buildOpenRouterLine,
   fetchOpenRouterUsage,
   openRouterDayDelta,
-  SNAPSHOT_MAX_DELAY_MIN,
+  openRouterKeyId,
+  snapshotDatesFor,
+  type OpenRouterDelta,
   type OpenRouterSnapshot,
 } from "./providers/openrouter";
 import { collectRailway } from "./providers/railway";
@@ -74,28 +76,34 @@ export function thresholdsFromConfig(): AnomalyThresholds {
   };
 }
 
-// ─── Corte de medianoche (OpenRouter) ────────────────────────────────────────
+// ─── Corte diario del contador (OpenRouter) ─────────────────────────────────
 
+/**
+ * Primer corte del día MX en curso. El cron de las 00:00 MX produce el corte
+ * alineado; si falla o el worker estaba caído, cualquier corte posterior del
+ * mismo día se guarda con su hora real y el reporte lo trata como referencia.
+ */
 export async function captureMidnightSnapshots(
-  now: Date = new Date(),
+  clock: () => Date = () => new Date(),
   store: StateStore = supabaseStateStore(),
+  fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
   const apiKey = providerEnv().OPENROUTER_API_KEY?.trim();
   if (!apiKey) return;
-  const clock = mexicoClock(now);
-  if (clock.hour !== 0 || clock.minute > SNAPSHOT_MAX_DELAY_MIN) return;
-
-  const key = snapshotKey("openrouter", mexicoDateOf(now));
+  const key = snapshotKey("openrouter", mexicoDateOf(clock()));
   try {
     if (await store.read(key)) return;
-    const usageUsd = await fetchOpenRouterUsage(apiKey, fetch, HTTP_TIMEOUT_MS);
+    const usageUsd = await fetchOpenRouterUsage(apiKey, fetchImpl, HTTP_TIMEOUT_MS);
+    const capturedAt = clock();
+    // Si la lectura terminó ya en otro día MX, no se guarda bajo la clave vieja.
+    if (snapshotKey("openrouter", mexicoDateOf(capturedAt)) !== key) return;
     const snapshot: OpenRouterSnapshot = {
       usageUsd,
-      capturedAt: now.toISOString(),
-      delayMinutes: clock.minute,
+      capturedAt: capturedAt.toISOString(),
+      keyId: openRouterKeyId(apiKey),
     };
     await store.insertIfAbsent(key, snapshot);
-    log.info({ key, delayMinutes: clock.minute }, "Corte de medianoche OpenRouter guardado");
+    log.info({ key, capturedAt: snapshot.capturedAt }, "Corte del contador OpenRouter guardado");
   } catch (err) {
     log.warn({ key, err: err instanceof Error ? err.message : String(err) }, "No se pudo tomar corte OpenRouter");
   }
@@ -132,18 +140,13 @@ export async function collectDayMetrics(
     log.warn({ err: err instanceof Error ? err.message : String(err) }, "Sin acceso a ai_usage_events");
   }
 
-  let delta: ReturnType<typeof openRouterDayDelta> | null = null;
+  let delta: OpenRouterDelta | null = null;
   try {
-    const snaps = await store.readMany<OpenRouterSnapshot>([
-      snapshotKey("openrouter", date),
-      snapshotKey("openrouter", shiftDate(date, 1)),
-    ]);
-    delta = openRouterDayDelta(
-      snaps.get(snapshotKey("openrouter", date)) ?? null,
-      snaps.get(snapshotKey("openrouter", shiftDate(date, 1))) ?? null,
-    );
-  } catch (err) {
-    delta = { usd: null, problem: "no se pudieron leer los cortes" };
+    const [startKey, endKey] = snapshotDatesFor(date).map((d) => snapshotKey("openrouter", d));
+    const snaps = await store.readMany<OpenRouterSnapshot>([startKey, endKey]);
+    delta = openRouterDayDelta(date, snaps.get(startKey) ?? null, snaps.get(endKey) ?? null);
+  } catch {
+    delta = { usd: null, aligned: false, problem: "no se pudieron leer los cortes" };
   }
 
   const [openai, railway] = await Promise.all([
@@ -192,6 +195,33 @@ export interface RunDeps {
   fetchImpl?: typeof fetch;
   send?: (text: string, chatId: string) => Promise<{ messageId: number }>;
   resolveChat?: () => Promise<string | null>;
+  persistRetryDelayMs?: number;
+}
+
+/**
+ * Días cuya entrega este proceso confirmó o dejó incierta. Segunda barrera
+ * contra reenvíos si system_state no pudo registrar el resultado.
+ */
+const deliveryGuard = new Set<string>();
+
+export function resetDeliveryGuardForTests(): void {
+  deliveryGuard.clear();
+}
+
+const PERSIST_ATTEMPTS = 3;
+
+async function persistOutcome(store: StateStore, key: string, value: ReportState, delayMs: number): Promise<boolean> {
+  for (let i = 1; i <= PERSIST_ATTEMPTS; i++) {
+    try {
+      await store.write(key, value);
+      return true;
+    } catch (err) {
+      log.warn({ key, status: value.status, intento: i, err: err instanceof Error ? err.message : String(err) },
+        "No se pudo persistir resultado del reporte de gastos");
+      if (i < PERSIST_ATTEMPTS) await new Promise((r) => setTimeout(r, delayMs * i));
+    }
+  }
+  return false;
 }
 
 export async function runDailyCostReport(deps: RunDeps = {}): Promise<string> {
@@ -203,6 +233,8 @@ export async function runDailyCostReport(deps: RunDeps = {}): Promise<string> {
   const store = deps.store ?? supabaseStateStore();
   const date = reportDateFor(now);
   const key = reportKey(date);
+  const persistDelay = deps.persistRetryDelayMs ?? 500;
+  if (deliveryGuard.has(date)) return "skip:delivered_in_process";
 
   // Pre-chequeo barato: evita recolectar si ya se resolvió el día.
   const existing = await store.read<ReportState>(key);
@@ -213,14 +245,19 @@ export async function runDailyCostReport(deps: RunDeps = {}): Promise<string> {
     log.info({ date, reason: claim.reason }, "Reporte de gastos omitido");
     return `skip:${claim.reason}`;
   }
-
+  // Desde aquí la fila queda en status=claimed, que nunca se reenvía: si una
+  // escritura posterior falla, ese estado sigue bloqueando reenvíos.
   const base: ReportState = {
     status: "claimed",
     attempts: claim.attempt,
     claimedBy: instanceId,
     claimedAt: now.toISOString(),
   };
+
+  // Fase 1 — preparar, sin efectos externos. Un fallo aquí es reintentable.
   let metrics: DayCostMetrics | null = null;
+  let text: string;
+  let chatId: string;
   try {
     metrics = await collectDayMetrics(date, store, deps.fetchImpl ?? fetch);
     const historyKeys = previousDates(date, 7).map(reportKey);
@@ -238,45 +275,64 @@ export async function runDailyCostReport(deps: RunDeps = {}): Promise<string> {
     const prev = historyMap.get(reportKey(shiftDate(date, -1)));
     if (prev && prev.status !== "sent") notes.push(`El reporte del ${shiftDate(date, -1)} quedó en estado ${prev.status}`);
 
-    const text = formatCostReport(metrics, comparisons, {
+    text = formatCostReport(metrics, comparisons, {
       generatedAt: now,
       thresholds,
       lateNote: notes.join(" · ") || undefined,
     });
-
-    const chatId = await (deps.resolveChat ?? resolvePrivateChat)();
-    if (!chatId) throw new Error("no_private_chat: ningún chat configurado es privado");
-
-    const send = deps.send ?? sendTelegramMessageSingleAttempt;
-    let messageId: number;
-    try {
-      ({ messageId } = await send(text, chatId));
-    } catch (err) {
-      const details = describeTelegramSendError(err);
-      const definitelyNotSent =
-        details.kind === "api" || (details.kind === "network" && PRE_CONNECT_CODES.has(details.code ?? ""));
-      await store.write(key, {
-        ...base,
-        status: definitelyNotSent ? "failed" : "uncertain",
-        error: `telegram_${details.kind}${details.code ? `:${details.code}` : ""}`,
-        metrics,
-      });
-      log.error({ date, kind: details.kind, attempt: claim.attempt }, "Reporte de gastos no entregado");
-      return definitelyNotSent ? "failed" : "uncertain";
-    }
-
-    await store.write(key, { ...base, status: "sent", sentAt: new Date().toISOString(), messageId, error: null, metrics });
-    log.info({ date, messageId, attempt: claim.attempt }, "Reporte de gastos enviado");
-    return "sent";
+    const resolved = await (deps.resolveChat ?? resolvePrivateChat)();
+    if (!resolved) throw new Error("no_private_chat: ningún chat configurado es privado");
+    chatId = resolved;
   } catch (err) {
-    // Antes de llamar a Telegram: seguro reintentar en la siguiente hora.
     const reason = err instanceof Error ? err.message.slice(0, 160) : "error";
-    await store
-      .write(key, { ...base, status: "failed", error: reason, metrics })
-      .catch((e) => log.error({ err: e }, "No se pudo persistir fallo del reporte de gastos"));
+    await persistOutcome(store, key, { ...base, status: "failed", error: reason, metrics }, persistDelay);
     log.error({ date, reason }, "Reporte de gastos falló antes del envío");
     return "failed";
   }
+
+  // Fase 2 — un solo intento de envío.
+  let messageId: number | null = null;
+  let sendError: unknown = null;
+  try {
+    ({ messageId } = await (deps.send ?? sendTelegramMessageSingleAttempt)(text, chatId));
+  } catch (err) {
+    sendError = err;
+  }
+
+  // Fase 3 — registrar. Una entrega confirmada o incierta nunca pasa a failed.
+  if (sendError === null) {
+    deliveryGuard.add(date);
+    const ok = await persistOutcome(
+      store,
+      key,
+      { ...base, status: "sent", sentAt: new Date().toISOString(), messageId, error: null, metrics },
+      persistDelay,
+    );
+    if (!ok) {
+      log.error({ date, messageId }, "Reporte entregado pero sin registrar 'sent'; status=claimed bloquea reenvíos");
+      return "sent_unpersisted";
+    }
+    log.info({ date, messageId, attempt: claim.attempt }, "Reporte de gastos enviado");
+    return "sent";
+  }
+
+  const details = describeTelegramSendError(sendError);
+  const definitelyNotSent =
+    details.kind === "api" || (details.kind === "network" && PRE_CONNECT_CODES.has(details.code ?? ""));
+  if (!definitelyNotSent) deliveryGuard.add(date);
+  await persistOutcome(
+    store,
+    key,
+    {
+      ...base,
+      status: definitelyNotSent ? "failed" : "uncertain",
+      error: `telegram_${details.kind}${details.code ? `:${details.code}` : ""}`,
+      metrics,
+    },
+    persistDelay,
+  );
+  log.error({ date, kind: details.kind, attempt: claim.attempt }, "Reporte de gastos no entregado");
+  return definitelyNotSent ? "failed" : "uncertain";
 }
 
 // ─── Programación ────────────────────────────────────────────────────────────
@@ -296,8 +352,15 @@ export function startCostReportScheduler(): void {
     captureMidnightSnapshots().catch((err) => log.warn({ err }, "Error en corte de medianoche"));
 
   cron.schedule("*/5 0 * * *", safeSnapshot, { timezone: "America/Mexico_City" });
-  cron.schedule(`0 ${hour}-23 * * *`, safeRun, { timezone: "America/Mexico_City" });
-  // Catch-up tras reinicio: corte (si estamos en la ventana) y reporte pendiente.
+  cron.schedule(
+    `0 ${hour}-23 * * *`,
+    async () => {
+      await safeSnapshot();
+      await safeRun();
+    },
+    { timezone: "America/Mexico_City" },
+  );
+  // Catch-up tras reinicio: corte del día si falta y reporte pendiente.
   setTimeout(() => {
     void safeSnapshot();
     void safeRun();

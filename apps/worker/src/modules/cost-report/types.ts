@@ -20,6 +20,8 @@ export interface ProviderLine {
   estimatedUsd: number | null;
   /** Detalle legible de la estimación (unidades medidas). */
   estimateDetail?: string;
+  /** Métricas de uso no monetarias (no entran a totales ni anomalías). */
+  metricsDetail?: string;
   reference?: ReferenceFigure;
   /** Datos faltantes, retrasos o permisos mínimos requeridos. */
   missing: string[];

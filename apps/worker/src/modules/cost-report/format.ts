@@ -32,7 +32,7 @@ function fmt(unit: "usd" | "count", v: number): string {
 }
 
 function delta(unit: "usd" | "count", value: number, base: number | null): string {
-  if (base === null) return "s/d";
+  if (base === null) return "sin datos";
   const diff = value - base;
   const sign = diff > 0 ? "+" : diff < 0 ? "−" : "±";
   const abs = fmt(unit, Math.abs(diff));
@@ -60,7 +60,8 @@ function providerBlock(line: ProviderLine): string[] {
     parts.push(`estimado ${usd(line.estimatedUsd)}${line.estimateDetail ? ` (${esc(line.estimateDetail)})` : ""}`);
   }
   const icon = line.reportedUsd !== null ? "🟢" : line.estimatedUsd !== null ? "🟡" : "⚪";
-  const out = [`${icon} <b>${name}</b> — ${parts.length ? parts.join(" · ") : "no disponible"}`];
+  const out = [`${icon} <b>${name}</b> — ${parts.length ? parts.join(" · ") : "costo no disponible"}`];
+  if (line.metricsDetail) out.push(`   uso: ${esc(line.metricsDetail)}`);
   if (line.reference) {
     out.push(`   ref. ${usd(line.reference.usd)} · ${esc(line.reference.period)} · ${esc(line.reference.reason)}`);
   }

@@ -3,8 +3,9 @@
  * batch). Se usan sólo para ESTIMAR; nunca se presentan como gasto real.
  *
  * verified=true: tomada de la página oficial del modelo en
- * developers.openai.com (consultada 2026-10-24).
+ * developers.openai.com/api/docs/models/<modelo> (consultada 2026-10-24).
  * verified=false: sólo confirmada en agregadores; el reporte lo indica.
+ * Hoy todas las entradas están verificadas en la fuente oficial.
  * Modelos sin entrada → costo no estimado ("sin tarifa").
  */
 export const PRICING_CHECKED_AT = "2026-10-24";
@@ -19,7 +20,7 @@ const OPENAI_PRICES: Record<string, ModelPrice> = {
   "gpt-4o-mini": { inputPerM: 0.15, outputPerM: 0.6, verified: true },
   "gpt-4o": { inputPerM: 2.5, outputPerM: 10, verified: true },
   "text-embedding-3-small": { inputPerM: 0.02, outputPerM: 0, verified: true },
-  "gpt-4.1-mini": { inputPerM: 0.4, outputPerM: 1.6, verified: false },
+  "gpt-4.1-mini": { inputPerM: 0.4, outputPerM: 1.6, verified: true },
 };
 
 /** "openai/gpt-4o-mini" → "gpt-4o-mini"; quita sufijos de fecha "-2024-07-18". */
@@ -49,13 +50,3 @@ export function estimateTokenCost(
     (inputTokens * price.inputPerM + outputTokens * price.outputPerM) / 1_000_000;
   return { usd, verified: price.verified };
 }
-
-/**
- * Railway (docs.railway.com/pricing, consultada 2026-10-24). Uso bruto: no
- * descuenta créditos incluidos del plan ni la suscripción.
- */
-export const RAILWAY_PRICES = {
-  vcpuMinuteUsd: 0.000463,
-  memoryGbMinuteUsd: 0.000231,
-  egressGbUsd: 0.05,
-} as const;

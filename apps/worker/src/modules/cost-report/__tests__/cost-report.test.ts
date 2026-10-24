@@ -1,10 +1,10 @@
-import { aggregateAiUsage, buildUsageRow, type AiUsageRow } from "../ai-usage";
+import { aggregateAiUsage, buildUsageRow, usageFromResponse, type AiUsageRow } from "../ai-usage";
 import { compareMetrics, computeTotals, DEFAULT_THRESHOLDS } from "../analysis";
 import { formatCostReport } from "../format";
 import { mexicoClock, mexicoDayBounds, previousDates, reportDateFor } from "../period";
 import { estimateTokenCost } from "../pricing";
-import { buildOpenRouterLine, openRouterDayDelta } from "../providers/openrouter";
-import { estimateRailwayCost } from "../providers/railway";
+import { buildOpenRouterLine, openRouterDayDelta, openRouterKeyId } from "../providers/openrouter";
+import { collectRailway, RAILWAY_COST_UNAVAILABLE, railwayServiceMetrics } from "../providers/railway";
 import { supabaseLine } from "../providers/supabase";
 import { claimReport, reportKey, type StateStore } from "../report-state";
 import type { DayCostMetrics, ProviderLine } from "../types";
@@ -102,30 +102,99 @@ describe("cálculo", () => {
     expect(computeTotals([supabaseLine()]).confirmedUsd).toBeNull();
   });
 
-  it("OpenRouter: diferencia entre cortes de medianoche y atribución", () => {
-    const s = (usageUsd: number, delayMinutes = 0) => ({ usageUsd, capturedAt: "", delayMinutes });
-    expect(openRouterDayDelta(s(10), s(10.5)).usd).toBeCloseTo(0.5);
-    expect(openRouterDayDelta(null, s(1)).usd).toBeNull();
-    expect(openRouterDayDelta(s(1, 45), s(2)).usd).toBeNull();
-    expect(openRouterDayDelta(s(5), s(4)).usd).toBeNull();
-    const shared = buildOpenRouterLine({ env: { OPENROUTER_API_KEY: "k" } }, { usd: 0.5 }, 0.4);
-    expect(shared.reportedUsd).toBeNull();
-    expect(shared.reference?.usd).toBe(0.5);
-    const dedicated = buildOpenRouterLine({ env: { OPENROUTER_API_KEY: "k", OPENROUTER_KEY_DEDICATED: true } }, { usd: 0.5 }, 0.4);
-    expect(dedicated.reportedUsd).toBe(0.5);
+  it("embeddings: usa prompt_tokens/total_tokens sin completion_tokens y estima costo", () => {
+    // Forma real de POST /v1/embeddings (text-embedding-3-small).
+    const response = {
+      object: "list",
+      data: [{ object: "embedding", index: 0, embedding: [0.0023, -0.0093, 0.0157] }],
+      model: "text-embedding-3-small",
+      usage: { prompt_tokens: 1200, total_tokens: 1200 },
+    };
+    const usage = usageFromResponse(response, "embedding");
+    expect(usage).toEqual({ inputTokens: 1200, outputTokens: 0, reportedCostUsd: null });
+    const row = buildUsageRow({ provider: "openai", model: "text-embedding-3-small", operation: "embedding", status: "ok", ...usage });
+    expect(row.input_tokens).toBe(1200);
+    expect(row.output_tokens).toBe(0);
+    expect(row.cost_estimated_usd).toBeCloseTo((1200 * 0.02) / 1_000_000, 12);
+    // Sólo total_tokens: se toma como entrada.
+    expect(usageFromResponse({ usage: { total_tokens: 40 } }, "embedding").inputTokens).toBe(40);
+    // En chat, faltar completion_tokens no se convierte en 0.
+    expect(usageFromResponse({ usage: { prompt_tokens: 10 } }).outputTokens).toBeNull();
   });
 
-  it("Railway: filtra por servicio y aplica tarifa por minuto", () => {
-    const est = estimateRailwayCost(
-      [
-        { measurement: "CPU_USAGE", value: 100, tags: { serviceId: "svc" } },
-        { measurement: "MEMORY_USAGE_GB", value: 1000, tags: { serviceId: "svc" } },
-        { measurement: "NETWORK_TX_GB", value: 2, tags: { serviceId: "svc" } },
-        { measurement: "CPU_USAGE", value: 9999, tags: { serviceId: "otro" } },
-      ],
-      "svc",
-    );
-    expect(est.usd).toBeCloseTo(100 * 0.000463 + 1000 * 0.000231 + 2 * 0.05);
+  describe("OpenRouter", () => {
+    const keyA = openRouterKeyId("clave-ficticia-A");
+    const keyB = openRouterKeyId("clave-ficticia-B");
+    const snap = (usageUsd: number, capturedAt: string, keyId = keyA) => ({ usageUsd, capturedAt, keyId });
+    // Día MX 2026-10-23 = [2026-10-23T06:00Z, 2026-10-24T06:00Z)
+    const start = "2026-10-23T06:00:04.000Z";
+    const end = "2026-10-24T06:00:03.000Z";
+
+    it("la huella de la clave no expone la clave", () => {
+      expect(keyA).toMatch(/^sha256:[0-9a-f]{16}$/);
+      expect(keyA).not.toContain("clave");
+      expect(keyA).not.toBe(keyB);
+    });
+
+    it("cortes a las 00:00 MX de la misma clave: diferencia alineada", () => {
+      const d = openRouterDayDelta("2026-10-23", snap(10, start), snap(10.5, end));
+      expect(d).toMatchObject({ aligned: true, periodStart: start, periodEnd: end });
+      expect(d.usd).toBeCloseTo(0.5);
+      const line = buildOpenRouterLine({ env: { OPENROUTER_API_KEY: "k", OPENROUTER_KEY_DEDICATED: true } }, d, 0.4);
+      expect(line.reportedUsd).toBeCloseTo(0.5);
+    });
+
+    it("corte retrasado: referencia con fechas reales, nunca confirmado", () => {
+      const late = "2026-10-23T09:12:00.000Z"; // 03:12 MX tras un reinicio
+      const d = openRouterDayDelta("2026-10-23", snap(10, late), snap(10.5, end));
+      expect(d.aligned).toBe(false);
+      expect(d.periodStart).toBe(late);
+      const line = buildOpenRouterLine({ env: { OPENROUTER_API_KEY: "k", OPENROUTER_KEY_DEDICATED: true } }, d, 0.4);
+      expect(line.reportedUsd).toBeNull();
+      expect(line.reference?.period).toBe("23/10 03:12:00 → 24/10 00:00:03 CDMX (contador de la clave)");
+      expect(line.reference?.reason).toContain("no cubre exactamente el día MX");
+    });
+
+    it("claves distintas no se comparan aunque el contador suba", () => {
+      const d = openRouterDayDelta("2026-10-23", snap(10, start, keyA), snap(25, end, keyB));
+      expect(d.usd).toBeNull();
+      expect(d.problem).toContain("claves distintas");
+      expect(openRouterDayDelta("2026-10-23", snap(10, start, ""), snap(11, end, "")).usd).toBeNull();
+    });
+
+    it("faltante o contador que baja: sin cifra", () => {
+      expect(openRouterDayDelta("2026-10-23", null, snap(1, end)).usd).toBeNull();
+      expect(openRouterDayDelta("2026-10-23", snap(5, start), snap(4, end)).usd).toBeNull();
+    });
+
+    it("clave no exclusiva: referencia aunque esté alineado", () => {
+      const d = openRouterDayDelta("2026-10-23", snap(10, start), snap(10.5, end));
+      const line = buildOpenRouterLine({ env: { OPENROUTER_API_KEY: "k" } }, d, 0.4);
+      expect(line.reportedUsd).toBeNull();
+      expect(line.reference?.usd).toBeCloseTo(0.5);
+    });
+  });
+
+  it("Railway: muestra métricas crudas del servicio y nunca costo", async () => {
+    const usage = [
+      { measurement: "CPU_USAGE", value: 100, tags: { serviceId: "svc" } },
+      { measurement: "MEMORY_USAGE_GB", value: 1000, tags: { serviceId: "svc" } },
+      { measurement: "CPU_USAGE", value: 9999, tags: { serviceId: "otro" } },
+    ];
+    expect(railwayServiceMetrics(usage, "svc")).toEqual({ CPU_USAGE: 100, MEMORY_USAGE_GB: 1000 });
+    const fakeFetch = (async () => ({ ok: true, json: async () => ({ data: { usage } }) })) as unknown as typeof fetch;
+    const b = mexicoDayBounds("2026-10-23");
+    const line = await collectRailway({
+      date: "2026-10-23", startUtc: b.startUtc, endUtc: b.endUtc, fetch: fakeFetch, timeoutMs: 1000,
+      env: { RAILWAY_API_TOKEN: "t", RAILWAY_PROJECT_ID: "p", RAILWAY_SERVICE_ID: "svc" },
+    });
+    expect(line.estimatedUsd).toBeNull();
+    expect(line.reportedUsd).toBeNull();
+    expect(line.metricsDetail).toContain("CPU_USAGE=100");
+    expect(line.missing).toContain(RAILWAY_COST_UNAVAILABLE);
+    const totals = computeTotals([{ provider: "openai", reportedUsd: null, estimatedUsd: 1, missing: [] }, line]);
+    expect(totals.estimatedUsd).toBe(1);
+    expect(totals.estimateExcludes).toEqual(["railway"]);
   });
 });
 
@@ -163,6 +232,19 @@ describe("anomalías", () => {
     const hist = [day("2026-10-22", 1, 100), day("2026-10-21", 1, 100), day("2026-10-20", 1, 100)];
     const c = compareMetrics(day("2026-10-23", 1, 400), hist, { ...DEFAULT_THRESHOLDS, pct: 100 });
     expect(c.find((x) => x.key === "ai.requests")!.status).toBe("review");
+  });
+
+  it("'ayer' es la fecha exacta anterior; si falta no se sustituye", () => {
+    // Falta 2026-10-22: hay 21, 20 y 19 (y uno fuera de ventana, 2026-10-10).
+    const hist = [day("2026-10-21", 1), day("2026-10-20", 1), day("2026-10-19", 1), day("2026-10-10", 50)];
+    const c = compareMetrics(day("2026-10-23", 3), hist).find((x) => x.key === "total.estimated")!;
+    expect(c.previous).toBeNull();
+    expect(c).toMatchObject({ average: 1, sampleDays: 3, status: "review" });
+    const text = formatCostReport(day("2026-10-23", 3), [c], { generatedAt: new Date("2026-10-24T14:00:00Z"), thresholds: DEFAULT_THRESHOLDS });
+    expect(text).toContain("vs ayer sin datos");
+    // Con el día exacto presente, sí se usa aunque el arreglo venga desordenado.
+    const c2 = compareMetrics(day("2026-10-23", 3), [day("2026-10-21", 1), day("2026-10-22", 2)]).find((x) => x.key === "total.estimated")!;
+    expect(c2.previous).toBe(2);
   });
 
   it("no compara totales con distinta composición de proveedores", () => {

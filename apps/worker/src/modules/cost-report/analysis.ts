@@ -6,6 +6,7 @@
  *   absoluto, con al menos minDays días comparables. Es una señal para
  *   revisar, no prueba de fraude.
  */
+import { previousDates, shiftDate } from "./period";
 import type {
   AnomalyThresholds,
   CostProvider,
@@ -54,7 +55,6 @@ const WHERE: Record<string, string> = {
   "openai.reported": "platform.openai.com/usage",
   "openrouter.estimated": "tabla ai_usage_events (provider=openrouter) y openrouter.ai/activity",
   "openrouter.reported": "openrouter.ai/activity",
-  "railway.estimated": "Railway → servicio worker → Metrics (CPU/RAM) y reinicios/deploys",
   "ai.requests": "ai_usage_events por operation/model; jobs de enriquecimiento y análisis",
   "ai.errors": "ai_usage_events.error_kind y logs ai-service del worker",
   "ai.retries": "ai_usage_events attempt>1 (pool de modelos / reintentos)",
@@ -86,7 +86,6 @@ export const METRICS: MetricSpec[] = [
   providerMetric("openai", "estimated"),
   providerMetric("openrouter", "reported"),
   providerMetric("openrouter", "estimated"),
-  providerMetric("railway", "estimated"),
   { key: "ai.requests", label: "Solicitudes IA", unit: "count", get: (m) => m.ai?.requests ?? null },
   { key: "ai.errors", label: "Errores IA", unit: "count", get: (m) => m.ai?.errors ?? null },
   { key: "ai.retries", label: "Reintentos IA", unit: "count", get: (m) => m.ai?.retries ?? null },
@@ -99,8 +98,9 @@ function minDelta(key: string, t: AnomalyThresholds): number {
 }
 
 /**
- * Compara el día contra el día previo y el promedio de los 7 previos.
- * `history` debe venir del más reciente al más antiguo (máximo 7 días).
+ * Compara el día contra el día calendario exactamente anterior y el promedio
+ * de los 7 días calendario previos (D-1…D-7), localizados por fecha: un día
+ * faltante no se sustituye por el último reporte disponible.
  * Para que el total confirmado/estimado sea comparable, se exige que el
  * conjunto de proveedores incluidos sea el mismo que el del día actual.
  */
@@ -110,13 +110,17 @@ export function compareMetrics(
   thresholds: AnomalyThresholds = DEFAULT_THRESHOLDS,
 ): MetricComparison[] {
   const out: MetricComparison[] = [];
-  const prior = history.slice(0, 7);
+  const window = new Set(previousDates(current.date, 7));
+  const byDate = new Map<string, DayCostMetrics>();
+  for (const d of history) if (window.has(d.date) && !byDate.has(d.date)) byDate.set(d.date, d);
+  const prior = [...byDate.values()];
+  const yesterday = byDate.get(shiftDate(current.date, -1)) ?? null;
   for (const spec of METRICS) {
     const value = spec.get(current);
     if (value === null) continue;
     const comparable = prior.filter((d) => sameComposition(spec.key, current, d));
     const values = comparable.map(spec.get).filter((v): v is number => v !== null);
-    const prevDay = prior[0] && sameComposition(spec.key, current, prior[0]) ? spec.get(prior[0]) : null;
+    const prevDay = yesterday && sameComposition(spec.key, current, yesterday) ? spec.get(yesterday) : null;
     const average = values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
 
     let status: MetricComparison["status"] = "ok";

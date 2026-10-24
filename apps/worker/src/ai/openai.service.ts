@@ -432,7 +432,7 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 
   try {
     const response = await trackAiCall(
-      { provider: USAGE_PROVIDER, model: OPENAI_EMBEDDING_MODEL, operation: "embedding" },
+      { provider: USAGE_PROVIDER, model: OPENAI_EMBEDDING_MODEL, operation: "embedding", usageKind: "embedding" },
       () => client.embeddings.create({
         model: OPENAI_EMBEDDING_MODEL,
         input,
