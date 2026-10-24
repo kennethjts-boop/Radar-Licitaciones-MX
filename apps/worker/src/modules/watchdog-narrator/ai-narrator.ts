@@ -1,10 +1,13 @@
 import { getConfig } from "../../config/env";
 import { createModuleLogger } from "../../core/logger";
 import type { NarrativeInput } from "./types";
+import { classifyAiError, recordAiUsage, usageFromResponse } from "../cost-report/ai-usage";
 
 const log = createModuleLogger("watchdog-narrator:ai");
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 const AI_TIMEOUT_MS = 8000;
+const NARRATOR_MODEL = "openai/gpt-4o-mini";
+const USAGE_META = { provider: "openrouter", model: NARRATOR_MODEL, operation: "watchdog_narrator" } as const;
 
 export interface AiSections {
   queSignifica: string;
@@ -54,7 +57,7 @@ Genera únicamente un objeto JSON con las claves:
         "X-Title": "Radar Licitaciones MX Watchdog",
       },
       body: JSON.stringify({
-        model: "openai/gpt-4o-mini", // o google/gemini-flash-1.5 si OpenRouter
+        model: NARRATOR_MODEL, // o google/gemini-flash-1.5 si OpenRouter
         messages: [
           {
             role: "system",
@@ -75,11 +78,13 @@ Genera únicamente un objeto JSON con las claves:
     clearTimeout(timeoutId);
 
     if (!response.ok) {
+      recordAiUsage({ ...USAGE_META, status: "error", errorKind: `http_${response.status}` });
       log.warn({ status: response.status }, "OpenRouter respondió con error HTTP");
       return null;
     }
 
     const data = (await response.json()) as any;
+    recordAiUsage({ ...USAGE_META, status: "ok", ...usageFromResponse(data) });
     const content = data?.choices?.[0]?.message?.content;
     if (!content) return null;
 
@@ -91,6 +96,9 @@ Genera únicamente un objeto JSON con las claves:
       };
     }
   } catch (err: any) {
+    if (err?.name === "AbortError" || /fetch failed/i.test(String(err?.message))) {
+      recordAiUsage({ ...USAGE_META, status: "error", errorKind: classifyAiError(err) });
+    }
     if (err?.name === "AbortError") {
       log.info("Llamada a IA cancelada por timeout de 8s; se usa fallback determinista");
     } else {

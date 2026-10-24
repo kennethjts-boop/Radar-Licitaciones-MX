@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { createModuleLogger } from "../core/logger";
 import { BUSINESS_PROFILE, BusinessCategory } from "../config/business_profile";
 import companyProfile from "../config/company_profile.json";
+import { trackAiCall } from "../modules/cost-report/ai-usage";
 
 const log = createModuleLogger("ai-service");
 
@@ -9,6 +10,7 @@ const AI_PROVIDER = process.env.AI_PROVIDER || "openai";
 const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
 const PRIMARY_AI_MODEL = process.env.PRIMARY_AI_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini";
 const OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
+const USAGE_PROVIDER = AI_PROVIDER === "openrouter" ? "openrouter" : "openai";
 
 export interface TenderDocumentAnalysis {
   scores: {
@@ -287,10 +289,12 @@ export async function analyzeTenderDocument(
     let lastError = null;
 
     if (AI_PROVIDER === "openrouter") {
-      for (const model of FREE_MODELS_POOL) {
+      for (const [index, model] of FREE_MODELS_POOL.entries()) {
         try {
           log.info({ model }, "Intentando análisis con modelo del pool");
-          const completion = await client.chat.completions.create({
+          const completion = await trackAiCall(
+            { provider: USAGE_PROVIDER, model, operation: "analyze_tender", attempt: index + 1 },
+            () => client.chat.completions.create({
             model: model,
             temperature: 0.2,
             response_format: { type: "json_object" },
@@ -307,7 +311,7 @@ export async function analyzeTenderDocument(
                 content: userPrompt,
               },
             ],
-          });
+          }));
 
           const content = completion.choices[0]?.message?.content;
           if (!content) throw new Error("Respuesta vacía");
@@ -324,7 +328,9 @@ export async function analyzeTenderDocument(
     }
 
     // Fallback OpenAI legacy
-    const completion = await client.chat.completions.create({
+    const completion = await trackAiCall(
+      { provider: USAGE_PROVIDER, model: PRIMARY_AI_MODEL, operation: "analyze_tender" },
+      () => client.chat.completions.create({
       model: PRIMARY_AI_MODEL,
       temperature: 0.2,
       response_format: { type: "json_object" },
@@ -338,7 +344,7 @@ export async function analyzeTenderDocument(
           content: userPrompt,
         },
       ],
-    });
+    }));
 
     const content = completion.choices[0]?.message?.content;
     if (!content) {
@@ -392,7 +398,9 @@ Responde ÚNICAMENTE en JSON con este formato:
 }`;
 
   try {
-    const response = await client.chat.completions.create({
+    const response = await trackAiCall(
+      { provider: USAGE_PROVIDER, model: PRIMARY_AI_MODEL, operation: "abusive_clauses" },
+      () => client.chat.completions.create({
       model: PRIMARY_AI_MODEL,
       temperature: 0.1,
       response_format: AI_PROVIDER === "openai" ? { type: "json_object" } : { type: "json_object" },
@@ -400,7 +408,7 @@ Responde ÚNICAMENTE en JSON con este formato:
         { role: "system", content: systemPromptAbusive },
         { role: "user", content: `Analiza este texto de licitación:\n\n${text.slice(0, 50000)}` }
       ]
-    });
+    }));
 
     const content = response.choices[0]?.message?.content;
     if (!content) throw new Error("Respuesta vacía");
@@ -423,10 +431,13 @@ export async function generateEmbedding(text: string): Promise<number[]> {
   });
 
   try {
-    const response = await client.embeddings.create({
-      model: OPENAI_EMBEDDING_MODEL,
-      input,
-    });
+    const response = await trackAiCall(
+      { provider: USAGE_PROVIDER, model: OPENAI_EMBEDDING_MODEL, operation: "embedding", usageKind: "embedding" },
+      () => client.embeddings.create({
+        model: OPENAI_EMBEDDING_MODEL,
+        input,
+      }),
+    );
 
     const embedding = response.data[0]?.embedding;
     if (!embedding || !Array.isArray(embedding) || embedding.length === 0) {

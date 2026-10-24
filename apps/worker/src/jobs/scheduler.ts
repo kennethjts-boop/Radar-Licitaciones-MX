@@ -43,6 +43,7 @@ import {
 
 import { getEffectiveRadarMode } from "../modules/control/sleep-mode";
 import { runEdomexJob } from "../modules/edomex/job";
+import { startCostReportScheduler } from "../modules/cost-report/job";
 
 const log = createModuleLogger("scheduler");
 
@@ -437,5 +438,12 @@ export function startScheduler(): void {
     startLicitacionWatchdogScheduler();
   } catch (err) {
     log.error({ err }, "No se pudo iniciar watchdog; scheduler principal continúa");
+  }
+
+  // Reporte diario de gastos: independiente, nunca bloquea la recolección.
+  try {
+    startCostReportScheduler();
+  } catch (err) {
+    log.error({ err }, "No se pudo iniciar reporte de gastos; scheduler principal continúa");
   }
 }
