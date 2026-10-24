@@ -288,6 +288,40 @@ const envSchema = z.object({
 
   // Railway / deploy
   RAILWAY_ENVIRONMENT: z.string().optional(),
+  // Inyectadas por Railway en el servicio; usadas por el reporte de gastos.
+  RAILWAY_PROJECT_ID: z.string().optional(),
+  RAILWAY_SERVICE_ID: z.string().optional(),
+
+  // Reporte diario de gastos (modules/cost-report). Sin IA; 1 envío/día.
+  COST_REPORT_ENABLED: z
+    .string()
+    .default("true")
+    .transform((v) => v === "true"),
+  COST_REPORT_HOUR: z
+    .string()
+    .default("8")
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(23)),
+  // Chat privado destino; por defecto TELEGRAM_CHAT_ID si es privado.
+  COST_REPORT_CHAT_ID: z.string().optional(),
+  COST_REPORT_MAX_ATTEMPTS: z
+    .string()
+    .default("3")
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(5)),
+  COST_ANOMALY_PCT: z.string().default("50").transform(Number).pipe(z.number().min(0)),
+  COST_ANOMALY_MIN_USD: z.string().default("1").transform(Number).pipe(z.number().min(0)),
+  COST_ANOMALY_MIN_DAYS: z.string().default("3").transform(Number).pipe(z.number().int().min(1).max(7)),
+  COST_ANOMALY_MIN_REQUESTS: z.string().default("20").transform(Number).pipe(z.number().int().min(0)),
+  COST_ANOMALY_MIN_ERRORS: z.string().default("5").transform(Number).pipe(z.number().int().min(0)),
+  // Fuentes de facturación opcionales (nunca se imprimen).
+  OPENAI_ADMIN_KEY: z.string().optional(),
+  OPENAI_PROJECT_ID: z.string().optional(),
+  OPENROUTER_KEY_DEDICATED: z
+    .string()
+    .default("false")
+    .transform((v) => v === "true"),
+  RAILWAY_API_TOKEN: z.string().optional(),
 
   // App
   APP_TIMEZONE: z.string().default("America/Mexico_City"),

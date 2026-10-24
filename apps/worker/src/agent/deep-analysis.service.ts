@@ -10,6 +10,7 @@ import { BrowserManager } from "../collectors/comprasmx/browser.manager";
 import { ComprasMxNavigator } from "../collectors/comprasmx/comprasmx.navigator";
 import { extractTextFromPdf } from "../utils/pdf.util";
 import { getSupabaseClient } from "../storage/client";
+import { trackAiCall } from "../modules/cost-report/ai-usage";
 
 const log = createModuleLogger("agent-deep-analysis");
 
@@ -178,7 +179,10 @@ async function runStrategicPrompt(input: {
 }): Promise<DeepAnalysisReport> {
   const client = getOpenAIClient();
 
-  const response = await client.chat.completions.create({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const response = await trackAiCall<any>(
+    { provider: "openai", model: "gpt-4o", operation: "deep_analysis" },
+    () => client.chat.completions.create({
     model: "gpt-4o",
     response_format: {
       type: "json_schema",
@@ -242,7 +246,7 @@ async function runStrategicPrompt(input: {
         ].join("\n"),
       },
     ],
-  });
+  }));
 
   const content = response.choices[0]?.message?.content;
   if (!content) {

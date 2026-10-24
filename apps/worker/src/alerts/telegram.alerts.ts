@@ -436,6 +436,46 @@ export async function sendTelegramMessageWithReceipt(
   }
 }
 
+/** Tipo de chat ("private", "group", ...) o null si Telegram no lo resuelve. */
+export async function getTelegramChatType(chatId: string): Promise<string | null> {
+  const config = getConfig();
+  try {
+    const chat = await withTimeout(getBot().getChat(chatId), config.TELEGRAM_SEND_TIMEOUT_MS, "telegram.getChat");
+    return chat.type ?? null;
+  } catch (err) {
+    log.warn({ kind: describeTelegramSendError(err).kind }, "No se pudo resolver tipo de chat Telegram");
+    return null;
+  }
+}
+
+/**
+ * Un solo intento, sin reintentos internos: para mensajes que deben llegar a
+ * lo sumo una vez (un reintento tras timeout podría duplicarlos). El caller
+ * decide si reintenta según describeTelegramSendError().
+ */
+export async function sendTelegramMessageSingleAttempt(
+  text: string,
+  chatId: string,
+  parseMode: "Markdown" | "HTML" = "HTML",
+): Promise<TelegramDeliveryReceipt> {
+  const config = getConfig();
+  const msg = await withTimeout(
+    getBot().sendMessage(chatId, text, {
+      parse_mode: parseMode,
+      disable_web_page_preview: true,
+    } as TelegramBot.SendMessageOptions),
+    config.TELEGRAM_SEND_TIMEOUT_MS,
+    "telegram.sendMessage",
+  );
+  return {
+    messageId: msg.message_id,
+    chatId: String(msg.chat?.id ?? chatId),
+    chatType: msg.chat?.type ?? null,
+    chatTitle: "title" in msg.chat ? msg.chat.title ?? null : null,
+    chatUsername: "username" in msg.chat ? msg.chat.username ?? null : null,
+  };
+}
+
 export async function sendTelegramMessage(
   text: string,
   parseMode: "Markdown" | "HTML" = "HTML",
