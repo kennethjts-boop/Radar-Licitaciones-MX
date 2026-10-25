@@ -5,6 +5,7 @@ const httpGet = jest.fn();
 const upsertMatch = jest.fn();
 const ensurePendingNewTenderAlert = jest.fn();
 const deliver = jest.fn();
+const queuedAlerts = new Set<string>();
 
 jest.mock("axios", () => ({ __esModule: true, default: { get: (...args: any[]) => httpGet(...args) } }));
 jest.mock("../../../storage/client", () => ({ getSupabaseClient: () => ({ from: (table: string) => {
@@ -13,11 +14,12 @@ jest.mock("../../../storage/client", () => ({ getSupabaseClient: () => ({ from: 
   if (table === "procurements") return { select: () => ({ eq: (_: string, id: string) => ({ maybeSingle: async () => {
     const p = [...procurements.values()].find((x) => x.id === id);
     return { data: p ? { id: p.id, source_url: p.source_url, procedure_number: p.procedure_number, raw_items: { raw_json: p.raw } } : null, error: null };
-  } }) }) };
+  }, in: async (_: string, ids: string[]) => ({ data: ids.filter((ext) => procurements.has(ext)).map((external_id) => ({ external_id })), error: null }) }) }) };
   return {
     select: () => ({ eq: (_: string, key: string) => ({ maybeSingle: async () => ({ data: state.has(key) ? { value_json: structuredClone(state.get(key)) } : null, error: null }) }),
       like: async (_: string, prefix: string) => ({ data: [...state].filter(([key]) => key.startsWith(prefix.replace("%", ""))).map(([key, value_json]) => ({ key, value_json: structuredClone(value_json) })), error: null }) }),
     upsert: async (row: any) => { state.set(row.key, structuredClone(row.value_json)); return { error: null }; },
+    delete: () => ({ eq: async (_: string, key: string) => { state.delete(key); return { error: null }; } }),
   };
 } }) }));
 jest.mock("../../../storage/procurement.repo", () => ({ upsertProcurement: async (item: any) => {
@@ -52,7 +54,14 @@ beforeEach(() => {
   obra = ISSEMYM_ROWS(3); pdfBody = "%PDF-1.4 first";
   bot.sendMessage.mockResolvedValue({ message_id: 77 });
   bot.editMessageReplyMarkup.mockResolvedValue({});
-  ensurePendingNewTenderAlert.mockResolvedValue({ alertId: "a1", created: true, status: "pending" });
+  // Emula la cola real: dedupe_key único por procedimiento.
+  queuedAlerts.clear();
+  upsertMatch.mockResolvedValue({ isNew: true, matchId: "m1" });
+  ensurePendingNewTenderAlert.mockImplementation(async (_alert: unknown, procurementId: string) => {
+    const created = !queuedAlerts.has(procurementId);
+    queuedAlerts.add(procurementId);
+    return { alertId: `alert-${procurementId}`, created, status: "pending" };
+  });
   deliver.mockResolvedValue(0);
   httpGet.mockImplementation(async (url: string) => ({
     data: url.endsWith(".pdf") ? Buffer.from(pdfBody)
@@ -77,13 +86,38 @@ it("respeta una línea base previa (PR #63): sólo filas nuevas generan match y 
   obra += `<tr><td>LPN/ISSEMYM/90/2026, LPN/ISSEMYM/91/2026^/sites/default/files/n.pdf</td><td>ISSEMYM^Medicamentos</td></tr>`;
   const summary = await runEdomexJob();
   expect(summary?.pages["convocatorias-obra-publica"]).toMatchObject({ newRows: 1, created: 2, matches: 2, alertsQueued: 1 });
-  expect(ensurePendingNewTenderAlert).toHaveBeenCalledTimes(1);
+  expect(queuedAlerts.size).toBe(1);
   expect(deliver).toHaveBeenCalledWith(10);
   expect(bot.sendMessage).not.toHaveBeenCalled(); // la entrega ocurre en la cola común
   // Reaparición del mismo procedimiento en otro PDF: sin alerta nueva.
   obra += `<tr><td>LPN/ISSEMYM/90/2026^/sites/default/files/n2.pdf</td><td>ISSEMYM^Medicamentos</td></tr>`;
   await runEdomexJob();
   expect(ensurePendingNewTenderAlert).toHaveBeenCalledTimes(1);
+  expect(queuedAlerts.size).toBe(1);
+});
+
+it.each([
+  ["upsertMatch", () => upsertMatch.mockRejectedValueOnce(new Error("timeout"))],
+  ["enrichMatch/cola", () => ensurePendingNewTenderAlert.mockRejectedValueOnce(new Error("timeout"))],
+])("fallo transitorio en %s tras insertar: el reintento encola exactamente una alerta", async (_label, failOnce) => {
+  await runEdomexJob();
+  obra += `<tr><td>LPN/ISSEMYM/90/2026, LPN/ISSEMYM/91/2026^/sites/default/files/n.pdf</td><td>ISSEMYM^Medicamentos</td></tr>`;
+  failOnce();
+  const failed = await runEdomexJob();
+  expect(procurements.has("secogem:LPN/ISSEMYM/90/2026")).toBe(true); // ya insertado
+  expect(failed?.pages["convocatorias-obra-publica"].alertsQueued).toBe(0);
+  expect(queuedAlerts.size).toBe(0);
+  expect(state.get("edomex_index:convocatorias-obra-publica").ids).toHaveLength(3); // fila sigue pendiente
+
+  const retried = await runEdomexJob();
+  expect(retried?.pages["convocatorias-obra-publica"]).toMatchObject({ newRows: 1, alertsQueued: 1 });
+  expect(procurements.has("secogem:LPN/ISSEMYM/91/2026")).toBe(true);
+  expect(queuedAlerts.size).toBe(1);
+  expect(state.get("edomex_index:convocatorias-obra-publica").ids).toHaveLength(4);
+  expect([...state.keys()].some((key) => key.startsWith("edomex_row_pending:"))).toBe(false);
+
+  await runEdomexJob(); // fila ya en la línea base: sin nueva alerta
+  expect(queuedAlerts.size).toBe(1);
 });
 
 it("watchdog_only / pausa: discover=false no consulta índices", async () => {
