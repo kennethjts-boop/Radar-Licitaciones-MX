@@ -15,6 +15,7 @@ import { deleteState, getState, setStateStrict, STATE_KEYS } from "../../core/sy
 import { nowISO } from "../../core/time";
 import { getSupabaseClient } from "../../storage/client";
 import { OPERATIONAL_FOCUS_KEYS } from "../../radars/operational-focus.matcher";
+import { EDOMEX_FOCUS_KEYS } from "../../radars/edomex-focus.matcher";
 
 const log = createModuleLogger("control:sleep-mode");
 
@@ -136,7 +137,7 @@ export async function wakeFromSleepMode(): Promise<{
   let sourcesRestored = 0;
   let usedDefault = false;
 
-  const activeKeys = Object.values(OPERATIONAL_FOCUS_KEYS);
+  const activeKeys = [...Object.values(OPERATIONAL_FOCUS_KEYS), ...Object.values(EDOMEX_FOCUS_KEYS)];
   await db.from("radars").update({ is_active: false }).neq("key", "");
   for (const key of activeKeys) {
     await db.from("radars").update({ is_active: true }).eq("key", key);

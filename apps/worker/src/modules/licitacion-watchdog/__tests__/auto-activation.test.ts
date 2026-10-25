@@ -8,6 +8,11 @@ import { requestWatchdogConsent, activateApprovedConsent } from "../consent";
 import { getWatchdogConsent } from "../consent-store";
 jest.mock("../consent", () => ({ requestWatchdogConsent: jest.fn(), activateApprovedConsent: jest.fn() }));
 jest.mock("../consent-store", () => ({ getWatchdogConsent: jest.fn() }));
+jest.mock("../../edomex/consent", () => ({
+  requestEdomexPdfConsent: jest.fn().mockResolvedValue(true),
+  isSecogemProcurementUrl: (url?: string | null) => Boolean(url?.startsWith("https://portal.secogem.gob.mx/")),
+}));
+import { requestEdomexPdfConsent } from "../../edomex/consent";
 
 const mockState = {
   alert: {
@@ -19,7 +24,7 @@ const mockState = {
     created_at: "2026-10-15T08:00:00Z",
     sent_at: "2026-10-15T08:05:00Z",
     radars: { key: "imss_limpieza_20261014", is_active: true },
-    procurements: { publication_date: "2026-10-15" },
+    procurements: { publication_date: "2026-10-15" } as { publication_date: string; source_url?: string },
   },
   hasMatch: true,
 };
@@ -30,6 +35,7 @@ jest.mock("../../../storage/client", () => ({
       const query = {
         select: () => query,
         eq: () => query,
+        in: () => query,
         gte: () => query,
         order: () => query,
         maybeSingle: async () => ({
@@ -63,6 +69,7 @@ describe("watchdog pide autorización por alerta enviada", () => {
     mockState.alert.radars.key = "imss_limpieza_20261014";
     mockState.alert.radars.is_active = true;
     mockState.alert.procurements.publication_date = "2026-10-15";
+    delete mockState.alert.procurements.source_url;
     mockState.hasMatch = true;
     (listPersistentTargets as jest.Mock).mockResolvedValue([]);
     (activateWatchdogTarget as jest.Mock).mockResolvedValue({ active: true });
@@ -122,5 +129,13 @@ describe("watchdog pide autorización por alerta enviada", () => {
     expect(await reconcileWatchdogFromSentAlerts()).toBe(1);
     expect(requestWatchdogConsent).toHaveBeenCalledTimes(1);
     expect(activateWatchdogTarget).not.toHaveBeenCalled();
+  });
+
+  it("una alerta Edomex de SECOGEM pide vigilar sólo el PDF, no el watchdog de ComprasMX", async () => {
+    mockState.alert.radars.key = "edomex_issemym_20261025";
+    mockState.alert.procurements.source_url = "https://portal.secogem.gob.mx/sites/default/files/a.pdf";
+    expect(await activateWatchdogForSentAlert("alert-1")).toBe(true);
+    expect(requestEdomexPdfConsent).toHaveBeenCalledWith("proc-1");
+    expect(requestWatchdogConsent).not.toHaveBeenCalled();
   });
 });

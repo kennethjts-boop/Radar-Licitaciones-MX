@@ -13,6 +13,7 @@ import {
   detectOperationalFocus,
   OPERATIONAL_FOCUS_KEYS,
 } from "../radars/operational-focus.matcher";
+import { detectEdomexFocus, isEdomexFocusKey } from "../radars/edomex-focus.matcher";
 import {
   CAPUFE_DIRECT_AWARDS_RADAR_KEY,
   CAPUFE_DIRECT_AWARDS_SCORE_REASONS,
@@ -200,6 +201,10 @@ export function evaluateProcurementAgainstRadar(
   isNew: boolean,
   previousStatus: NormalizedProcurement["status"] | null = null,
 ): MatchResult | null {
+  if (isEdomexFocusKey(radar.key)) {
+    return evaluateEdomexFocusRadar(procurement, radar, isNew, previousStatus);
+  }
+
   if (Object.values(OPERATIONAL_FOCUS_KEYS).includes(radar.key as never)) {
     return evaluateOperationalFocusRadar(
       procurement,
@@ -427,6 +432,42 @@ function evaluateProcurementAgainstCommercialRadar(
     isNew,
     isStatusChange:
       previousStatus !== null && previousStatus !== procurement.status,
+    previousStatus,
+  };
+}
+
+function evaluateEdomexFocusRadar(
+  procurement: NormalizedProcurement,
+  radar: RadarConfig,
+  isNew: boolean,
+  previousStatus: NormalizedProcurement["status"] | null,
+): MatchResult | null {
+  const detection = detectEdomexFocus(procurement, radar.key);
+  if (!detection) return null;
+  const amountNote = detection.amountStatus === "pending"
+    ? "Monto contractual pendiente de confirmar: candidata para revisión, no se afirma que supere el umbral."
+    : detection.amountStatus === "confirmed"
+      ? "Monto contractual explícito supera el umbral del foco."
+      : "Foco sin umbral de monto.";
+  return {
+    radarKey: radar.key,
+    procurementId: procurement.externalId,
+    matchScore: 1,
+    opportunityScore: calculateOpportunityScore(procurement),
+    documentScore: calculateDocumentScore(procurement),
+    matchLevel: detection.amountStatus === "pending" ? "medium" : "high",
+    matchedTerms: detection.matchedTerms,
+    excludedTerms: [],
+    explanation: [
+      `FOCO EDOMEX ${radar.name}.`,
+      `Motivo: ${detection.scoreReasons.join(" + ")}.`,
+      amountNote,
+      isNew ? "Expediente nuevo — primera vez detectado." : "",
+    ].filter(Boolean).join(" "),
+    scoreReasons: [...detection.scoreReasons, `amount_${detection.amountStatus}`],
+    territoryMatched: detection.territoryMatched,
+    isNew,
+    isStatusChange: previousStatus !== null && previousStatus !== procurement.status,
     previousStatus,
   };
 }

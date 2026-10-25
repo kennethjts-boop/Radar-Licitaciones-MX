@@ -26,6 +26,8 @@ import {
 } from "../core/telegram-commands-health";
 import { detectPriorityAlertProfile } from "../modules/priority-alerts";
 import { OPERATIONAL_FOCUS_KEYS } from "../radars/operational-focus.matcher";
+import { isEdomexFocusKey } from "../radars/edomex-focus.matcher";
+import { formatEdomexTelegramAlert } from "../modules/edomex/message";
 import { telegramBotConstructorOptions } from "../core/telegram-client-options";
 import { writeTelegramLog } from "../storage/telegram-log.repo";
 
@@ -889,6 +891,7 @@ function formatOperationalTelegramAlert(alert: EnrichedAlert): string {
  * Construye el mensaje HTML para alerta de nuevo match.
  */
 export function formatMatchAlert(alert: EnrichedAlert): string {
+  if (isEdomexFocusKey(alert.radarKey)) return formatEdomexTelegramAlert(alert);
   if (Object.prototype.hasOwnProperty.call(OPERATIONAL_TELEGRAM_LABELS, alert.radarKey)) {
     return formatOperationalTelegramAlert(alert);
   }

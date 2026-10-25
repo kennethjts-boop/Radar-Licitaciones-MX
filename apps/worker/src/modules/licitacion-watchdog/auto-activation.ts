@@ -8,6 +8,8 @@ import { getSupabaseClient } from "../../storage/client";
 import { createModuleLogger } from "../../core/logger";
 import { OPERATIONAL_FOCUS_KEYS } from "../../radars/operational-focus.matcher";
 import { OPERATIONAL_RADAR_VERSION_KEY } from "../../radars/operational-version";
+import { EDOMEX_FOCUS_KEYS, EDOMEX_RADAR_VERSION_KEY } from "../../radars/edomex-focus.matcher";
+import { isSecogemProcurementUrl, requestEdomexPdfConsent } from "../edomex/consent";
 import {
   evaluateNewTenderPublication,
   OPERATIONAL_PUBLICATION_CUTOFF,
@@ -18,7 +20,17 @@ import { requestWatchdogConsent, activateApprovedConsent } from "./consent";
 import { getWatchdogConsent } from "./consent-store";
 
 const log = createModuleLogger("licitacion-watchdog:auto-activation");
-const ALLOWED_RADARS = new Set<string>(Object.values(OPERATIONAL_FOCUS_KEYS));
+const ALLOWED_RADARS = new Set<string>([
+  ...Object.values(OPERATIONAL_FOCUS_KEYS),
+  ...Object.values(EDOMEX_FOCUS_KEYS),
+]);
+const CURRENT_VERSION_KEYS = [OPERATIONAL_RADAR_VERSION_KEY, EDOMEX_RADAR_VERSION_KEY];
+
+interface AlertProcurement {
+  publication_date: string | null;
+  procedure_number?: string | null;
+  source_url?: string | null;
+}
 
 interface AlertCandidate {
   id: string;
@@ -29,7 +41,7 @@ interface AlertCandidate {
   created_at: string;
   sent_at: string | null;
   radars: { key: string; is_active: boolean } | Array<{ key: string; is_active: boolean }> | null;
-  procurements: { publication_date: string | null; procedure_number?: string | null } | Array<{ publication_date: string | null; procedure_number?: string | null }> | null;
+  procurements: AlertProcurement | AlertProcurement[] | null;
 }
 
 function single<T>(value: T | T[] | null): T | null {
@@ -61,9 +73,9 @@ async function hasCurrentOctoberMatch(row: AlertCandidate): Promise<boolean> {
     .select("id, radar_config_versions!inner(version_key)")
     .eq("procurement_id", row.procurement_id!)
     .eq("radar_id", row.radar_id!)
-    .eq("radar_config_versions.version_key", OPERATIONAL_RADAR_VERSION_KEY)
+    .in("radar_config_versions.version_key", CURRENT_VERSION_KEYS)
     .limit(1);
-  if (error) throw new Error(`No se pudo comprobar match de octubre: ${error.message}`);
+  if (error) throw new Error(`No se pudo comprobar match vigente: ${error.message}`);
   return Boolean(data?.length);
 }
 
@@ -72,6 +84,13 @@ async function activateCandidate(
   existingTargets?: Awaited<ReturnType<typeof listPersistentTargets>>,
 ): Promise<boolean> {
   if (!isEligibleAlert(row) || !(await hasCurrentOctoberMatch(row))) return false;
+
+  // Una convocatoria de SECOGEM sólo admite comparar su PDF oficial: no pasa
+  // por el watchdog de expedientes de ComprasMX.
+  const alertProcurement = single(row.procurements);
+  if (isSecogemProcurementUrl(alertProcurement?.source_url)) {
+    return requestEdomexPdfConsent(row.procurement_id!);
+  }
 
   const targets = existingTargets ?? await listPersistentTargets(false);
   if (!targets) throw new Error("No existe tabla persistente watchdog_targets");
@@ -95,7 +114,7 @@ async function activateCandidate(
 export async function activateWatchdogForSentAlert(alertId: string): Promise<boolean> {
   const { data, error } = await getSupabaseClient()
     .from("alerts")
-    .select("id,procurement_id,radar_id,alert_type,telegram_status,created_at,sent_at,radars!inner(key,is_active),procurements!inner(publication_date,procedure_number)")
+    .select("id,procurement_id,radar_id,alert_type,telegram_status,created_at,sent_at,radars!inner(key,is_active),procurements!inner(publication_date,procedure_number,source_url)")
     .eq("id", alertId)
     .maybeSingle();
   if (error) throw new Error(`No se pudo consultar alerta watchdog: ${error.message}`);
@@ -109,7 +128,7 @@ export async function activateWatchdogForSentAlert(alertId: string): Promise<boo
 export async function reconcileWatchdogFromSentAlerts(): Promise<number> {
   const { data, error } = await getSupabaseClient()
     .from("alerts")
-    .select("id,procurement_id,radar_id,alert_type,telegram_status,created_at,sent_at,radars!inner(key,is_active),procurements!inner(publication_date,procedure_number)")
+    .select("id,procurement_id,radar_id,alert_type,telegram_status,created_at,sent_at,radars!inner(key,is_active),procurements!inner(publication_date,procedure_number,source_url)")
     .eq("alert_type", "new_match")
     .eq("telegram_status", "sent")
     .eq("radars.is_active", true)

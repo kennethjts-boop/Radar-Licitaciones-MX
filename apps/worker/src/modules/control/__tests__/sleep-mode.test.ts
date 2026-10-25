@@ -109,8 +109,8 @@ describe("sleep-mode control module", () => {
 
     const wakeRes = await wakeFromSleepMode();
     expect(wakeRes.mode).toBe("full");
-    expect(wakeRes.message).toContain("Radar despierto con 11 focos operativos");
-    expect(wakeRes.radarsRestored).toBe(11);
+    expect(wakeRes.message).toContain("Radar despierto con 15 focos operativos");
+    expect(wakeRes.radarsRestored).toBe(15);
 
     const modeAfter = await getEffectiveRadarMode();
     expect(modeAfter).toBe("full");

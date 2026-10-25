@@ -10,6 +10,7 @@ import type { DbMatch, DbAlert } from "../types/database";
 import type { MatchResult, EnrichedAlert } from "../types/procurement";
 import { OPERATIONAL_FOCUS_KEYS } from "../radars/operational-focus.matcher";
 import { OPERATIONAL_RADAR_VERSION_KEY } from "../radars/operational-version";
+import { EDOMEX_RADAR_VERSION_KEY, isEdomexFocusKey } from "../radars/edomex-focus.matcher";
 import { OPERATIONAL_PUBLICATION_CUTOFF_DATE } from "../modules/operational-alerts/eligibility";
 
 const log = createModuleLogger("match-alert-repo");
@@ -46,6 +47,14 @@ export async function upsertMatch(
       `La migración de octubre no está activa para ${match.radarKey} ` +
       `(versión vigente: ${configVersion.version_key ?? "desconocida"}, ` +
       `esperada: ${OPERATIONAL_RADAR_VERSION_KEY})`,
+      "find_radar_config_version",
+    );
+  }
+
+  if (isEdomexFocusKey(match.radarKey) && configVersion.version_key !== EDOMEX_RADAR_VERSION_KEY) {
+    throw new StorageError(
+      `La migración Edomex no está activa para ${match.radarKey} ` +
+      `(versión vigente: ${configVersion.version_key ?? "desconocida"}, esperada: ${EDOMEX_RADAR_VERSION_KEY})`,
       "find_radar_config_version",
     );
   }

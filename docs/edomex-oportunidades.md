@@ -1,26 +1,49 @@
-# Canal estatal de oportunidades
+# Estado de México en el flujo del radar
 
-El worker consulta cada 30 minutos los dos índices oficiales de la Secretaría de la Contraloría del Estado de México: obra pública y bienes/servicios. Es independiente de ComprasMX; mantiene sus once focos existentes. No requiere migración ni claves nuevas. Utiliza la tabla existente `system_state`.
+Desde la versión `edomex_20261025` el Estado de México ya no es un canal paralelo: sus procedimientos se guardan en `procurements`, se evalúan con radares registrados en `radars`/`radar_config_versions`, generan `matches` versionados y entran a la misma cola `alerts` (`new_match`, `dedupe_key = new_match:<procurement>`) que ComprasMX. Los once focos de CAPUFE/IMSS se conservan sin cambios (15 radares activos).
 
-## Selección
+## Radares (migración `20261025_edomex_radares.sql`)
 
-- ISSEMyM: cualquier giro y monto.
-- Carreteras: monto explícito superior a 100 millones MXN. Si el índice no publica presupuesto, sólo se presentan candidatas con indicios de alcance carretero/regional o de SITRAMyTEM, con advertencia de que falta confirmar los 100 MDP. Se omiten pavimentaciones locales pequeñas sin presupuesto.
-- Otros giros: referencia inicial de 20 millones MXN cuando hay monto explícito. Sin monto se requieren indicios de alcance grande (servicio integral, cobertura estatal, flota, plataforma, hospitales, medicamentos o infraestructura). Son candidatas para revisión, no contratos grandes confirmados.
-- Excluye concesiones, proyectos llave en mano, teleféricos, viaductos, túneles y proyectos integrales de líneas Mexibús/Mexicable. Conserva mantenimiento puntual de semáforos y vialidades de SITRAMyTEM.
+| Clave | Criterio |
+|---|---|
+| `edomex_issemym_20261025` | ISSEMyM: cualquier licitación nueva, cualquier giro y monto. |
+| `edomex_carreteras_20261025` | Carreteras: monto explícito > $100 MDP. Prioriza rehabilitación, conservación, pavimentación y bacheo. Sin monto: sólo alcance regional/carretero y como candidata pendiente. |
+| `edomex_sitramytem_20261025` | SITRAMyTEM: trabajos viales y mantenimiento acotado. Trabajo carretero conserva el mínimo de $100 MDP. |
+| `edomex_oportunidades_20261025` | Otras dependencias estatales y municipios: obras, tecnología, equipamiento, vehículos, limpieza, seguridad y suministros desde $20 MDP; sin monto, sólo alcance amplio y como candidata pendiente. |
 
-El portal publica filas que pueden agrupar varios procedimientos en un PDF. El aviso y la vigilancia se realizan por convocatoria agrupada. El capital contable requerido y el costo de bases nunca se usan como monto contractual. La selección no certifica capacidad legal, financiera ni técnica de la empresa: se deben revisar las bases y la fecha límite de inscripción.
+Exclusiones (salvo ISSEMyM): concesiones, llave en mano, teleféricos, viaductos, túneles, proyectos integrales de líneas Mexibús/Mexicable, APP. Lógica: `apps/worker/src/radars/edomex-focus.matcher.ts`.
 
-## Nuevas detecciones y consentimiento
+## Fuentes
 
-El primer ciclo guarda una línea base silenciosa. Los ciclos siguientes presentan sólo filas añadidas al índice: no se afirma que la fecha de detección sea fecha oficial de publicación. Una cola persistente entrega hasta cinco candidatas por ciclo, con enlace al PDF, monto confirmado o pendiente y botones Sí/No. También acepta responder sí/no al aviso original. La decisión se valida contra el chat, usuario propietario/administrador y mensaje, y se persiste antes de permitir la vigilancia. No descarga ni revisa periódicamente el PDF sin un Sí. El No no se vuelve a preguntar automáticamente.
+- **SECOGEM** (fuente `secogem_edomex`): índices de obra pública y bienes/servicios, cada 30 min (`modules/edomex/job.ts`). Lectura HTTP pública, sin navegador.
+- **ComprasMX**: los mismos radares evalúan los procedimientos de unidades compradoras estatales (`915xxxxxx`) y municipales (`815xxxxxx` / siglas `074xxx`) del Estado de México, además de ISSEMyM, SITRAMyTEM y JCEM. Las dependencias federales ubicadas en el estado (IMSS, SICT, AIFA…) no cuentan.
 
-La vigilancia estatal compara el hash del PDF de la convocatoria autorizada; su primer acceso aprobado establece la línea base. Un cambio posterior genera un aviso con el enlace oficial. El botón Dejar de vigilar detiene futuras comprobaciones. No vigila expedientes, fechas o nuevos anexos en otros portales: esa funcionalidad de ComprasMX conserva su mecanismo existente.
+## Montos
 
-Respeta `/pausa` por ámbito, incluida pausa global. `watchdog_only` permite revisar únicamente PDFs ya autorizados, sin descubrir ni avisar nuevas candidatas. Fallos de lectura o persistencia no permiten una vigilancia sin consentimiento. El HTML vacío/bloqueado no reemplaza la línea base. Los enlaces y PDFs se restringen a HTTPS del dominio oficial, con límites de tamaño y tiempo, sin redirecciones.
+Sólo cuenta el presupuesto o monto explícito del contrato. Capital contable, costo de bases e inversión global de un programa nunca se usan. Sin monto confirmado el match es `medium` y la alerta dice "candidata pendiente de revisión". Una convocatoria que agrupa varios procedimientos se guarda como un `procurement` por número (`secogem:<número>`) y ninguno recibe el presupuesto conjunto (`monto_estado = convocatoria_agrupada`).
+
+## Fechas, histórico y deduplicación
+
+- `publication_date` sólo se llena con una columna rotulada como publicación en el índice; si no existe queda `NULL`. La primera detección es `procurements.created_at` y `raw_json.primera_deteccion`. La alerta muestra ambas por separado.
+- La línea base existente (`edomex_index:*`, misma identidad número|PDF que PR #63) marca el archivo histórico. Ese histórico se normaliza una sola vez (`edomex_backfill_v1:*`) sin matches ni alertas, para que un procedimiento que reaparezca en otro PDF no se presente como nuevo.
+- Sólo filas añadidas después de la línea base y procedimientos nuevos en BD generan match/alerta, una por convocatoria. Además, ningún foco Edomex alerta publicaciones anteriores al 2026-10-25.
+- La entrega usa la cola común con `MAX_ALERTS_PER_CYCLE = 10` y un lock (`new-tender-delivery`) compartido con el ciclo ComprasMX.
+
+## Vigilancia (consentimiento individual)
+
+Tras entregar la alerta se pregunta "¿Vigilar? Sí / No":
+
+- **SECOGEM**: sólo compara el hash del PDF de la convocatoria (`edomex_watch:<procurement>` en `system_state`). No vigila bases, anexos, juntas, actas, fallos ni otros portales. Botones `edw:yes|no|stop:<uuid>` o respuesta sí/no.
+- **ComprasMX**: watchdog existente (documentos, fechas, partidas).
+
+Sin Sí persistido no se descarga el PDF. Una solicitud se envía una sola vez; un No es definitivo y la conciliación no reactiva históricos.
+
+## Pausas y modos
+
+`/pausa collector` o global detiene el descubrimiento estatal; `/pausa watchdog` detiene la comparación de PDFs; `watchdog_only` sólo compara PDFs ya autorizados.
 
 ## Verificación productiva
 
-Desplegar el worker de este commit. Confirmar `system_state` con claves `edomex_index:convocatorias-obra-publica`, `edomex_index:convocatorias-bienes-servicios` y `edomex_last_run`, revisando las fechas. Antes del primer arranque productivo esas claves no existen. Este canal no aparece como un radar de la tabla `radars` ni agrega esos registros a `procurements`: se conserva en `system_state` y entrega avisos por Telegram.
-
-Pruebas: parser del formato real con `^`, selección y montos, línea base sin avisos históricos, detección incremental, ausencia de descargas sin consentimiento, validación de remitente/mensaje, Sí, No, detención y cambios del PDF. También se prueba el parser con una copia pública del índice real, sin enviar Telegram.
+- `radars`: 15 activos; `radar_config_versions` vigentes: 11 `operational_20261014` + 4 `edomex_20261025`.
+- `collect_runs` con `collector_key = 'secogem_edomex'` y `system_state.edomex_last_run` con conteos por página o errores explícitos.
+- `procurements` con la fuente `secogem_edomex` (`raw_json.historical_baseline = true` para el archivo).
