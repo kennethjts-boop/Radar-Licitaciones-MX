@@ -16,8 +16,14 @@ import { imssBienestarMorelosRadar } from "./imss-bienestar-morelos.radar";
 import { habitatMorelosRadar } from "./habitat-morelos.radar";
 import { BUSINESS_LINE_RADARS } from "./business-lines.radar";
 import { OPERATIONAL_FOCUS_KEYS } from "./operational-focus.matcher";
+import { EDOMEX_FOCUS_KEYS } from "./edomex-focus.matcher";
 
-const ACTIVE_FOCUS_KEYS = new Set<string>(Object.values(OPERATIONAL_FOCUS_KEYS));
+/** Once focos de octubre + cuatro focos del Estado de México. */
+export const ACTIVE_RADAR_KEYS: readonly string[] = [
+  ...Object.values(OPERATIONAL_FOCUS_KEYS),
+  ...Object.values(EDOMEX_FOCUS_KEYS),
+];
+const ACTIVE_FOCUS_KEYS = new Set<string>(ACTIVE_RADAR_KEYS);
 
 const OCTOBER_FOCUSES: Array<[string, string, string]> = [
   [OPERATIONAL_FOCUS_KEYS.capufeSecurity, "CAPUFE — Seguridad y vigilancia", "Guardias y vigilancia presencial"],
@@ -32,7 +38,14 @@ const OCTOBER_FOCUSES: Array<[string, string, string]> = [
   [OPERATIONAL_FOCUS_KEYS.imssBloodBank, "IMSS — Banco de sangre", "Servicio médico integral de banco de sangre"],
 ];
 
-const OCTOBER_RADARS: RadarConfig[] = OCTOBER_FOCUSES.map(([key, name, description]) => ({
+const EDOMEX_FOCUSES: Array<[string, string, string]> = [
+  [EDOMEX_FOCUS_KEYS.issemym, "EDOMEX — ISSEMyM", "Cualquier licitación nueva del ISSEMyM, de cualquier giro y monto"],
+  [EDOMEX_FOCUS_KEYS.carreteras, "EDOMEX — Carreteras > $100 MDP", "Rehabilitación, conservación, pavimentación y bacheo carretero superiores a 100 MDP"],
+  [EDOMEX_FOCUS_KEYS.sitramytem, "EDOMEX — SITRAMyTEM vial y mantenimiento", "Trabajos viales y mantenimiento acotado; sin proyectos integrales ni concesiones"],
+  [EDOMEX_FOCUS_KEYS.oportunidades, "EDOMEX — Dependencias y municipios alto monto", "Obras, tecnología, equipamiento, vehículos, limpieza, seguridad y suministros desde 20 MDP"],
+];
+
+const OCTOBER_RADARS: RadarConfig[] = [...OCTOBER_FOCUSES, ...EDOMEX_FOCUSES].map(([key, name, description]) => ({
   key, name, description, isActive: true, priority: 1, scheduleMinutes: 30,
   minScore: 1, includeTerms: [], excludeTerms: [], geoTerms: [], entityTerms: [], rules: [],
 }));
@@ -58,7 +71,8 @@ const ALL_RADAR_DEFINITIONS: RadarConfig[] = [
 
 /**
  * Estado operativo canónico. Las definiciones históricas se conservan, pero
- * solamente los once focos aprobados pueden participar en el matcher.
+ * solamente los once focos aprobados y los cuatro del Estado de México
+ * pueden participar en el matcher.
  */
 export const RADARS: RadarConfig[] = ALL_RADAR_DEFINITIONS.map((radar) => ({
   ...radar,

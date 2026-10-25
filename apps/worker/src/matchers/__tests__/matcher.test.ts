@@ -274,7 +274,7 @@ describe("evaluateAllRadars", () => {
 });
 
 describe("business line radars", () => {
-  it("mantiene exactamente los once focos de octubre activos", () => {
+  it("mantiene los once focos de octubre activos más los cuatro focos Edomex", () => {
     const keys = getActiveRadars().map((radar) => radar.key);
     expect(keys).toEqual([
       "capufe_seguridad_20261014",
@@ -287,6 +287,10 @@ describe("business line radars", () => {
       "imss_seguridad_20261014",
       "imss_laboratorio_clinico_20261014",
       "imss_banco_sangre_20261014",
+      "edomex_issemym_20261025",
+      "edomex_carreteras_20261025",
+      "edomex_sitramytem_20261025",
+      "edomex_oportunidades_20261025",
       "imss_bienestar_morelos",
     ]);
   });

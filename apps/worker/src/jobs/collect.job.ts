@@ -41,6 +41,7 @@ import {
   upsertMatch,
 } from "../storage/match-alert.repo";
 import { getActiveRadars } from "../radars/index";
+import { isEdomexFocusKey, isPublishedOnOrAfterEdomexCutoff } from "../radars/edomex-focus.matcher";
 import { activateWatchdogForSentAlert } from "../modules/licitacion-watchdog/auto-activation";
 import { evaluateAllRadars } from "../matchers/matcher";
 import { enrichMatch } from "../enrichers/match.enricher";
@@ -214,8 +215,20 @@ async function fetchOfficialPublicationDate(sourceUrl: string): Promise<string |
   }, { timeoutMs: 90_000 });
 }
 
-async function deliverQueuedNewTenderAlerts(maxPerCycle: number): Promise<number> {
+/**
+ * Entrega la cola compartida de alertas nuevas (ComprasMX y SECOGEM). El lock
+ * evita que el ciclo ComprasMX y el ciclo estatal envíen la misma alerta a la
+ * vez; si está ocupado, la cola se conserva para el siguiente ciclo.
+ */
+export async function deliverQueuedNewTenderAlerts(maxPerCycle: number): Promise<number> {
   if (maxPerCycle <= 0) return 0;
+  const delivered = await withDistributedLock("new-tender-delivery", "new-tender-delivery", () =>
+    deliverQueuedNewTenderAlertsUnlocked(maxPerCycle),
+  );
+  return delivered ?? 0;
+}
+
+async function deliverQueuedNewTenderAlertsUnlocked(maxPerCycle: number): Promise<number> {
   const pending = await getPendingNewTenderAlerts();
   const result = await deliverPendingWithinLimit(
     pending,
@@ -787,13 +800,21 @@ export async function runCollectJob(): Promise<CollectJobResult> {
 
               cycleMetrics.alertable++;
 
+              // Los focos Edomex tienen su propio corte (fecha de activación).
+              const matchPublicationEligible = publicationDecision.eligible &&
+                (!isEdomexFocusKey(match.radarKey) ||
+                  isPublishedOnOrAfterEdomexCutoff(publicationDecision.publishedAt));
+              const matchPublicationReason = publicationDecision.eligible
+                ? "published_before_edomex_activation"
+                : publicationDecision.reason;
+
               // Usar procurement_id real de DB si está disponible
               const enrichableMatch = {
                 ...match,
                 procurementId: upsertResult.procurementId,
-                explanation: publicationDecision.eligible
+                explanation: matchPublicationEligible
                   ? match.explanation
-                  : `${match.explanation} Alerta nueva omitida: ${publicationDecision.reason}.`,
+                  : `${match.explanation} Alerta nueva omitida: ${matchPublicationReason}.`,
               };
 
               const radarDbId = radarDbIds.get(match.radarKey);
@@ -804,13 +825,13 @@ export async function runCollectJob(): Promise<CollectJobResult> {
               }
               await upsertMatch(enrichableMatch, radarDbId);
 
-              if (!publicationDecision.eligible) {
+              if (!matchPublicationEligible) {
                 log.info(
                   {
                     procurementId: upsertResult.procurementId,
                     externalId: item.externalId,
                     publicationDate: item.publicationDate,
-                    reason: publicationDecision.reason,
+                    reason: matchPublicationReason,
                   },
                   "Match persistido sin alerta nueva por regla temporal operativa",
                 );

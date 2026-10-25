@@ -1,22 +1,55 @@
+/**
+ * Canal estatal SECOGEM → flujo normal del radar.
+ *
+ * Cada fila del índice se persiste como procedimientos en `procurements`
+ * (fuente secogem_edomex), se evalúa contra los cuatro focos Edomex, se
+ * guarda el match versionado y, sólo para filas añadidas después de la línea
+ * base, se encola UNA alerta `new_match` por convocatoria en la cola común.
+ * La pregunta "¿Vigilar?" se envía tras la entrega (auto-activation).
+ */
 import axios from "axios";
-import { createHash } from "crypto";
-import type TelegramBot from "node-telegram-bot-api";
 import { getSupabaseClient } from "../../storage/client";
-import { getCommandBot } from "../../agent/telegram.commands";
 import { getConfig } from "../../config/env";
 import { withDistributedLock } from "../../core/lock";
 import { createModuleLogger } from "../../core/logger";
-import { isAuthorizedAdmin } from "../control/authorization";
-import { EDOMEX_PAGES, parseEdomexPage, noticeMessage, escapeHtml, type EdomexNotice } from "./policy";
+import { isDateExpired } from "../../core/time";
+import { upsertProcurement } from "../../storage/procurement.repo";
+import { ensurePendingNewTenderAlert, upsertMatch } from "../../storage/match-alert.repo";
+import { startCollectRun, finishCollectRun } from "../../storage/collect-run.repo";
+import { evaluateAllRadars } from "../../matchers/matcher";
+import { enrichMatch } from "../../enrichers/match.enricher";
+import { getActiveRadars } from "../../radars/index";
+import {
+  isEdomexFocusKey,
+  isPublishedOnOrAfterEdomexCutoff,
+  SECOGEM_SOURCE_KEY,
+} from "../../radars/edomex-focus.matcher";
+import { parseOfficialPublicationDate } from "../operational-alerts/eligibility";
+import { EDOMEX_PAGES, normalizeConvocatoria, pageSlug, parseEdomexPage, type EdomexConvocatoria } from "./policy";
+import { runEdomexPdfWatch } from "./consent";
+import type { RadarConfig } from "../../types/procurement";
+
+export { handleEdomexCallback, handleEdomexReply, decideEdomexConsent } from "./consent";
 
 const log = createModuleLogger("edomex");
-const PREFIX = "edomex_notice:";
-interface Entry extends EdomexNotice {
-  detectedAt: string;
-  consent: "pending" | "approved" | "declined";
-  messageId: number | null;
-  chatId: string;
-  pdfHash?: string;
+
+interface PageStats {
+  rows: number;
+  newRows: number;
+  backfilled: number;
+  created: number;
+  matches: number;
+  alertsQueued: number;
+  error?: string;
+}
+
+export interface EdomexRunSummary {
+  at: string;
+  status: "success" | "error" | "skipped";
+  pages: Record<string, PageStats>;
+  delivered: number;
+  watch: { checked: number; changed: number; errors: number } | null;
+  errors: string[];
 }
 
 async function read<T>(key: string): Promise<T | null> {
@@ -31,7 +64,7 @@ async function write(key: string, value: object): Promise<void> {
   if (error) throw new Error(`Edomex persistencia: ${error.message}`);
 }
 
-/** Lectura pública, sin navegador, cookies, IA ni descarga de documentos no autorizados. */
+/** Lectura pública, sin navegador, cookies, IA ni descarga de documentos. */
 export async function fetchIndex(url: string): Promise<string> {
   if (!(EDOMEX_PAGES as readonly string[]).includes(url)) throw new Error("Índice no permitido");
   const response = await axios.get<string>(url, { timeout: 25_000, maxRedirects: 0,
@@ -39,127 +72,153 @@ export async function fetchIndex(url: string): Promise<string> {
   return response.data;
 }
 
-async function pdfHash(url: string): Promise<string> {
-  const parsed = new URL(url);
-  if (parsed.protocol !== "https:" || parsed.hostname !== "portal.secogem.gob.mx") throw new Error("PDF no permitido");
-  const response = await axios.get<ArrayBuffer>(url, { timeout: 25_000, maxRedirects: 0,
-    maxContentLength: 12_000_000, responseType: "arraybuffer" });
-  const body = Buffer.from(response.data);
-  if (!body.subarray(0, 1024).includes(Buffer.from("%PDF-"))) throw new Error("La respuesta no es un PDF");
-  return createHash("sha256").update(body).digest("hex");
+interface Context {
+  sourceId: string;
+  radars: RadarConfig[];
+  radarDbIds: Map<string, string>;
 }
 
-async function notifyPending(entry: Entry, bot: TelegramBot): Promise<boolean> {
-  if (entry.messageId || entry.consent !== "pending") return false;
-  const message = await bot.sendMessage(entry.chatId, noticeMessage(entry), {
-    parse_mode: "HTML", disable_web_page_preview: true,
-    reply_markup: { inline_keyboard: [[
-      { text: "✅ Sí, vigilar PDF", callback_data: `edw:yes:${entry.id}` },
-      { text: "❌ No vigilar", callback_data: `edw:no:${entry.id}` },
-    ]] },
-  });
-  await write(PREFIX + entry.id, { ...entry, messageId: message.message_id });
-  await write(`edomex_reply:${entry.chatId}:${message.message_id}`, { id: entry.id });
-  return true;
+async function loadContext(): Promise<Context> {
+  const db = getSupabaseClient();
+  const { data: source, error } = await db.from("sources").select("id").eq("key", SECOGEM_SOURCE_KEY).maybeSingle();
+  if (error || !source) throw new Error(`Fuente ${SECOGEM_SOURCE_KEY} ausente; aplicar migración 20261025_edomex_radares`);
+  const radars = getActiveRadars().filter((radar) => isEdomexFocusKey(radar.key));
+  const { data: rows, error: radarError } = await db.from("radars").select("id,key,is_active")
+    .in("key", radars.map((radar) => radar.key));
+  if (radarError) throw new Error(`Radares Edomex: ${radarError.message}`);
+  const radarDbIds = new Map((rows ?? []).filter((row) => row.is_active).map((row) => [row.key as string, row.id as string]));
+  return { sourceId: source.id, radars: radars.filter((radar) => radarDbIds.has(radar.key)), radarDbIds };
 }
 
-/** El primer arranque guarda una línea base: nunca llama "nuevas" a las filas históricas. */
-export async function runEdomexJob(options: { discover?: boolean; watch?: boolean } = {}): Promise<void> {
-  await withDistributedLock("edomex", "edomex-indexes", async () => {
-    const bot = getCommandBot();
-    if (!bot) return;
-    let alerted = 0;
-    if (options.discover !== false) for (const page of EDOMEX_PAGES) {
-      try {
-        const parsed = parseEdomexPage(await fetchIndex(page));
-        const baselineKey = `edomex_index:${page.split("/").pop()}`;
-        const previous = await read<{ ids: string[] }>(baselineKey);
-        const known = new Set(previous?.ids ?? []);
-        if (previous) for (const notice of parsed.notices) {
-          if (known.has(notice.id)) continue;
-          if (!(await read<Entry>(PREFIX + notice.id))) await write(PREFIX + notice.id, {
-            ...notice, detectedAt: new Date().toISOString(), consent: "pending", messageId: null,
-            chatId: getConfig().TELEGRAM_CHAT_ID,
-          } satisfies Entry);
-        }
-        // Sólo avanzar después de persistir toda la cola. Fallos de envío se reintentan.
-        await write(baselineKey, { ids: [...new Set([...known, ...parsed.allIds])], checkedAt: new Date().toISOString() });
-      } catch (err) { log.warn({ err, page }, "Índice Edomex no procesado; se conserva la línea base"); }
+/** Procesa una fila añadida tras la línea base. Una sola alerta por convocatoria. */
+async function processNewRow(row: EdomexConvocatoria, ctx: Context, stats: PageStats): Promise<void> {
+  const firstDetectedAt = new Date().toISOString();
+  let lead: { procurementId: string; item: ReturnType<typeof normalizeConvocatoria>[number];
+    match: ReturnType<typeof evaluateAllRadars>[number]; radarDbId: string } | null = null;
+  for (const item of normalizeConvocatoria(row, { firstDetectedAt, historical: false })) {
+    const upsert = await upsertProcurement(item, ctx.sourceId);
+    // Un procedimiento ya conocido (p.ej. reimpresión del PDF) no es una oportunidad nueva.
+    if (!upsert.isNew) continue;
+    stats.created++;
+    for (const match of evaluateAllRadars(item, ctx.radars, true, null)) {
+      const radarDbId = ctx.radarDbIds.get(match.radarKey);
+      if (!radarDbId) continue;
+      const persisted = { ...match, procurementId: upsert.procurementId };
+      await upsertMatch(persisted, radarDbId);
+      stats.matches++;
+      lead ??= { procurementId: upsert.procurementId, item, match: persisted, radarDbId };
     }
-
-    const { data, error } = await getSupabaseClient().from("system_state")
-      .select("key,value_json").like("key", `${PREFIX}%`);
-    if (error) throw new Error(`Edomex cola: ${error.message}`);
-    for (const row of data ?? []) {
-      const entry = row.value_json as Entry;
-      try {
-        if (options.discover !== false && alerted < 5 && await notifyPending(entry, bot)) alerted++;
-        if (options.watch === false || entry.consent !== "approved") continue;
-        // El mismo lock protege callbacks y vigilancia contra decisiones concurrentes.
-        await withDistributedLock(`edomex-consent:${entry.id}`, entry.id, async () => {
-          const current = await read<Entry>(PREFIX + entry.id);
-          if (current?.consent !== "approved") return;
-          const hash = await pdfHash(current.url);
-          if (current.pdfHash && current.pdfHash !== hash) await bot.sendMessage(current.chatId,
-            `🔔 <b>Cambió la convocatoria EDOMEX</b>\n${escapeHtml(current.number)}\n<a href="${escapeHtml(current.url)}">Revisar PDF oficial</a>`,
-            { parse_mode: "HTML", reply_markup: { inline_keyboard: [[
-              { text: "⏹ Dejar de vigilar", callback_data: `edw:stop:${entry.id}` },
-            ]] } });
-          if (hash !== current.pdfHash) await write(PREFIX + entry.id, { ...current, pdfHash: hash });
-        });
-      } catch (err) { log.warn({ err, id: entry.id }, "Edomex: operación pendiente para el siguiente ciclo"); }
-    }
-    await write("edomex_last_run", { at: new Date().toISOString(), alerted });
-  });
-}
-
-function authorized(chatId: string, userId?: number): boolean {
-  const config = getConfig();
-  return chatId === config.TELEGRAM_CHAT_ID &&
-    (String(userId) === chatId || isAuthorizedAdmin(userId, config.TELEGRAM_ADMIN_CHAT_IDS));
-}
-
-export async function decideEdomexConsent(id: string, chatId: string, userId: number | undefined,
-  messageId: number, action: "yes" | "no" | "stop", bot: TelegramBot): Promise<string> {
-  if (!authorized(chatId, userId)) return "No autorizado";
-  let result = "Solicitud no válida";
-  await withDistributedLock(`edomex-consent:${id}`, id, async () => {
-    const entry = await read<Entry>(PREFIX + id);
-    if (!entry || entry.chatId !== chatId) return;
-    if (action !== "stop" && entry.messageId !== messageId) return;
-    if (action !== "stop" && entry.consent !== "pending") { result = "Esta solicitud ya fue respondida"; return; }
-    if (action === "stop" && entry.consent !== "approved") { result = "La vigilancia ya está detenida"; return; }
-    await write(PREFIX + id, { ...entry, consent: action === "yes" ? "approved" : "declined",
-      decidedAt: new Date().toISOString(), decidedBy: userId });
-    result = action === "yes" ? "Vigilancia del PDF autorizada" : "No se vigilará el PDF";
-    await bot.editMessageReplyMarkup({ inline_keyboard: action === "yes"
-      ? [[{ text: "⏹ Dejar de vigilar", callback_data: `edw:stop:${id}` }]] : [] },
-    { chat_id: chatId, message_id: messageId }).catch(() => {});
-  });
-  return result;
-}
-
-export async function handleEdomexCallback(bot: TelegramBot, query: TelegramBot.CallbackQuery): Promise<void> {
-  const match = query.data?.match(/^edw:(yes|no|stop):([a-f0-9]{24})$/);
-  if (!match) return;
-  try {
-    const text = await decideEdomexConsent(match[2], String(query.message?.chat.id ?? ""), query.from.id,
-      query.message?.message_id ?? 0, match[1] as "yes" | "no" | "stop", bot);
-    await bot.answerCallbackQuery(query.id, { text });
-  } catch (err) {
-    log.warn({ err }, "No se pudo guardar consentimiento Edomex");
-    await bot.answerCallbackQuery(query.id, { text: "No pude guardar la respuesta; vuelve a intentar" }).catch(() => {});
   }
+  if (!lead) return;
+  const publishedAt = parseOfficialPublicationDate(lead.item.publicationDate);
+  if (isDateExpired(lead.item.openingDate) || !isPublishedOnOrAfterEdomexCutoff(publishedAt)) {
+    log.info({ procurementId: lead.procurementId, publicationDate: lead.item.publicationDate },
+      "Match Edomex persistido sin alerta: vencido o publicado antes de la activación");
+    return;
+  }
+  const enriched = await enrichMatch(lead.item, lead.match, undefined, []);
+  const queued = await ensurePendingNewTenderAlert(enriched, lead.procurementId, lead.radarDbId);
+  if (queued.created) stats.alertsQueued++;
 }
 
-export async function handleEdomexReply(bot: TelegramBot, message: TelegramBot.Message): Promise<void> {
-  const answer = message.text?.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  if (!message.reply_to_message || !/^(si|no)$/.test(answer ?? "")) return;
-  const chatId = String(message.chat.id);
-  if (!authorized(chatId, message.from?.id)) return;
-  const ref = await read<{ id: string }>(`edomex_reply:${chatId}:${message.reply_to_message.message_id}`);
-  if (!ref) return;
-  const result = await decideEdomexConsent(ref.id, chatId, message.from?.id,
-    message.reply_to_message.message_id, answer === "si" ? "yes" : "no", bot);
-  await bot.sendMessage(chatId, result);
+async function processPage(page: string, ctx: Context): Promise<PageStats> {
+  const rows = parseEdomexPage(await fetchIndex(page), page);
+  const stats: PageStats = { rows: rows.length, newRows: 0, backfilled: 0, created: 0, matches: 0, alertsQueued: 0 };
+  const slug = pageSlug(page);
+  const baselineKey = `edomex_index:${slug}`;
+  const backfillKey = `edomex_backfill_v1:${slug}`;
+  const previous = await read<{ ids: string[] }>(baselineKey);
+  const known = new Set(previous?.ids ?? []);
+
+  // Archivo histórico: se normaliza sin matches ni alertas, una sola vez.
+  // Así un procedimiento histórico que reaparece no se presenta como nuevo.
+  if (!(await read(backfillKey))) {
+    const historical = previous ? rows.filter((row) => known.has(row.rowId)) : rows;
+    const detectedAt = new Date().toISOString();
+    for (const row of historical) {
+      for (const item of normalizeConvocatoria(row, { firstDetectedAt: detectedAt, historical: true })) {
+        const upsert = await upsertProcurement(item, ctx.sourceId);
+        if (upsert.isNew) stats.backfilled++;
+      }
+    }
+    await write(backfillKey, { at: detectedAt, rows: historical.length, created: stats.backfilled });
+  }
+
+  if (!previous) {
+    await write(baselineKey, { ids: rows.map((row) => row.rowId), checkedAt: new Date().toISOString() });
+    return stats;
+  }
+  const processed: string[] = [];
+  for (const row of rows.filter((candidate) => !known.has(candidate.rowId))) {
+    stats.newRows++;
+    try {
+      await processNewRow(row, ctx, stats);
+      processed.push(row.rowId);
+    } catch (err) {
+      // Sin avanzar la línea base para esta fila: se reintenta el siguiente ciclo.
+      log.warn({ err, rowId: row.rowId, number: row.numberCell }, "Fila Edomex pendiente de reintento");
+    }
+  }
+  await write(baselineKey, { ids: [...new Set([...known, ...processed])], checkedAt: new Date().toISOString() });
+  return stats;
+}
+
+/**
+ * discover: lee índices, persiste y encola alertas (respeta pausa del colector
+ * y watchdog_only desde el scheduler). watch: compara PDFs ya autorizados.
+ */
+export async function runEdomexJob(options: { discover?: boolean; watch?: boolean } = {}): Promise<EdomexRunSummary | null> {
+  return withDistributedLock("edomex", "edomex-indexes", async () => {
+    const summary: EdomexRunSummary = {
+      at: new Date().toISOString(), status: "success", pages: {}, delivered: 0, watch: null, errors: [],
+    };
+    let runId: string | null = null;
+    let ctx: Context | null = null;
+    if (options.discover !== false) {
+      try {
+        ctx = await loadContext();
+        runId = await startCollectRun(ctx.sourceId, SECOGEM_SOURCE_KEY).catch((err) => {
+          log.warn({ err }, "No se pudo registrar collect_run Edomex");
+          return null;
+        });
+        for (const page of EDOMEX_PAGES) {
+          try {
+            summary.pages[pageSlug(page)] = await processPage(page, ctx);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            summary.errors.push(`${pageSlug(page)}: ${message}`);
+            summary.pages[pageSlug(page)] = { rows: 0, newRows: 0, backfilled: 0, created: 0, matches: 0, alertsQueued: 0, error: message };
+            log.warn({ err, page }, "Índice Edomex no procesado; se conserva la línea base");
+          }
+        }
+        // Cola común con ComprasMX: mismo límite por ciclo y misma deduplicación.
+        const { deliverQueuedNewTenderAlerts } = await import("../../jobs/collect.job");
+        summary.delivered = await deliverQueuedNewTenderAlerts(getConfig().ALERT_MAX_PER_CYCLE);
+      } catch (err) {
+        summary.errors.push(err instanceof Error ? err.message : String(err));
+        log.error({ err }, "Ciclo Edomex sin descubrimiento");
+      }
+    }
+    if (options.watch !== false) {
+      try { summary.watch = await runEdomexPdfWatch(); } catch (err) {
+        summary.errors.push(`watch: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    const pages = Object.values(summary.pages);
+    if (summary.errors.length > 0) summary.status = "error";
+    if (runId) {
+      await finishCollectRun(runId, {
+        finishedAt: new Date().toISOString(),
+        status: summary.errors.length > 0 ? "error" : "success",
+        itemsSeen: pages.reduce((total, page) => total + page.rows, 0),
+        itemsCreated: pages.reduce((total, page) => total + page.created + page.backfilled, 0),
+        itemsUpdated: 0,
+        errorMessage: summary.errors.join("; ") || null,
+        metadata: summary as unknown as Record<string, unknown>,
+      }).catch((err) => log.warn({ err }, "No se pudo cerrar collect_run Edomex"));
+    }
+    await write("edomex_last_run", summary);
+    log.info(summary, "Ciclo Edomex completado");
+    return summary;
+  });
 }
