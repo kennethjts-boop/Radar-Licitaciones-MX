@@ -45,6 +45,7 @@ interface PageStats {
 
 export interface EdomexRunSummary {
   at: string;
+  deploymentSha: string | null;
   status: "success" | "error" | "skipped";
   pages: Record<string, PageStats>;
   delivered: number;
@@ -170,7 +171,7 @@ async function processPage(page: string, ctx: Context): Promise<PageStats> {
 export async function runEdomexJob(options: { discover?: boolean; watch?: boolean } = {}): Promise<EdomexRunSummary | null> {
   return withDistributedLock("edomex", "edomex-indexes", async () => {
     const summary: EdomexRunSummary = {
-      at: new Date().toISOString(), status: "success", pages: {}, delivered: 0, watch: null, errors: [],
+      at: new Date().toISOString(), deploymentSha: getConfig().RAILWAY_GIT_COMMIT_SHA ?? null, status: "success", pages: {}, delivered: 0, watch: null, errors: [],
     };
     let runId: string | null = null;
     let ctx: Context | null = null;

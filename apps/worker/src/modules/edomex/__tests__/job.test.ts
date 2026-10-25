@@ -35,7 +35,7 @@ jest.mock("../../../storage/collect-run.repo", () => ({ startCollectRun: async (
 jest.mock("../../../enrichers/match.enricher", () => ({ enrichMatch: async (item: any, match: any) => ({ telegramMessage: "msg", procurement: item, radarKey: match.radarKey }) }));
 jest.mock("../../../jobs/collect.job", () => ({ deliverQueuedNewTenderAlerts: (...a: any[]) => deliver(...a) }));
 jest.mock("../../../agent/telegram.commands", () => ({ getCommandBot: () => bot }));
-jest.mock("../../../config/env", () => ({ getConfig: () => ({ TELEGRAM_CHAT_ID: "123", TELEGRAM_ADMIN_CHAT_IDS: "999", ALERT_MAX_PER_CYCLE: 10 }) }));
+jest.mock("../../../config/env", () => ({ getConfig: () => ({ TELEGRAM_CHAT_ID: "123", TELEGRAM_ADMIN_CHAT_IDS: "999", ALERT_MAX_PER_CYCLE: 10, RAILWAY_GIT_COMMIT_SHA: "abc1234" }) }));
 jest.mock("../../../core/lock", () => ({ withDistributedLock: async (_: string, __: string, fn: () => Promise<any>) => fn() }));
 jest.mock("../../../core/logger", () => ({ createModuleLogger: () => ({ warn: jest.fn(), info: jest.fn(), error: jest.fn(), debug: jest.fn() }) }));
 
@@ -68,6 +68,7 @@ it("primer ciclo: normaliza el archivo histórico sin matches ni alertas", async
   expect(ensurePendingNewTenderAlert).not.toHaveBeenCalled();
   expect(bot.sendMessage).not.toHaveBeenCalled();
   expect(summary?.status).toBe("success");
+  expect(summary?.deploymentSha).toBe("abc1234");
   expect(state.get("edomex_last_run").pages["convocatorias-obra-publica"].backfilled).toBe(3);
 });
 
