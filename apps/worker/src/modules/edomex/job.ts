@@ -91,16 +91,44 @@ async function loadContext(): Promise<Context> {
   return { sourceId: source.id, radars: radars.filter((radar) => radarDbIds.has(radar.key)), radarDbIds };
 }
 
-/** Procesa una fila añadida tras la línea base. Una sola alerta por convocatoria. */
+/**
+ * Procedimientos que pertenecen a una fila pendiente. Se fija ANTES de
+ * insertar nada: sólo cuenta lo que no existía en BD cuando la fila se vio
+ * por primera vez. Así, si un intento inserta y luego falla (match, enrich o
+ * cola), el reintento reprocesa esos procedimientos, mientras que históricos
+ * o ya procesados por otra fila siguen excluidos.
+ */
+interface PendingRowClaim {
+  owned: string[];
+  firstDetectedAt: string;
+}
+const claimKey = (rowId: string) => `edomex_row_pending:${rowId}`;
+
+async function claimPendingRow(row: EdomexConvocatoria, externalIds: string[], ctx: Context): Promise<PendingRowClaim> {
+  const previous = await read<PendingRowClaim>(claimKey(row.rowId));
+  if (previous) return previous;
+  const { data, error } = await getSupabaseClient().from("procurements").select("external_id")
+    .eq("source_id", ctx.sourceId).in("external_id", externalIds);
+  if (error) throw new Error(`Edomex procedimientos existentes: ${error.message}`);
+  const existing = new Set((data ?? []).map((item) => item.external_id as string));
+  const claim = { owned: externalIds.filter((id) => !existing.has(id)), firstDetectedAt: new Date().toISOString() };
+  await write(claimKey(row.rowId), claim);
+  return claim;
+}
+
+/** Procesa una fila añadida tras la línea base. Idempotente; una sola alerta por convocatoria. */
 async function processNewRow(row: EdomexConvocatoria, ctx: Context, stats: PageStats): Promise<void> {
-  const firstDetectedAt = new Date().toISOString();
+  const externalIds = normalizeConvocatoria(row, { firstDetectedAt: "", historical: false }).map((item) => item.externalId);
+  const claim = await claimPendingRow(row, externalIds, ctx);
+  const owned = new Set(claim.owned);
   let lead: { procurementId: string; item: ReturnType<typeof normalizeConvocatoria>[number];
     match: ReturnType<typeof evaluateAllRadars>[number]; radarDbId: string } | null = null;
-  for (const item of normalizeConvocatoria(row, { firstDetectedAt, historical: false })) {
+  for (const item of normalizeConvocatoria(row, { firstDetectedAt: claim.firstDetectedAt, historical: false })) {
     const upsert = await upsertProcurement(item, ctx.sourceId);
-    // Un procedimiento ya conocido (p.ej. reimpresión del PDF) no es una oportunidad nueva.
-    if (!upsert.isNew) continue;
-    stats.created++;
+    // Un procedimiento ya conocido antes de esta fila (p.ej. reimpresión del PDF) no es nuevo.
+    if (!owned.has(item.externalId)) continue;
+    if (upsert.isNew) stats.created++;
+    // upsertMatch y la cola (dedupe_key por procedimiento) son idempotentes en reintentos.
     for (const match of evaluateAllRadars(item, ctx.radars, true, null)) {
       const radarDbId = ctx.radarDbIds.get(match.radarKey);
       if (!radarDbId) continue;
@@ -161,6 +189,11 @@ async function processPage(page: string, ctx: Context): Promise<PageStats> {
     }
   }
   await write(baselineKey, { ids: [...new Set([...known, ...processed])], checkedAt: new Date().toISOString() });
+  // La línea base ya excluye estas filas; la marca sólo servía para reintentos.
+  for (const rowId of processed) {
+    const { error } = await getSupabaseClient().from("system_state").delete().eq("key", claimKey(rowId));
+    if (error) log.warn({ err: error, rowId }, "Marca de fila Edomex no eliminada; es inocua");
+  }
   return stats;
 }
 
