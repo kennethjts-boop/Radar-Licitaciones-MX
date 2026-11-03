@@ -322,6 +322,8 @@ const envSchema = z.object({
     .default("false")
     .transform((v) => v === "true"),
   RAILWAY_API_TOKEN: z.string().optional(),
+  // Tamaño de cómputo del proyecto Supabase de Radar (micro, small...), declarado.
+  SUPABASE_COMPUTE_SIZE: z.string().optional(),
 
   // App
   APP_TIMEZONE: z.string().default("America/Mexico_City"),

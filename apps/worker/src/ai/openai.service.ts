@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { createModuleLogger } from "../core/logger";
 import { BUSINESS_PROFILE, BusinessCategory } from "../config/business_profile";
 import companyProfile from "../config/company_profile.json";
-import { trackAiCall } from "../modules/cost-report/ai-usage";
+import { keyFingerprint, observedFetch, trackAiCall } from "../modules/cost-report/ai-usage";
 
 const log = createModuleLogger("ai-service");
 
@@ -241,9 +241,12 @@ export async function analyzeTenderDocument(
       "mistralai/mistral-7b-instruct:free"
     ];
 
+    const apiKey = ensureApiKey();
+    const keyId = keyFingerprint(apiKey);
     const client = new OpenAI({ 
-      apiKey: ensureApiKey(),
+      apiKey,
       baseURL: AI_PROVIDER === "openrouter" ? OPENROUTER_BASE_URL : undefined,
+      fetch: observedFetch,
       defaultHeaders: AI_PROVIDER === "openrouter" ? {
         "HTTP-Referer": "https://radar-licitaciones.mx",
         "X-Title": "Radar Licitaciones MX",
@@ -293,7 +296,7 @@ export async function analyzeTenderDocument(
         try {
           log.info({ model }, "Intentando análisis con modelo del pool");
           const completion = await trackAiCall(
-            { provider: USAGE_PROVIDER, model, operation: "analyze_tender", attempt: index + 1 },
+            { provider: USAGE_PROVIDER, model, operation: "analyze_tender", attempt: index + 1, keyId },
             () => client.chat.completions.create({
             model: model,
             temperature: 0.2,
@@ -329,7 +332,7 @@ export async function analyzeTenderDocument(
 
     // Fallback OpenAI legacy
     const completion = await trackAiCall(
-      { provider: USAGE_PROVIDER, model: PRIMARY_AI_MODEL, operation: "analyze_tender" },
+      { provider: USAGE_PROVIDER, model: PRIMARY_AI_MODEL, operation: "analyze_tender", keyId },
       () => client.chat.completions.create({
       model: PRIMARY_AI_MODEL,
       temperature: 0.2,
@@ -369,9 +372,12 @@ export async function detectAbusiveClauses(text: string): Promise<{
     throw new Error("Texto vacío: no se puede analizar");
   }
 
+  const apiKey = ensureApiKey();
+  const keyId = keyFingerprint(apiKey);
   const client = new OpenAI({ 
-    apiKey: ensureApiKey(),
+    apiKey,
     baseURL: AI_PROVIDER === "openrouter" ? OPENROUTER_BASE_URL : undefined,
+    fetch: observedFetch,
     defaultHeaders: AI_PROVIDER === "openrouter" ? {
       "HTTP-Referer": "https://radar-licitaciones.mx",
       "X-Title": "Radar Licitaciones MX",
@@ -399,7 +405,7 @@ Responde ÚNICAMENTE en JSON con este formato:
 
   try {
     const response = await trackAiCall(
-      { provider: USAGE_PROVIDER, model: PRIMARY_AI_MODEL, operation: "abusive_clauses" },
+      { provider: USAGE_PROVIDER, model: PRIMARY_AI_MODEL, operation: "abusive_clauses", keyId },
       () => client.chat.completions.create({
       model: PRIMARY_AI_MODEL,
       temperature: 0.1,
@@ -425,14 +431,22 @@ export async function generateEmbedding(text: string): Promise<number[]> {
     throw new Error("Texto vacío: no se puede generar embedding");
   }
 
+  const apiKey = AI_PROVIDER === "openrouter" ? process.env.OPENROUTER_API_KEY : process.env.OPENAI_API_KEY;
   const client = new OpenAI({ 
-    apiKey: AI_PROVIDER === "openrouter" ? process.env.OPENROUTER_API_KEY : process.env.OPENAI_API_KEY,
-    baseURL: AI_PROVIDER === "openrouter" ? OPENROUTER_BASE_URL : undefined
+    apiKey,
+    baseURL: AI_PROVIDER === "openrouter" ? OPENROUTER_BASE_URL : undefined,
+    fetch: observedFetch,
   });
 
   try {
     const response = await trackAiCall(
-      { provider: USAGE_PROVIDER, model: OPENAI_EMBEDDING_MODEL, operation: "embedding", usageKind: "embedding" },
+      {
+        provider: USAGE_PROVIDER,
+        model: OPENAI_EMBEDDING_MODEL,
+        operation: "embedding",
+        usageKind: "embedding",
+        keyId: apiKey ? keyFingerprint(apiKey) : null,
+      },
       () => client.embeddings.create({
         model: OPENAI_EMBEDDING_MODEL,
         input,

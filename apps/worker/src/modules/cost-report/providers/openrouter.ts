@@ -10,10 +10,14 @@
  *   00:00 MX la diferencia representa el día MX; si no, se informa como
  *   referencia con el periodo real que cubre.
  * - Cuenta como gasto de Radar sólo con OPENROUTER_KEY_DEDICATED=true.
+ * - Contraste: la diferencia del contador se compara con la suma de
+ *   `usage.cost` de las respuestas registradas con la MISMA huella de clave
+ *   en el MISMO periodo real (capturedAt → capturedAt), no el día nominal.
  */
-import { createHash } from "crypto";
 import { formatInTimeZone } from "date-fns-tz";
 import { MX_TIMEZONE } from "../../../core/time";
+import { keyFingerprint, type AiUsageRow } from "../ai-usage";
+import { usd4 } from "../money";
 import { mexicoDayBounds, shiftDate } from "../period";
 import type { ProviderLine } from "../types";
 import type { ProviderContext } from "./context";
@@ -30,9 +34,7 @@ export interface OpenRouterSnapshot {
   keyId: string;
 }
 
-export function openRouterKeyId(apiKey: string): string {
-  return `sha256:${createHash("sha256").update(apiKey.trim()).digest("hex").slice(0, 16)}`;
-}
+export const openRouterKeyId = keyFingerprint;
 
 export async function fetchOpenRouterUsage(
   apiKey: string,
@@ -58,6 +60,8 @@ export interface OpenRouterDelta {
   aligned: boolean;
   periodStart?: string;
   periodEnd?: string;
+  /** Huella de la clave de ambos cortes. */
+  keyId?: string;
   problem?: string;
 }
 
@@ -92,6 +96,7 @@ export function openRouterDayDelta(
     aligned: within(offsetSec(startAt, bounds.startUtc)) && within(offsetSec(endAt, bounds.endUtc)),
     periodStart: start.capturedAt,
     periodEnd: end.capturedAt,
+    keyId: start.keyId,
   };
 }
 
@@ -136,4 +141,42 @@ export function buildOpenRouterLine(
   };
   if (!delta.aligned) line.missing.push("OpenRouter gasto real: corte de medianoche tomado tarde; se muestra como referencia");
   return line;
+}
+
+/**
+ * Contrasta la diferencia del contador con el costo por respuesta de Radar.
+ * `rows` son los eventos del periodo real del contador; `coveredFrom` es el
+ * inicio de la medición confiable. Devuelve texto o un motivo de omisión.
+ */
+export function openRouterReconciliation(
+  delta: OpenRouterDelta | null,
+  rows: AiUsageRow[] | null,
+  coveredFrom: string | null,
+): string | undefined {
+  if (!delta || delta.usd === null || !delta.periodStart || !delta.periodEnd || !delta.keyId) return undefined;
+  const period = `${mx(delta.periodStart)} → ${mx(delta.periodEnd)} CDMX`;
+  const head = `contador ${delta.keyId} ${period}: ${usd4(delta.usd)}`;
+  if (!coveredFrom || new Date(coveredFrom).getTime() > new Date(delta.periodStart).getTime()) {
+    return `${head} · sin contraste: la medición de Radar no cubre todo ese periodo`;
+  }
+  if (!rows) return `${head} · sin contraste: no se pudieron leer los eventos del periodo`;
+  const own = rows.filter((r) => r.provider === "openrouter");
+  if (own.some((r) => r.key_id === undefined)) {
+    return `${head} · sin contraste: eventos sin identidad de clave (migración 20261025 pendiente)`;
+  }
+  const sameKey = own.filter((r) => r.key_id === delta.keyId);
+  const otherKeys = own.length - sameKey.length;
+  const costs = sameKey.map((r) => (r.cost_reported_usd === null ? null : Number(r.cost_reported_usd)));
+  const sum = costs.reduce<number>((a, c) => a + (c !== null && Number.isFinite(c) ? c : 0), 0);
+  const noCost = sameKey.filter((r, i) => r.status === "ok" && (costs[i] === null || !Number.isFinite(costs[i]!))).length;
+  const diff = delta.usd - sum;
+  const parts = [
+    head,
+    `respuestas Radar misma clave y periodo: ${usd4(sum)} (${sameKey.length} sol)`,
+    `diferencia ${usd4(diff)}`,
+  ];
+  if (noCost) parts.push(`${noCost} respuestas sin usage.cost`);
+  if (otherKeys) parts.push(`${otherKeys} sol con otra clave, excluidas`);
+  if (Math.abs(diff) >= 0.0001) parts.push("diferencia = uso de la clave fuera del registro de Radar o respuestas sin costo");
+  return parts.join(" · ");
 }

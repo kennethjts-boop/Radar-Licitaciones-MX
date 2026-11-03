@@ -12,6 +12,31 @@ export interface ReferenceFigure {
   reason: string;
 }
 
+/**
+ * Cobertura de la medición de un día MX:
+ * - none: el día terminó antes de que existiera medición confiable ("sin datos").
+ * - partial: la medición empezó durante el día o se perdieron eventos.
+ * - complete: medición activa todo el día, sin pérdidas registradas.
+ * Sólo los días complete entran a promedios y anomalías; none nunca es $0.
+ */
+export type CoverageStatus = "none" | "partial" | "complete";
+
+export interface DayCoverage {
+  status: CoverageStatus;
+  /** Inicio de la medición confiable (ISO UTC), o null si aún no existe. */
+  since: string | null;
+  /** Eventos de IA que no se pudieron registrar ese día. */
+  droppedEvents: number;
+  /** La medición empezó dentro de este día. */
+  sinceWithinDay?: boolean;
+}
+
+export interface ProviderCoverage {
+  /** not_applicable: la cifra no depende del registro de IA de Radar. */
+  status: CoverageStatus | "not_applicable";
+  note?: string;
+}
+
 export interface ProviderLine {
   provider: CostProvider;
   /** Gasto informado por el proveedor, alineado al día MX y atribuible a Radar. */
@@ -23,6 +48,9 @@ export interface ProviderLine {
   /** Métricas de uso no monetarias (no entran a totales ni anomalías). */
   metricsDetail?: string;
   reference?: ReferenceFigure;
+  /** Contraste entre registro de Radar y la fuente del proveedor. */
+  reconciliation?: string;
+  coverage?: ProviderCoverage;
   /** Datos faltantes, retrasos o permisos mínimos requeridos. */
   missing: string[];
 }
@@ -41,7 +69,12 @@ export interface AiModelStats {
 export interface AiStats {
   requests: number;
   errors: number;
+  /** Solicitudes observadas que reintentan con otro modelo del pool (attempt>1). */
   retries: number;
+  /** Reintentos HTTP internos del SDK observados (http_attempts − 1). */
+  httpRetries: number;
+  /** Solicitudes cuyos reintentos internos no se pudieron medir (http_attempts NULL). */
+  retriesUnobserved: number;
   inputTokens: number;
   outputTokens: number;
   /** Solicitudes de modelos sin tarifa verificada: su costo no se estima. */
@@ -58,6 +91,8 @@ export interface CostTotals {
   estimatedProviders: CostProvider[];
   /** Proveedores sin cifra para el total estimado. */
   estimateExcludes: CostProvider[];
+  /** Proveedores incluidos con medición parcial. */
+  estimatePartial: CostProvider[];
 }
 
 export interface DayCostMetrics {
@@ -68,6 +103,8 @@ export interface DayCostMetrics {
   providers: ProviderLine[];
   ai: AiStats | null;
   totals: CostTotals;
+  /** Ausente en reportes anteriores a la medición de cobertura: no comparable. */
+  coverage?: DayCoverage;
 }
 
 export interface AnomalyThresholds {
