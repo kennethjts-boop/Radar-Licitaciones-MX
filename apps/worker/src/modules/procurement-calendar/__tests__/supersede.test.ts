@@ -17,7 +17,7 @@ import { calendarCoversWatchdogChange, isDateOnlyChange } from "../supersede";
 import type { WatchdogChange, WatchdogSnapshotRow } from "../../licitacion-watchdog/types";
 
 const row = (changes: WatchdogChange[]): WatchdogSnapshotRow => ({
-  id: "s1", numero_procedimiento: "LA-12-NEF-012NEF001-N-3-2027", snapshot_hash: "h", snapshot_json: {} as never,
+  id: "s1", numero_procedimiento: "LA-50-GYR-050GYR035-N-2-2027", snapshot_hash: "h", snapshot_json: {} as never,
   detected_changes: { changes, notification: { kind: "change", status: "pending" } }, created_at: "2026-11-09T04:00:00Z",
 });
 const apertura: WatchdogChange = {

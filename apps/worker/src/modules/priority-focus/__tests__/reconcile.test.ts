@@ -33,7 +33,7 @@ jest.mock("../../../jobs/collect.job", () => ({
   dbRowToNormalized: (row: Row) => ({
     source: "comprasmx", sourceUrl: row.source_url, externalId: row.id, expedienteId: null, licitationNumber: row.licitation_number,
     procedureNumber: null, title: row.title, description: null, dependencyName: row.dependency_name, buyingUnit: null,
-    status: row.status, publicationDate: null, openingDate: row.opening_date, amount: row.amount, attachments: [], canonicalText: "",
+    status: row.status, publicationDate: null, openingDate: row.opening_date, amount: row.amount, currency: row.currency ?? (row.amount ? "MXN" : null), attachments: [], canonicalText: "",
     rawJson: {},
   }),
 }));

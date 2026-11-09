@@ -3,7 +3,7 @@ const enableTracking = jest.fn();
 const disableTracking = jest.fn();
 jest.mock("../service", () => ({
   CALENDAR_BUTTON_RADAR_KEYS: ["birmex_prioridad_20261108"],
-  defaultDeps: {}, getCalendarView: (...a: unknown[]) => getCalendarView(...a),
+  defaultDeps: { loadProcurement: async () => ({ id: "x", expediente: "LA-12-NEF-012NEF001-N-77-2027" }) }, getCalendarView: (...a: unknown[]) => getCalendarView(...a),
   enableTracking: (...a: unknown[]) => enableTracking(...a), disableTracking: (...a: unknown[]) => disableTracking(...a),
   isTracking: async () => false,
 }));

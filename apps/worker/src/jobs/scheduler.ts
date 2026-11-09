@@ -302,6 +302,18 @@ export function startScheduler(): void {
     } catch (err) { log.warn({ err }, "Ciclo Edomex pendiente; se reintentará"); }
   };
   cron.schedule("*/30 * * * *", runEdomex, { timezone: "America/Mexico_City" });
+
+  // Vigilancia prioritaria de dos procedimientos de BIRMEX: cadencia objetivo de 15 min, con espera
+  // progresiva por folio ante errores del portal. Respeta las pausas manuales de watchdog y globales.
+  const runPriorityWatchCycle = async () => {
+    try {
+      if (await cycleIsPaused("watchdog", "priority_watch")) return;
+      const { runPriorityWatchJob } = await import("../modules/priority-watch/job");
+      await runPriorityWatchJob();
+    } catch (err) { log.warn({ err, suppressTelegram: true }, "Vigilancia prioritaria pendiente; se reintentará"); }
+  };
+  cron.schedule("7,22,37,52 * * * *", runPriorityWatchCycle, { timezone: "America/Mexico_City" });
+  setTimeout(() => { void runPriorityWatchCycle(); }, 45_000);
   setTimeout(() => { void runEdomex(); }, 20_000);
 
   const config = getConfig();

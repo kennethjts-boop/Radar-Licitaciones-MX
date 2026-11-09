@@ -27,7 +27,7 @@ import { disableTracking, enableTracking, getCalendarView, runCalendarTracking, 
 const ID = "cf2458a7-d351-4f07-be07-84ac1da0764e";
 const URL = "https://comprasmx.buengobierno.gob.mx/sitiopublico/#/sitiopublico/detalle/8d0517be786f4f878c109c5d861226ce/procedimiento";
 const info: ProcurementInfo = {
-  id: ID, expediente: "LA-12-NEF-012NEF001-N-3-2027", title: "SERVICIO INTEGRADO REGIONAL", buyer: "BIRMEX", sourceKey: "comprasmx",
+  id: ID, expediente: "LA-12-NEF-012NEF001-N-77-2027", title: "SERVICIO INTEGRADO REGIONAL", buyer: "BIRMEX", sourceKey: "comprasmx",
   sourceUrl: URL, status: "activa", openingDate: "2026-11-19", publicationDate: null, createdAt: "2026-11-09T02:48:19.686Z", rawJson: {},
 };
 
@@ -141,5 +141,29 @@ describe("seguimiento implícito (autorizado en el watchdog)", () => {
     portalDown = true;
     await runCalendarTracking(implicit);
     expect(mem.tracking.has(ID)).toBe(false);
+  });
+});
+
+describe("cierre del calendario de hitos vs. vigilancia de contratos", () => {
+  beforeEach(() => { Object.values(mem).forEach((m) => m.clear()); sent.length = 0; watchdog.length = 0; portalDown = false; portal = fixture; });
+
+  it("al publicarse el acta de fallo con estatus terminal se cierra SOLO el seguimiento de hitos; el watchdog no se desactiva", async () => {
+    await enableTracking(ID, "123", 1, deps);
+    const data = JSON.parse(JSON.stringify(fixture));
+    data.registro[0].estatus = "ADJUDICADO";
+    data.anexos = [...data.anexos, { numero: 9, descripcion: "ACTA DE FALLO", tipodoc_descripcion: "ACTA DE FALLO", nombre_archivo: "FA.pdf", uuid_documento: "u-fa", fecha_creacion: "2026-11-24T19:00:00" }];
+    portal = data;
+    await runCalendarTracking(deps);
+    expect(mem.tracking.get(ID)).toMatchObject({ enabled: false });
+    expect(watchdog).toEqual([`on:${ID}`]); // sin `off:`: la vigilancia de contratos y convenios sigue
+  });
+
+  it("los folios de la vigilancia prioritaria no los avisa el calendario (un solo avisador por evento)", async () => {
+    const watched = { ...deps, loadProcurement: async () => ({ ...info, expediente: "LA-12-NEF-012NEF001-N-3-2027" }) };
+    await enableTracking(ID, "123", 1, watched);
+    portal = (() => { const d = JSON.parse(JSON.stringify(fixture)); d.registro[0].fecha_apertura = "2026-11-26T10:00:00"; return d; })();
+    const run = await runCalendarTracking(watched);
+    expect(run).toMatchObject({ tracked: 0, notified: 0 });
+    expect(sent).toHaveLength(0);
   });
 });

@@ -11,6 +11,8 @@ function proc(over: Partial<NormalizedProcurement>): NormalizedProcurement {
     source: "comprasmx", externalId: "x", title: "Servicio", description: null, dependencyName: null,
     buyingUnit: null, amount: null, procedureNumber: null, licitationNumber: null, rawJson: {}, attachments: [],
     canonicalText: "", sourceUrl: "https://x.mx/a", status: "activa", publicationDate: null, openingDate: null,
+    // Con monto, la moneda confirmada en pesos es parte del dato (el listado no la trae: se contrasta con el portal).
+    currency: over.amount != null ? "MXN" : null,
     ...over,
   } as unknown as NormalizedProcurement;
 }
@@ -37,6 +39,12 @@ describe("focos de prioridad con umbral de presupuesto oficial", () => {
     expect(d).toMatchObject({ key: EDOMEX_FOCUS_KEYS.birmex, amountStatus: "confirmed" });
     expect(d?.scoreReasons).toContain("amount_meets_threshold");
     expect(meetsPriorityThreshold(EDOMEX_FOCUS_KEYS.birmex, 100_000_000)).toBe(true);
+  });
+
+  it("monto sin moneda confirmada: queda «monto por verificar» hasta contrastarlo con el documento oficial", () => {
+    const pending = classifyEdomexProcurement(proc({ dependencyName: "BIRMEX", amount: 150_000_000, currency: null }));
+    expect(pending).toMatchObject({ key: EDOMEX_FOCUS_KEYS.birmex, amountStatus: "pending" });
+    expect(pending?.scoreReasons).toContain("currency_pending");
   });
 
   it("caso 3: compra consolidada sin monto publicado queda como monto por verificar", () => {

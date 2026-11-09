@@ -466,12 +466,14 @@ export async function sendTelegramMessageSingleAttempt(
   text: string,
   chatId: string,
   parseMode: "Markdown" | "HTML" = "HTML",
+  options: TelegramSendOptions = {},
 ): Promise<TelegramDeliveryReceipt> {
   const config = getConfig();
   const msg = await withTimeout(
     getBot().sendMessage(chatId, text, {
       parse_mode: parseMode,
       disable_web_page_preview: true,
+      ...(options.replyMarkup ? { reply_markup: options.replyMarkup } : {}),
     } as TelegramBot.SendMessageOptions),
     config.TELEGRAM_SEND_TIMEOUT_MS,
     "telegram.sendMessage",
