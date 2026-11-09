@@ -13,3 +13,7 @@ Cuatro radares nuevos sobre el pipeline Edomex (misma cola `alerts`, `MAX_ALERTS
 - Corte de publicación propio: 2026-10-09 (30 días); `publication_date` nula se considera elegible.
 - Migración: `supabase/migrations/20261108_prioridad_radares.sql` (aplicar **antes** del despliegue; el guardado de matches falla si el radar no existe en BD).
 - Montos sin publicar se muestran "por verificar"; nunca se afirma un monto.
+
+## Conciliación única (SECOGEM)
+
+Al primer ciclo Edomex tras el despliegue, `reconcilePriorityRows` evalúa contra los focos nuevos las filas del índice ya conocidas y detectadas después del archivo histórico (≥ 2026-10-26). Sello: `system_state.edomex_priority_backfill_v1:<slug>`. Respeta vencimiento y el tope de 10 alertas por ciclo (BIRMEX primero); los matches se guardan siempre.
