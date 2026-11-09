@@ -138,7 +138,10 @@ const envSchema = z.object({
     .string()
     .default("false")
     .transform((v) => v === "true"),
-  OPENROUTER_API_KEY: z.string().optional(),
+  OPENROUTER_API_KEY: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() ? value.trim() : undefined),
+    z.string().optional(),
+  ),
   WATCHDOG_INTERVAL_MINUTES: z
     .string()
     .default("15")
@@ -283,7 +286,12 @@ const envSchema = z.object({
     .transform(Number),
 
   // OpenAI
-  OPENAI_API_KEY: z.string().min(10, { message: "OPENAI_API_KEY requerido" }).optional(),
+  // Opcional: una clave vacía, corta o de relleno NO debe impedir el arranque del radar
+  // (escaneo y alertas no dependen de la IA). Se trata como ausente.
+  OPENAI_API_KEY: z.preprocess(
+    (value) => (typeof value === "string" && value.trim().length >= 10 ? value.trim() : undefined),
+    z.string().optional(),
+  ),
   OPENAI_MODEL: z.string().default("gpt-4.1-mini"),
 
   // Railway / deploy

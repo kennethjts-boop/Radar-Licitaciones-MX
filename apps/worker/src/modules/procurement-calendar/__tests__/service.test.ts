@@ -130,3 +130,16 @@ describe("seguimiento del calendario", () => {
     expect(await runCalendarTracking(implicit)).toMatchObject({ notified: 1 });
   });
 });
+
+describe("seguimiento implícito (autorizado en el watchdog)", () => {
+  beforeEach(() => { Object.values(mem).forEach((m) => m.clear()); sent.length = 0; portalDown = false; portal = fixture; });
+
+  it("el ciclo no crea un registro de seguimiento propio, ni en éxito ni en falla del portal", async () => {
+    const implicit = { ...deps, implicitTrackedIds: async () => [ID] };
+    await runCalendarTracking(implicit);
+    await runCalendarTracking(implicit);
+    portalDown = true;
+    await runCalendarTracking(implicit);
+    expect(mem.tracking.has(ID)).toBe(false);
+  });
+});

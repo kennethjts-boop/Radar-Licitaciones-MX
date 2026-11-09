@@ -1,6 +1,6 @@
 /** Diferencias entre dos calendarios confirmados. Pura y determinista. */
 import {
-  MILESTONE_KEYS, MILESTONE_LABELS, type CalendarChange, type CalendarSnapshot, type MilestoneValue,
+  MILESTONE_KEYS, MILESTONE_LABELS, noticeMilestone, type CalendarChange, type CalendarSnapshot, type MilestoneValue,
 } from "./types";
 
 /**
@@ -37,7 +37,8 @@ export function diffCalendars(previous: CalendarSnapshot, next: CalendarSnapshot
   for (const notice of next.clarificationNotices) {
     if (knownNotices.has(notice.id)) continue;
     changes.push({
-      dedupeKey: `aviso:${notice.id}`, kind: "aviso", label: "Junta de aclaraciones", previous: null, next: null, notice,
+      dedupeKey: `aviso:${notice.id}`, kind: "aviso",
+      label: MILESTONE_LABELS[noticeMilestone(notice) ?? "junta_aclaraciones"], previous: null, next: null, notice,
     });
   }
   if (next.falloActa && previous.falloActa?.id !== next.falloActa.id) {

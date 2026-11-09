@@ -46,6 +46,8 @@ export interface CalendarDeps {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function loadProcurementFromDb(idOrNumber: string): Promise<ProcurementInfo | null> {
+  // Un número de expediente válido no lleva comas ni paréntesis: evita alterar el filtro de PostgREST.
+  if (!UUID.test(idOrNumber) && !/^[A-Za-z0-9][A-Za-z0-9./_-]{2,80}$/.test(idOrNumber)) return null;
   const db = getSupabaseClient();
   const query = db.from("procurements").select("*, sources(key), raw_items:raw_item_id(raw_json)");
   const { data, error } = UUID.test(idOrNumber)
@@ -221,8 +223,12 @@ export async function runCalendarTracking(
       } catch (err) {
         // Falla del portal: se conserva el último calendario confirmado y no se avisa nada.
         result.portalFailures++;
-        const tracking = (await store.getTracking(id)) ?? { enabled: true };
-        await store.saveTracking(id, { ...tracking, lastFailureAt: deps.now(), consecutiveFailures: (tracking.consecutiveFailures ?? 0) + 1 });
+        // Solo se anotan fallas en seguimientos explícitos: uno implícito (autorizado en el
+        // watchdog) no debe convertirse en registro propio, o sobreviviría a retirar ese permiso.
+        const tracking = await store.getTracking(id);
+        if (tracking) {
+          await store.saveTracking(id, { ...tracking, lastFailureAt: deps.now(), consecutiveFailures: (tracking.consecutiveFailures ?? 0) + 1 });
+        }
         log.warn({ err, procurementId: id }, "Calendario no actualizado: el portal falló; se conserva el último confirmado");
         continue;
       }
@@ -243,7 +249,8 @@ export async function runCalendarTracking(
         await store.saveSnapshot(next);
         result.notified++;
       }
-      await store.saveTracking(id, { ...((await store.getTracking(id)) ?? { enabled: true }), lastFailureAt: null, consecutiveFailures: 0 });
+      const current = await store.getTracking(id);
+      if (current?.consecutiveFailures) await store.saveTracking(id, { ...current, lastFailureAt: null, consecutiveFailures: 0 });
       // Procedimiento terminado con acta de fallo publicada: ya no hay más hitos que vigilar.
       if (next.falloActa && TERMINAL_STATUS.test(next.portalStatus ?? "")) {
         await store.saveTracking(id, { enabled: false, disabledAt: deps.now() });
