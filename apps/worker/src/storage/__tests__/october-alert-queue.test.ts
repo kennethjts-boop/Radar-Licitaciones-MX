@@ -86,8 +86,8 @@ describe("pendientes de focos de prioridad", () => {
     query.not.mockReturnValue(query);
     query.order.mockReturnValue(query);
   });
-  const row = (id: string, key: string, amount: number | null, opening: string | null = null) => ({
-    id, telegram_message: id, procurements: { publication_date: null, amount, opening_date: opening },
+  const row = (id: string, key: string, amount: number | null, opening: string | null = null, status = "activa") => ({
+    id, telegram_message: id, procurements: { publication_date: null, amount, opening_date: opening, status },
     radars: { is_active: true, key },
   });
 
@@ -97,6 +97,7 @@ describe("pendientes de focos de prioridad", () => {
       row("bajo", "edomex_salud_20261108", 99_999_999),
       row("exacto", "edomex_jcem_20261108", 100_000_000),
       row("vencido", "birmex_prioridad_20261108", 300_000_000, "2020-01-01"),
+      row("cancelada", "birmex_prioridad_20261108", 400_000_000, "2099-01-01", "cancelada"),
       row("anterior", "edomex_issemym_20261025", null),
       row("birmex-ok", "birmex_prioridad_20261108", 250_000_000),
     ]);

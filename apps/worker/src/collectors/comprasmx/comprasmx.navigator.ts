@@ -522,7 +522,10 @@ function isProcedimientosResponse(response: PlaywrightResponse): boolean {
   return response.url().includes(PROCEDIMIENTOS_ENDPOINT);
 }
 
-async function fetchComprasMxProcedimientosPage(pageNumber: number): Promise<ComprasMxApiPageResult> {
+async function fetchComprasMxProcedimientosPage(
+  pageNumber: number,
+  filterOverrides: Record<string, unknown> = {},
+): Promise<ComprasMxApiPageResult> {
   const signedHeaders = await createComprasMxSignedHeaders(GET_PROCEDIMIENTOS_ACTION);
   const url = `${COMPRASMX_API_BASE_URL}/expedientes?rows=${COMPRASMX_API_ROWS_PER_PAGE}&page=${pageNumber}`;
   const response = await fetchWithTimeout(
@@ -538,12 +541,34 @@ async function fetchComprasMxProcedimientosPage(pageNumber: number): Promise<Com
         igrc: signedHeaders.igrc,
         xgrc: signedHeaders.xgrc,
       },
-      body: JSON.stringify(buildDefaultProcedimientosFilter()),
+      body: JSON.stringify({ ...buildDefaultProcedimientosFilter(), ...filterOverrides }),
     },
     COMPRASMX_API_TIMEOUT_MS,
   );
   const raw = await response.text();
   return parseComprasMxProcedimientosResponse(raw, response.status);
+}
+
+/**
+ * Búsqueda dirigida con la misma firma y API del colector (p. ej. unidad
+ * compradora `012NEF001` de BIRMEX, cualquier estatus). Sólo lectura.
+ */
+export async function searchComprasMxProcedimientos(
+  filter: Record<string, unknown>,
+  maxPages = 10,
+): Promise<{ registros: ApiRegistro[]; total: number | null; pagesScanned: number }> {
+  const registros: ApiRegistro[] = [];
+  let total: number | null = null;
+  let pagesScanned = 0;
+  for (let pageNumber = 1; pageNumber <= maxPages; pageNumber++) {
+    const { registros: rows, paginacion } = await fetchComprasMxProcedimientosPage(pageNumber, filter);
+    pagesScanned = pageNumber;
+    registros.push(...rows);
+    total = typeof paginacion?.total_registros === "number" ? paginacion.total_registros : total;
+    if (rows.length === 0) break;
+    if (typeof paginacion?.registro_final === "number" && total !== null && paginacion.registro_final >= total) break;
+  }
+  return { registros, total, pagesScanned };
 }
 
 export class ComprasMxNavigator {

@@ -241,8 +241,9 @@ export async function upsertProcurement(
       award_date: normalized.awardDate,
       state: normalized.state,
       municipality: normalized.municipality,
-      amount: normalized.amount,
-      currency: normalized.currency,
+      // Un monto confirmado desde documentos oficiales no se borra si el listado no lo trae.
+      amount: normalized.amount ?? existing.amount,
+      currency: normalized.currency ?? existing.currency,
       source_url: normalized.sourceUrl,
       canonical_text: normalized.canonicalText,
       canonical_fingerprint: normalized.canonicalFingerprint,
