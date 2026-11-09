@@ -166,32 +166,72 @@ export function classifyEdomexProcurement(p: NormalizedProcurement): EdomexFocus
     ["edomex_local_buyer", "large_scope", "amount_pending"]);
 }
 
+/** Umbral inicial (MXN) de presupuesto oficial para los cuatro focos de prioridad. */
+export const PRIORITY_DEFAULT_MIN_AMOUNT = 100_000_000;
+const PRIORITY_THRESHOLD_ENV: Record<string, string> = {
+  [EDOMEX_FOCUS_KEYS.birmex]: "BIRMEX_MIN_AMOUNT_MXN",
+  [EDOMEX_FOCUS_KEYS.difem]: "DIFEM_MIN_AMOUNT_MXN",
+  [EDOMEX_FOCUS_KEYS.jcem]: "JCEM_MIN_AMOUNT_MXN",
+  [EDOMEX_FOCUS_KEYS.salud]: "SALUD_EDOMEX_MIN_AMOUNT_MXN",
+};
+
+export function isPriorityFocusKey(radarKey: string): boolean {
+  return PRIORITY_FOCUS_KEYS.includes(radarKey);
+}
+
+/** Umbral vigente de un foco de prioridad; configurable por radar con variable de entorno. */
+export function priorityMinAmount(radarKey: string): number | null {
+  const envName = PRIORITY_THRESHOLD_ENV[radarKey];
+  if (!envName) return null;
+  const configured = process.env[envName]?.trim();
+  if (configured) {
+    const value = Number(configured.replace(/[,_\s]/g, ""));
+    if (Number.isFinite(value) && value >= 0) return value;
+  }
+  return PRIORITY_DEFAULT_MIN_AMOUNT;
+}
+
+/** Monto explícito, mayor o igual al umbral del radar. Radares ajenos no se filtran. */
+export function meetsPriorityThreshold(radarKey: string, amount: number | null | undefined): boolean {
+  const min = priorityMinAmount(radarKey);
+  if (min === null) return true;
+  return typeof amount === "number" && Number.isFinite(amount) && amount > 0 && amount >= min;
+}
+
+// Señales de que el procedimiento específico podría rebasar el umbral aunque no publique monto.
+const AMOUNT_TO_VERIFY = /\b(?:consolidad[ao]s?|multianual(?:es)?|plurianual(?:es)?|contrato abierto|ejercicios? (?:fiscales? )?20\d\d|alcance (?:estatal|nacional)|cobertura (?:estatal|nacional)|(?:a )?nivel (?:estatal|nacional)|en todo el estado|todo el territorio|toda la republica|(?:proyecto|programa|servicio integral|servicio integrado) (?:estatal|nacional|regional)|red (?:estatal|nacional))\b/;
+
 /**
- * Focos de prioridad. BIRMEX es nacional (cualquier giro, monto y portal);
- * DIFEM, JCEM y Salud estatal toman cualquier procedimiento del organismo
- * convocante. El monto sólo se afirma si consta explícito.
+ * Focos de prioridad (BIRMEX, DIFEM, JCEM, Salud estatal). Sólo califican
+ * procedimientos con presupuesto oficial explícito >= umbral del radar, o sin
+ * monto publicado pero con señales de gran alcance ("monto por verificar":
+ * se guarda para revisión y no alerta hasta confirmar el monto). Un monto
+ * inferior al umbral no califica y el procedimiento sigue las reglas de los
+ * radares anteriores. El monto es el del procedimiento específico:
+ * una convocatoria agrupada nunca hereda un presupuesto conjunto.
  */
 export function classifyPriorityProcurement(p: NormalizedProcurement): EdomexFocusDetection | null {
   const header = `${buyerText(p)} ${normalizeText(p.procedureNumber ?? "")} ${normalizeText(p.licitationNumber ?? "")}`;
-  const amount = typeof p.amount === "number" && Number.isFinite(p.amount) && p.amount > 0 ? p.amount : null;
-  const make = (key: EdomexFocusKey, status: EdomexAmountStatus, terms: string[], reasons: string[], area: string) =>
-    ({ key, amountStatus: status, matchedTerms: terms, scoreReasons: reasons, territoryMatched: area });
+  const grouped = raw(p, "monto_estado") === "convocatoria_agrupada";
+  const amount = !grouped && typeof p.amount === "number" && Number.isFinite(p.amount) && p.amount > 0 ? p.amount : null;
+  const make = (key: EdomexFocusKey, terms: string[], reasons: string[], area: string): EdomexFocusDetection | null => {
+    if (amount !== null) {
+      if (!meetsPriorityThreshold(key, amount)) return null; // bajo el umbral: reglas anteriores.
+      return { key, amountStatus: "confirmed", matchedTerms: terms,
+        scoreReasons: [...reasons, "amount_meets_threshold"], territoryMatched: area };
+    }
+    if (!AMOUNT_TO_VERIFY.test(objectText(p))) return null;
+    return { key, amountStatus: "pending", matchedTerms: [...terms, "monto por verificar"],
+      scoreReasons: [...reasons, "amount_to_verify"], territoryMatched: area };
+  };
 
-  if (BIRMEX.test(header)) {
-    return make(EDOMEX_FOCUS_KEYS.birmex, "not_required", ["BIRMEX"], ["buyer_birmex", "priority_max", "any_amount"], "México");
-  }
+  if (BIRMEX.test(header)) return make(EDOMEX_FOCUS_KEYS.birmex, ["BIRMEX"], ["buyer_birmex", "priority_max"], "México");
   if (ISSEMYM.test(header)) return null; // el foco ISSEMyM conserva su asignación.
-  if (JCEM.test(header)) {
-    const reason = amount === null ? "amount_pending" : amount > EDOMEX_ROAD_MIN_AMOUNT ? "amount_above_100m" : "amount_known";
-    return make(EDOMEX_FOCUS_KEYS.jcem, amount === null ? "pending" : "confirmed", ["Junta de Caminos"],
-      ["buyer_jcem", "any_amount", reason], "Estado de México (Junta de Caminos)");
-  }
-  if (DIFEM.test(header) && !DIF_OTHER.test(header)) {
-    return make(EDOMEX_FOCUS_KEYS.difem, "not_required", ["DIFEM"], ["buyer_difem", "any_amount"], "Estado de México (DIFEM)");
-  }
+  if (JCEM.test(header)) return make(EDOMEX_FOCUS_KEYS.jcem, ["Junta de Caminos"], ["buyer_jcem"], "Estado de México (Junta de Caminos)");
+  if (DIFEM.test(header) && !DIF_OTHER.test(header)) return make(EDOMEX_FOCUS_KEYS.difem, ["DIFEM"], ["buyer_difem"], "Estado de México (DIFEM)");
   if (SALUD_EDOMEX.test(header)) {
     const organism = /\bisem\b|instituto de salud/.test(header) ? "ISEM" : "Secretaría de Salud";
-    return make(EDOMEX_FOCUS_KEYS.salud, "not_required", [organism], ["buyer_salud_edomex", "any_amount"], "Estado de México (Salud)");
+    return make(EDOMEX_FOCUS_KEYS.salud, [organism], ["buyer_salud_edomex"], "Estado de México (Salud)");
   }
   return null;
 }
