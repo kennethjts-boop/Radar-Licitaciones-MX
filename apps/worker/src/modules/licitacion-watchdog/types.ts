@@ -99,6 +99,8 @@ export interface NotificationState {
   chatUsername?: string | null;
   sentAt?: string;
   deploymentSha?: string | null;
+  /** Cambio cubierto por otro avisador (p. ej. el calendario); no se envía otro mensaje. */
+  supersededBy?: "calendar";
 }
 
 export interface StructuralConfirmation extends JsonObject {

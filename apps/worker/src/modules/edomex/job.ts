@@ -52,6 +52,9 @@ export interface EdomexRunSummary {
   delivered: number;
   watch: { checked: number; changed: number; errors: number } | null;
   priorityError?: string;
+  calendar?: Record<string, number>;
+  calendarButtons?: { checked: number; attached: number; failed: number };
+  calendarError?: string;
   birmexRefresh?: { coverage: "complete" | "partial"; total: number | null; read: number; created: number; updated: number; unchanged: number; error?: string };
   priority?: { scanned: number; matched: number; toVerify: number; queued: number; alreadyAlerted: number; closedOrExpired: number; budgetsResolved: number; budgetLookups: number };
   errors: string[];
@@ -297,6 +300,20 @@ export async function runEdomexJob(options: { discover?: boolean; watch?: boolea
         // Cola común con ComprasMX: mismo límite por ciclo y misma deduplicación.
         const { deliverQueuedNewTenderAlerts } = await import("../../jobs/collect.job");
         summary.delivered = await deliverQueuedNewTenderAlerts(getConfig().ALERT_MAX_PER_CYCLE);
+        // Calendario: botones sobre alertas ya enviadas y avisos de cambios autorizados.
+        try {
+          const calendar = await import("../procurement-calendar/service");
+          summary.calendar = { ...(await calendar.runCalendarTracking(undefined, { max: 5 })) };
+          const { getCommandBot } = await import("../../agent/telegram.commands");
+          const bot = getCommandBot();
+          if (bot) {
+            const { attachCalendarButtonsToSentAlerts } = await import("../procurement-calendar/telegram");
+            summary.calendarButtons = await attachCalendarButtonsToSentAlerts(bot);
+          }
+        } catch (err) {
+          summary.calendarError = err instanceof Error ? err.message : String(err);
+          log.warn({ err }, "Calendario no completado en este ciclo");
+        }
       } catch (err) {
         summary.errors.push(err instanceof Error ? err.message : String(err));
         log.error({ err }, "Ciclo Edomex sin descubrimiento");

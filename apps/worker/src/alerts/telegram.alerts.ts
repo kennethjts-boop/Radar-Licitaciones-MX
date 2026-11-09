@@ -47,6 +47,11 @@ export interface TelegramSendErrorDetails {
   summary: string;
 }
 
+export interface TelegramSendOptions {
+  /** Botones en línea (por ejemplo «Ver calendario» / «Avisarme de cambios»). */
+  replyMarkup?: TelegramBot.InlineKeyboardMarkup;
+}
+
 export interface TelegramDeliveryReceipt {
   messageId: number;
   chatId: string;
@@ -341,6 +346,7 @@ export async function sendTelegramMessageWithReceipt(
   text: string,
   parseMode: "Markdown" | "HTML" = "HTML",
   destinationChatId?: string,
+  options: TelegramSendOptions = {},
 ): Promise<TelegramDeliveryReceipt> {
   const config = getConfig();
   const bot = getBot();
@@ -353,6 +359,7 @@ export async function sendTelegramMessageWithReceipt(
           bot.sendMessage(chatId, text, {
             parse_mode: parseMode,
             disable_web_page_preview: true,
+            ...(options.replyMarkup ? { reply_markup: options.replyMarkup } : {}),
           } as TelegramBot.SendMessageOptions),
           config.TELEGRAM_SEND_TIMEOUT_MS,
           "telegram.sendMessage",
@@ -482,8 +489,9 @@ export async function sendTelegramMessage(
   text: string,
   parseMode: "Markdown" | "HTML" = "HTML",
   destinationChatId?: string,
+  options: TelegramSendOptions = {},
 ): Promise<number | null> {
-  const receipt = await sendTelegramMessageWithReceipt(text, parseMode, destinationChatId);
+  const receipt = await sendTelegramMessageWithReceipt(text, parseMode, destinationChatId, options);
   return receipt.messageId;
 }
 

@@ -54,3 +54,11 @@ export async function consentForReply(chatId: string, messageId: number): Promis
   if (error) throw new Error(`No se pudo leer respuesta watchdog: ${error.message}`);
   return data?.value_json as WatchdogConsent ?? null;
 }
+
+/** Escritura incondicional (alta/baja explícita desde el botón de seguimiento). */
+export async function saveWatchdogConsent(consent: WatchdogConsent): Promise<void> {
+  const { error } = await getSupabaseClient().from("system_state").upsert({
+    key: PREFIX + consent.procurementId, value_json: consent, updated_at: nowISO(),
+  }, { onConflict: "key" });
+  if (error) throw new Error(`No se pudo guardar autorización watchdog: ${error.message}`);
+}

@@ -4,11 +4,12 @@ import { nowISO } from "../../core/time";
 import { createModuleLogger } from "../../core/logger";
 import { getCommandBot } from "../../agent/telegram.commands";
 import { isAuthorizedAdmin } from "../control/authorization";
-import { activateWatchdogTarget, listPersistentTargets } from "./target-manager";
+import { activateWatchdogTarget, deactivateWatchdogTarget, listPersistentTargets } from "./target-manager";
 import {
-  getWatchdogConsent, createWatchdogConsent, updatePendingConsent, consentForReply,
+  getWatchdogConsent, createWatchdogConsent, updatePendingConsent, consentForReply, saveWatchdogConsent,
   type WatchdogConsent,
 } from "./consent-store";
+
 
 const log = createModuleLogger("watchdog:consent");
 const inFlight = new Map<string, Promise<boolean>>();
@@ -48,7 +49,8 @@ export async function requestWatchdogConsent(procurementId: string, label: strin
   try { return await task; } finally { inFlight.delete(procurementId); }
 }
 
-function authorized(chatId: string, userId?: number): boolean {
+/** Mismo criterio de los callbacks del watchdog: chat configurado y dueño o administrador. */
+export function isAuthorizedChatUser(chatId: string, userId?: number): boolean {
   const config = getConfig();
   return chatId === config.TELEGRAM_CHAT_ID &&
     (String(userId) === chatId || isAuthorizedAdmin(userId, config.TELEGRAM_ADMIN_CHAT_IDS));
@@ -79,7 +81,7 @@ export async function handleWatchdogConsentCallback(bot: TelegramBot, query: Tel
   if (!match) return;
   try {
     const chatId = String(query.message?.chat.id ?? "");
-    if (!authorized(chatId, query.from.id)) {
+    if (!isAuthorizedChatUser(chatId, query.from.id)) {
       await bot.answerCallbackQuery(query.id, { text: "No autorizado" });
       return;
     }
@@ -101,7 +103,7 @@ export async function handleWatchdogConsentReply(bot: TelegramBot, msg: Telegram
   const normalized = msg.text?.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   if (!msg.reply_to_message || !/^(si|no)$/.test(normalized ?? "")) return;
   const chatId = String(msg.chat.id);
-  if (!authorized(chatId, msg.from?.id)) return;
+  if (!isAuthorizedChatUser(chatId, msg.from?.id)) return;
   try {
     const consent = await consentForReply(chatId, msg.reply_to_message.message_id);
     if (consent) await decide(bot, consent, normalized === "si", msg.from!.id);
@@ -109,4 +111,25 @@ export async function handleWatchdogConsentReply(bot: TelegramBot, msg: Telegram
     log.warn({ err }, "No se pudo guardar respuesta watchdog");
     await bot.sendMessage(chatId, "⚠️ No pude completar tu respuesta; vuelve a responder a la solicitud.").catch(() => {});
   }
+}
+
+/** «Avisarme de cambios»: aprueba el consentimiento del watchdog y activa el objetivo. */
+export async function approveWatchdogForProcurement(procurementId: string, userId?: number): Promise<void> {
+  const existing = await getWatchdogConsent(procurementId);
+  const consent: WatchdogConsent = {
+    procurementId, label: existing?.label ?? procurementId, chatId: existing?.chatId ?? getConfig().TELEGRAM_CHAT_ID,
+    messageId: existing?.messageId, status: "approved", decidedAt: nowISO(), decidedBy: userId ?? existing?.decidedBy,
+  };
+  await saveWatchdogConsent(consent);
+  await activateApprovedConsent(consent);
+}
+
+/** «Dejar de avisar»: retira el consentimiento y desactiva el objetivo (el historial se conserva). */
+export async function declineWatchdogForProcurement(procurementId: string): Promise<void> {
+  const existing = await getWatchdogConsent(procurementId);
+  await saveWatchdogConsent({
+    procurementId, label: existing?.label ?? procurementId, chatId: existing?.chatId ?? getConfig().TELEGRAM_CHAT_ID,
+    messageId: existing?.messageId, status: "declined", decidedAt: nowISO(), decidedBy: existing?.decidedBy,
+  });
+  await deactivateWatchdogTarget(procurementId);
 }

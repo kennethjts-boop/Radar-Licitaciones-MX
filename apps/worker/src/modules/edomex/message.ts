@@ -11,6 +11,7 @@ import {
   type EdomexFocusKey,
 } from "../../radars/edomex-focus.matcher";
 import type { EnrichedAlert } from "../../types/procurement";
+import { formatMexicoDate } from "../../core/time";
 
 const LABELS: Record<EdomexFocusKey, string> = {
   [EDOMEX_FOCUS_KEYS.issemym]: "🏥 EDOMEX · ISSEMyM",
@@ -88,7 +89,7 @@ export function formatEdomexTelegramAlert(alert: EnrichedAlert): string {
   lines.push(publication
     ? `📅 Publicación oficial: ${esc(dmy(publication) ?? publication)}`
     : "📅 Publicación oficial: no consta en el índice");
-  lines.push(`👁 Primera detección del radar: ${esc(dmy(firstSeen.slice(0, 10)) ?? firstSeen)}`);
+  lines.push(`👁 Primera detección del radar: ${esc(formatMexicoDate(firstSeen, "dd/MM/yyyy HH:mm"))} CDMX`);
   lines.push(deadline
     ? `⏳ Límite de inscripción/bases: ${esc(dmy(deadline) ?? deadline)}`
     : "⏳ Fecha límite de inscripción: revisar en la convocatoria");
