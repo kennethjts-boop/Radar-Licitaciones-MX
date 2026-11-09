@@ -12,6 +12,8 @@
  */
 import { getSupabaseClient } from "../../storage/client";
 import { normalizeText } from "../../core/text";
+import { formatInTimeZone } from "date-fns-tz";
+import { MX_TIMEZONE } from "../../core/time";
 import { classifyChangeCategory, filterAndDeduplicateChanges } from "../watchdog-narrator/classifier";
 import type { WatchdogChange, WatchdogSnapshotRow } from "../licitacion-watchdog/types";
 import { toMilestone } from "./extract";
@@ -42,6 +44,13 @@ export function isDateOnlyChange(row: WatchdogSnapshotRow): boolean {
 const fileKey = (value: string | null | undefined): string =>
   normalizeText(String(value ?? "").replace(/\.[a-z0-9]{2,4}$/i, "")).replace(/\s+/g, "");
 
+function localMilestone(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  // El watchdog persiste ISO UTC; la vigilancia conserva la hora local del portal.
+  const zoned = /(?:Z|[+-]\d{2}:\d{2})$/i.test(value) && Number.isFinite(Date.parse(value));
+  return toMilestone(zoned ? formatInTimeZone(value, MX_TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss") : value).at;
+}
+
 /** ¿El estado confirmado de la vigilancia prioritaria ya contiene este cambio del watchdog? */
 export function priorityWatchCoversChange(state: WatchState | null, rowCreatedAt: string, change: WatchdogChange): boolean {
   const baseline = state?.baseline;
@@ -50,21 +59,34 @@ export function priorityWatchCoversChange(state: WatchState | null, rowCreatedAt
   if (Date.parse(state.lastSuccessAt) < Date.parse(rowCreatedAt)) return false;
   const category = classifyChangeCategory(change);
   if (isDocumentChange(change)) {
-    if (!baseline.docsComplete) return false;
+    if (!baseline.docsComplete || change.kind === "document_removed" || change.kind === "removed") return false;
     const wanted = fileKey(change.document?.name);
-    return wanted !== "" && baseline.documents.some((doc) =>
-      [doc.nombre, doc.descripcion].some((candidate) => fileKey(candidate) === wanted || (fileKey(candidate) !== "" && fileKey(candidate).includes(wanted))));
+    return wanted !== "" && baseline.documents.some((doc) => {
+      if (![doc.nombre, doc.descripcion].some((candidate) => fileKey(candidate) === wanted)) return false;
+      // El nombre por sí solo no acredita que una revisión del documento ya esté cubierta.
+      if (change.kind !== "document_added") return /\.modifiedAt$/.test(change.path) &&
+        typeof change.current === "string" && localMilestone(doc.modifiedAt) === localMilestone(change.current);
+      return !change.document?.createdAt || localMilestone(doc.createdAt) === localMilestone(change.document.createdAt);
+    });
   }
   if (DATE_CATEGORIES.has(category)) {
-    const current = toMilestone(typeof change.current === "string" ? change.current : null).at;
+    const current = localMilestone(change.current);
     return Boolean(current) && baseline.calendar.milestones[MILESTONE_OF[category]].at === current;
   }
   if (category === "cambio_estatus") {
     const current = normalizeText(String(change.current ?? ""));
     const confirmed = normalizeText(baseline.portalStatus ?? "");
-    return current !== "" && (confirmed.includes(current) || current.includes(confirmed)) && confirmed !== "";
+    return current !== "" && confirmed === current;
   }
-  if (category === "tabla_modificada") return state.partidasCoverage.status === "ok" && baseline.partidasComplete;
+  if (category === "tabla_modificada") {
+    // Cobertura completa no prueba que una celda concreta haya sido avisada. Solo
+    // ceder descripciones de partidas con identidad y valor exactos; el resto
+    // conserva el respaldo del watchdog hasta poder contrastar sus columnas.
+    return state.partidasCoverage.status === "ok" && baseline.partidasComplete &&
+      /^visibleTables\[\d+\]\.rows\[\d+\]\[\d+\]$/.test(change.path) &&
+      typeof change.current === "string" && /^partida\s+\d+/i.test(change.current) &&
+      baseline.partidas.some((p) => normalizeText(p.descripcion) === normalizeText(String(change.current)));
+  }
   return false;
 }
 

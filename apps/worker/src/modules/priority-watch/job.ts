@@ -4,7 +4,7 @@ import { getConfig } from "../../config/env";
 import { createModuleLogger } from "../../core/logger";
 import { withDistributedLock } from "../../core/lock";
 import { nowISO } from "../../core/time";
-import { sendTelegramMessage } from "../../alerts/telegram.alerts";
+import { sendTelegramMessageSingleAttempt } from "../../alerts/telegram.alerts";
 import { saveSnapshot } from "../procurement-calendar/store";
 import { gatherEvidence } from "./evidence";
 import { watchKeyboard } from "./format";
@@ -51,9 +51,11 @@ export function productionDeps(): RunnerDeps {
       if (id) await saveSnapshot({ ...snapshot.calendar, procurementId: id });
     },
     async send(_entry, text, url, id) {
-      const messageId = await sendTelegramMessage(text, "HTML", undefined, { replyMarkup: watchKeyboard(id, url ?? "") });
-      if (messageId === null) throw new Error("Telegram no devolvió identificador de mensaje");
-      return messageId;
+      // La bandeja controla TODOS los reintentos y recibe el error original de Telegram.
+      const receipt = await sendTelegramMessageSingleAttempt(text, getConfig().TELEGRAM_CHAT_ID, "HTML", {
+        replyMarkup: watchKeyboard(id, url ?? ""),
+      });
+      return receipt.messageId;
     },
   };
 }

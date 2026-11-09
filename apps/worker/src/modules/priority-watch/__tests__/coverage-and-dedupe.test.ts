@@ -29,6 +29,7 @@ describe("deduplicación por folio y evento (criterio 2)", () => {
     const state = stateWith("2026-11-09T04:55:00.000Z");
     // el estado confirmado trae apertura 19/11/2026 10:00: el mismo valor está cubierto
     expect(priorityWatchCoversChange(state, row([]).created_at, apertura("19/11/2026 10:00"))).toBe(true);
+    expect(priorityWatchCoversChange(state, row([]).created_at, apertura("2026-11-19T16:00:00.000Z"))).toBe(true);
     // otro valor (el watchdog vio un cambio que la vigilancia aún no confirmó): NO se suprime
     expect(priorityWatchCoversChange(state, row([]).created_at, apertura("26/11/2026 10:00"))).toBe(false);
   });
@@ -51,9 +52,20 @@ describe("deduplicación por folio y evento (criterio 2)", () => {
     const unknown = { ...doc, document: { name: "ACTA_FA_nueva.pdf" } as never };
     expect(priorityWatchCoversChange(state, row([]).created_at, unknown)).toBe(false);
     const table: WatchdogChange = { kind: "modified", path: "visibleTables[0].rows", previous: 1, current: 2 };
-    expect(priorityWatchCoversChange(state, row([]).created_at, table)).toBe(true);
+    expect(priorityWatchCoversChange(state, row([]).created_at, table)).toBe(false);
+    const description: WatchdogChange = { ...table, path: "visibleTables[0].rows[3][2]", current: state.baseline!.partidas[3].descripcion };
+    expect(priorityWatchCoversChange(state, row([]).created_at, description)).toBe(true);
+    expect(priorityWatchCoversChange(state, row([]).created_at, { ...description, current: "PARTIDA 4. NUEVO ALCANCE" })).toBe(false);
     const degraded = stateWith("2026-11-09T04:55:00.000Z", (s) => { s.partidasCoverage = { status: "degraded", since: NOW, consecutive: 3, reason: "x" }; });
     expect(priorityWatchCoversChange(degraded, row([]).created_at, table)).toBe(false);
+  });
+
+  it("no cede revisiones de un documento solo por compartir nombre ni estatus parciales distintos", () => {
+    const state = stateWith("2026-11-09T04:55:00.000Z");
+    const modified: WatchdogChange = { kind: "modified", path: "documents.x.modifiedAt", previous: NOW, current: "2026-11-10T00:00:00", document: { name: "CONVOCATORIA.pdf" } as never };
+    expect(priorityWatchCoversChange(state, row([]).created_at, modified)).toBe(false);
+    state.baseline!.portalStatus = "ADJUDICADO";
+    expect(priorityWatchCoversChange(state, row([]).created_at, { kind: "modified", path: "detail.estatus", previous: "ADJUDICADO", current: "ADJUDICADO PARCIAL" })).toBe(false);
   });
 });
 

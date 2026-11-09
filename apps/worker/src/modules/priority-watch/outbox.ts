@@ -16,7 +16,6 @@ const log = createModuleLogger("priority-watch:outbox");
 
 export const MAX_PER_CYCLE = 10;
 export const SENDING_STALE_MS = 2 * 60_000;
-const MAX_ENTRIES = 200;
 const BACKOFF_MS = [60_000, 5 * 60_000, 15 * 60_000, 30 * 60_000];
 
 export interface OutboxStore {
@@ -49,7 +48,9 @@ export function enqueueEvents(
     });
     added++;
   }
-  return { entries: next.slice(-MAX_ENTRIES), added };
+  // No expulsar pendientes ni identidades ya entregadas: perderlas al alcanzar un
+  // límite descarta avisos o permite repetir eventos tras una captura incompleta.
+  return { entries: next, added };
 }
 
 const awaitingRecord = new Map<string, { messageId: number; sentAt: string }>();

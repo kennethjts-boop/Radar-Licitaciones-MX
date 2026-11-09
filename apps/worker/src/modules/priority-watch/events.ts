@@ -54,7 +54,7 @@ export function partidaResultLines(snapshot: WatchSnapshot, contracts: WatchCont
     if (pending.length > 0) lines.push(`Partidas sin resultado verificable en el portal (ver acta de fallo): ${pending.join("; ")}`);
   }
   if (unmapped.length > 0) {
-    lines.push(`Alcance: ${unmapped.length === 1 ? "el contrato cubre" : "los contratos cubren"} el procedimiento (${snapshot.partidas.length} ${numbered ? "partidas" : "renglones"}); el resultado por partida consta en el acta de fallo.`);
+    lines.push(`Alcance por partida de ${unmapped.length === 1 ? "este contrato" : "estos contratos"}: pendiente de verificar en el acta de fallo; el portal no publica la correspondencia.`);
   }
   return lines;
 }
@@ -86,13 +86,20 @@ export function diffWatchSnapshots(watched: WatchedProcedure, prev: WatchSnapsho
 
   // 2) Fallo: acta de fallo nueva y/o estatus explícito del portal, con sus contratos.
   const newActa = next.documents.find((doc) => doc.category === "acta_fallo" && !knownDocs.has(doc.id));
-  const statusChanged = next.portalStatus !== null && next.statusKind !== prev.statusKind;
+  const statusChanged = next.portalStatus !== null && next.portalStatus !== prev.portalStatus;
   const resultStatus = statusChanged && ["adjudicado", "desierto", "cancelado"].includes(next.statusKind);
   const newContracts = next.contracts.filter((contract) => !knownContracts.has(contract.id));
   const fallo = Boolean(newActa) || (resultStatus && next.statusKind !== "cancelado");
   if (fallo) {
     const status = next.statusKind === "adjudicado" ? "adjudicado" : next.statusKind === "desierto" ? "desierto" : "sin resultado definitivo en el portal";
-    const total = next.statusKind === "adjudicado" ? (next.partidas.length > 1 && next.contracts.every((c) => c.partidas.length > 0) && next.contracts.flatMap((c) => c.partidas).length < next.partidas.length ? "parcial" : "total") : null;
+    const mapped = new Set(next.contracts.flatMap((c) => c.partidas));
+    const mappingVerified = next.partidasComplete && next.partidas.length > 0 && next.partidas.every((p) => p.n !== null) &&
+      next.contracts.length > 0 && next.contracts.every((c) => c.partidas.length > 0) &&
+      [...mapped].every((n) => next.partidas.some((p) => p.n === n));
+    const explicitPartial = /parcial/i.test(next.portalStatus ?? "");
+    const explicitTotal = /total/i.test(next.portalStatus ?? "");
+    const total = next.statusKind !== "adjudicado" ? null : explicitPartial ? "parcial" : explicitTotal ? "total" :
+      mappingVerified ? (mapped.size === next.partidas.length ? "total" : "parcial") : "por confirmar en el acta";
     const details = [`Fallo emitido · estatus del portal: ${next.portalStatus ?? "no publicado"} (${status}${total ? `, resultado ${total}` : ""})`];
     if (newActa) details.push(`Acta de fallo: ${newActa.nombre ?? newActa.descripcion}${newActa.createdAt ? ` (${formatLocalMilestone({ at: newActa.createdAt, hasTime: true })} CDMX)` : ""}`);
     const contracts = next.contracts.length > 0 ? next.contracts : [];
@@ -101,7 +108,7 @@ export function diffWatchSnapshots(watched: WatchedProcedure, prev: WatchSnapsho
     if (newActa) details.push("Participantes, ofertas, desechamientos y motivos constan solo en el acta (PDF protegido con CAPTCHA): documento pendiente de revisión.");
     if (next.statusKind === "desierto") details.push("Partidas desiertas: según el estatus del portal; el detalle por partida consta en el acta.");
     events.push({
-      eventId: id("fallo", newActa?.id ?? next.statusKind), kind: "fallo", highlighted: next.partidas.some((p) => p.highlighted),
+      eventId: id("fallo", newActa?.id ?? next.portalStatus), kind: "fallo", highlighted: next.partidas.some((p) => p.highlighted),
       title: "Fallo emitido", details, documentId: newActa?.id,
     });
   } else if (statusChanged && next.statusKind === "cancelado") {
@@ -111,7 +118,8 @@ export function diffWatchSnapshots(watched: WatchedProcedure, prev: WatchSnapsho
   }
 
   // 3) Documentos nuevos o modificados (los avisos de calendario ya salen por la vía de fechas).
-  if (next.docsComplete && prev.docsComplete) {
+  // Una adición verificable no depende de que las listas anteriores estén completas.
+  {
     const labels: Record<string, [WatchEvent["kind"], string]> = {
       bases_anexos: ["bases_anexos", "Bases o anexos: documento nuevo"], acta_junta: ["acta_junta", "Acta de junta de aclaraciones publicada"],
       acta_apertura: ["acta_apertura", "Acta de presentación y apertura de proposiciones publicada"],
@@ -167,6 +175,7 @@ export function diffWatchSnapshots(watched: WatchedProcedure, prev: WatchSnapsho
         const old = before.get(p.key);
         if (!old) details.push(`${p.highlighted ? "⭐ " : ""}Partida nueva: ${p.descripcion}`);
         else if (old.maxMonto !== p.maxMonto || old.minMonto !== p.minMonto) details.push(`${p.highlighted ? "⭐ " : ""}${p.descripcion}: monto máximo ${money(old.maxMonto, next.currency)} → ${money(p.maxMonto, next.currency)}`);
+        if (old && old.descripcion !== p.descripcion) details.push(`${p.highlighted ? "⭐ " : ""}Descripción de partida: ${old.descripcion} → ${p.descripcion}`);
       }
       if (details.length > 0) events.push({ eventId: id("partidas", sha(fingerprint(next.partidas))), kind: "partidas_modificadas", title: "Partidas modificadas", details, highlighted: next.partidas.some((p) => p.highlighted), });
     }

@@ -30,6 +30,36 @@ describe("lectura real de los dos folios (fixtures del portal)", () => {
 describe("eventos", () => {
   const prev = snap(W3, capture3());
 
+  it("una descripción modificada de Región IV genera un evento aunque sus montos no cambien", () => {
+    const next = clone(prev);
+    next.partidas[3].descripcion += " CON TRAZABILIDAD POR LOTE";
+    const [event] = diffWatchSnapshots(W3, prev, next);
+    expect(event).toMatchObject({ kind: "partidas_modificadas", highlighted: true });
+    expect(event.details.join(" ")).toContain("CON TRAZABILIDAD POR LOTE");
+  });
+
+  it("respeta el resultado parcial explícito y no infiere total sin correspondencias completas", () => {
+    const next = snap(W306, capture306());
+    const before = clone(next); before.portalStatus = "VIGENTE"; before.statusKind = "vigente";
+    next.portalStatus = "ADJUDICADO PARCIAL";
+    expect(diffWatchSnapshots(W306, before, next)[0].details.join(" ")).toContain("resultado parcial");
+    next.portalStatus = "ADJUDICADO";
+    expect(diffWatchSnapshots(W306, before, next)[0].details.join(" ")).toContain("resultado por confirmar");
+    const partial = clone(next); partial.portalStatus = "ADJUDICADO PARCIAL";
+    next.portalStatus = "ADJUDICADO TOTAL";
+    expect(diffWatchSnapshots(W306, partial, next)[0].details.join(" ")).toContain("resultado total");
+  });
+
+  it("un acta nueva verificable sigue su curso aunque la lista de anexos sea parcial", () => {
+    const next = snap(W3, capture3((c) => addAnexo(c, anexo("ACTA DE JUNTA DE ACLARACIONES", "acta-parcial", "2026-11-10T12:00:00"))));
+    next.docsComplete = false;
+    const [event] = diffWatchSnapshots(W3, prev, next);
+    expect(event.kind).toBe("acta_junta");
+    const confirmed = mergeConfirmed(prev, next);
+    expect(confirmed.documents).toHaveLength(prev.documents.length + 1);
+    expect(diffWatchSnapshots(W3, confirmed, next)).toHaveLength(0);
+  });
+
   it("diferimiento de la junta: un aviso con documento y fecha; la fecha del cronograma no se da por vigente", () => {
     const next = snap(W3, capture3((c) => addAnexo(c, anexo("AVISO DIFERIMIENTO DE JUNTA DE ACLARACIONES", "u-dif-2", "2026-11-09T09:00:00", "AVISO", "JA 4.pdf"))));
     const events = diffWatchSnapshots(W3, prev, next);

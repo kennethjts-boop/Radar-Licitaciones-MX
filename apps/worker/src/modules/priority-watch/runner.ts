@@ -50,7 +50,9 @@ export function mergeConfirmed(prev: WatchSnapshot, next: WatchSnapshot): WatchS
   if (!next.partidasComplete) {
     merged.partidas = prev.partidas; merged.partidasComplete = prev.partidasComplete;
   }
-  if (!next.docsComplete) { merged.documents = prev.documents; merged.docsComplete = prev.docsComplete; }
+  // Conserva documentos conocidos y añade evidencia nueva incluso con paginación incompleta.
+  merged.documents = [...new Map([...prev.documents, ...next.documents].map((doc) => [doc.id, doc])).values()];
+  merged.docsComplete = prev.docsComplete || next.docsComplete;
   if (next.portalStatus === null) { merged.portalStatus = prev.portalStatus; merged.statusKind = prev.statusKind; }
   if (next.contracts.length === 0 && prev.contracts.length > 0) merged.contracts = prev.contracts;
   const milestones = { ...next.calendar.milestones };
@@ -143,7 +145,9 @@ async function processFolio(watched: WatchedProcedure, deps: RunnerDeps): Promis
       if (queued.added > 0) await deps.outbox.save(watched.procedure, queued.entries);
     }
     state.baseline = mergeConfirmed(state.baseline, snapshot);
-    state.pendingVerification = state.pendingVerification.filter((item) => !(events.some((e) => e.kind === "fallo") && /acta de fallo/i.test(item)));
+    if (events.some((e) => e.kind === "fallo") && !state.pendingVerification.some((item) => /acta de fallo/i.test(item))) {
+      state.pendingVerification.push("Resultado por partida, participantes y ofertas: pendientes de verificar en el acta de fallo (PDF con CAPTCHA).");
+    }
   }
   state.partidasCoverage = coverage;
   Object.assign(state, { lastSuccessAt: nowIso, lastAttemptAt: nowIso, consecutiveFailures: 0, nextAttemptAt: null, lastError: null });

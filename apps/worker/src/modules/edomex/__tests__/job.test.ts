@@ -7,6 +7,9 @@ const ensurePendingNewTenderAlert = jest.fn();
 const deliver = jest.fn();
 const queuedAlerts = new Set<string>();
 
+// El cruce firmado tiene sus propias pruebas; este ciclo de índices nunca abre el portal real.
+jest.mock("../../priority-focus/source-refresh", () => ({ refreshBirmexFromSource: async () => ({ coverage: "complete", total: 0, read: 0, created: 0, updated: 0, unchanged: 0 }) }));
+
 jest.mock("axios", () => ({ __esModule: true, default: { get: (...args: any[]) => httpGet(...args) } }));
 jest.mock("../../../storage/client", () => ({ getSupabaseClient: () => ({ from: (table: string) => {
   if (table === "sources") return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { id: "src-secogem" }, error: null }) }) }) };

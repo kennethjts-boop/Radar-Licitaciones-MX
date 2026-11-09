@@ -5,7 +5,7 @@ jest.mock("../../../alerts/telegram.alerts", () => ({ ...jest.requireActual("../
 jest.mock("../source", () => ({ capturePortal: jest.fn() }));
 jest.mock("../../../core/logger", () => ({ createModuleLogger: () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }) }));
 
-import { _resetAwaitingRecordForTests, classifySendFailure } from "../outbox";
+import { _resetAwaitingRecordForTests, classifySendFailure, enqueueEvents } from "../outbox";
 import { backoffMs, runPriorityWatch, type RunnerDeps } from "../runner";
 import { emptyState, type StateStore, type WatchState } from "../store";
 import type { OutboxEntry, WatchedProcedure } from "../types";
@@ -153,6 +153,18 @@ describe("tabla de partidas vacía o incompleta (structural_incomplete de N-3-20
 });
 
 describe("entrega a Telegram: fallida vs incierta", () => {
+  it("más de 200 eventos no expulsa pendientes ni pierde la identidad de avisos entregados", () => {
+    const existing: OutboxEntry[] = Array.from({ length: 201 }, (_, n) => ({
+      eventId: `${W3.procedure}|evento|${n}`, kind: "acta_junta", text: "acta", url: null,
+      createdAt: clock.toISOString(), state: n === 0 ? "pending" : "sent", attempts: 0,
+      nextAttemptAt: null, sendingAt: null, sentAt: null, messageId: null, lastError: null, uncertain: false,
+    }));
+    const event = { eventId: `${W3.procedure}|evento|nuevo`, kind: "acta_junta" as const, title: "acta", details: [], highlighted: false };
+    const queued = enqueueEvents(existing, [{ event, text: "nueva", url: null }], clock.toISOString());
+    expect(queued.entries).toHaveLength(202);
+    expect(queued.entries[0].state).toBe("pending");
+    expect(enqueueEvents(queued.entries, [{ event: { ...event, eventId: existing[1].eventId }, text: "repetida", url: null }], clock.toISOString()).added).toBe(0);
+  });
   const withEvent = async () => {
     await runPriorityWatch(deps());
     captures.set(W3.procedure, () => capture3((c) => { (c.detail.registro as any[])[0].fecha_apertura = "2026-11-26T10:00:00"; }, clock.toISOString())); // eslint-disable-line @typescript-eslint/no-explicit-any
