@@ -19,6 +19,19 @@ const log = createModuleLogger("procurement-repo");
 
 // ─── Upsert principal ────────────────────────────────────────────────────────
 
+/** Las columnas de fecha son `date`: se compara sólo AAAA-MM-DD (la hora vive en el snapshot de la versión). */
+function dateOnly(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const match = String(value).match(/^\d{4}-\d{2}-\d{2}/);
+  return match ? match[0] : String(value);
+}
+
+function numeric(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export interface UpsertProcurementResult {
   isNew: boolean;
   isUpdated: boolean;
@@ -180,8 +193,38 @@ export async function upsertProcurement(
     };
   }
 
+  // ── Cambios en campos volátiles (estatus, fechas, monto, enlace) ──────────
+  // El fingerprint canónico sólo cubre título, descripción, organismo, unidad y
+  // expediente: un cambio aislado de fecha o estatus lo deja idéntico, así que
+  // no puede decidir por sí solo si hay algo que guardar.
+  const prevSnapshot: Record<string, unknown> = {
+    title: existing.title,
+    description: existing.description,
+    status: existing.status,
+    publication_date: dateOnly(existing.publication_date),
+    opening_date: dateOnly(existing.opening_date),
+    award_date: dateOnly(existing.award_date),
+    amount: numeric(existing.amount),
+    licitation_number: existing.licitation_number,
+    source_url: existing.source_url,
+  };
+  const nextSnapshot: Record<string, unknown> = {
+    title: normalized.title,
+    description: normalized.description,
+    status: normalized.status,
+    // Un dato verificado (fecha de publicación, monto) no se vacía si el origen no lo trae.
+    publication_date: dateOnly(normalized.publicationDate ?? existing.publication_date),
+    opening_date: dateOnly(normalized.openingDate),
+    award_date: dateOnly(normalized.awardDate),
+    amount: numeric(normalized.amount ?? existing.amount),
+    licitation_number: normalized.licitationNumber,
+    source_url: normalized.sourceUrl,
+  };
+  const changedFields = detectChangedFields(prevSnapshot, nextSnapshot);
+  const fingerprintChanged = existing.canonical_fingerprint !== normalized.canonicalFingerprint;
+
   // ── Caso 2: Ya existe, sin cambios ────────────────────────────────────────
-  if (existing.canonical_fingerprint === normalized.canonicalFingerprint) {
+  if (!fingerprintChanged && Object.keys(changedFields).length === 0) {
     await db
       .from("procurements")
       .update({ last_seen_at: now })
@@ -197,28 +240,6 @@ export async function upsertProcurement(
   }
 
   // ── Caso 3: Ya existe, con cambios ────────────────────────────────────────
-  const prevSnapshot: Record<string, unknown> = {
-    title: existing.title,
-    description: existing.description,
-    status: existing.status,
-    publication_date: existing.publication_date,
-    opening_date: existing.opening_date,
-    amount: existing.amount,
-    licitation_number: existing.licitation_number,
-    source_url: existing.source_url,
-  };
-  const nextSnapshot: Record<string, unknown> = {
-    title: normalized.title,
-    description: normalized.description,
-    status: normalized.status,
-    publication_date: normalized.publicationDate,
-    opening_date: normalized.openingDate,
-    amount: normalized.amount,
-    licitation_number: normalized.licitationNumber,
-    source_url: normalized.sourceUrl,
-  };
-  const changedFields = detectChangedFields(prevSnapshot, nextSnapshot);
-
   // Actualizar registro principal
   const { error: updateError } = await db
     .from("procurements")

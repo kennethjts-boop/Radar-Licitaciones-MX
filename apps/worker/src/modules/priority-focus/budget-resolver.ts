@@ -8,6 +8,7 @@
  * lo completa. Nunca sobrescribe un monto ya confirmado.
  */
 import { getSupabaseClient } from "../../storage/client";
+import { normalizeText } from "../../core/text";
 import { createModuleLogger } from "../../core/logger";
 import { nowISO } from "../../core/time";
 import { collectComprasMxDetail, type DocumentLink } from "../../collectors/comprasmx-detail/index";
@@ -31,54 +32,103 @@ export interface ResolveInput {
 export interface ResolvedBudget extends Omit<OfficialBudgetFinding, "page"> {
   /** Página del documento donde consta; null cuando el dato es estructurado (portal) o el formato no pagina. */
   page: number | null;
+  /** Moneda verificada en la fuente; sin verificación no se confirma ningún monto. */
+  currency: "MXN";
   documentUrl: string;
   documentName: string | null;
   sourceKind: "convocatoria_secogem" | "detalle_bases_anexo" | "requerimientos_economicos";
 }
 
-interface EconomicGroup {
-  data_registros?: Array<{ descripcion_detallada?: string; monto_minimo?: number | null; monto_maximo?: number | null }>;
+interface EconomicRow {
+  grupo?: string;
+  descripcion_detallada?: string;
+  monto_minimo?: number | null;
+  monto_maximo?: number | null;
 }
+interface EconomicGroup { grupo?: string; data_registros?: EconomicRow[] }
+export interface DetailRecord {
+  descripcion_moneda?: string | null;
+  contrato_abierto?: number | null;
+  tipo_contrato_abierto?: string | null;
+  req_economicos?: unknown[] | null;
+}
+
+const PESO = /^(?:peso mexicano|pesos mexicanos|mxn|moneda nacional|peso)$/;
 
 /**
  * Presupuesto del procedimiento a partir de los «requerimientos económicos»
- * que ComprasMX publica por partida: suma de `monto_maximo` (tope del contrato).
- * Devuelve null si ninguna partida trae monto o si la lista está incompleta.
+ * que ComprasMX publica por partida (suma de `monto_maximo`, el tope del contrato).
+ * Sólo se confirma si hay evidencia de que:
+ *  - la moneda del expediente es peso mexicano (campo `descripcion_moneda` del detalle);
+ *  - las partidas son independientes y acumulables (todos los grupos son «PARTIDA SOLA»);
+ *  - la lista está completa: el portal reporta tantos registros como se leyeron, el detalle del
+ *    expediente lista las mismas partidas, la numeración «PARTIDA n» es contigua y todas traen
+ *    monto máximo (>= mínimo).
+ * Si algo falta devuelve `null` y el expediente sigue como «monto por verificar».
  */
 export function summarizeEconomicRequirements(
   payload: unknown,
-): { amount: number; partidas: number; excerpt: string } | null {
+  detail: DetailRecord | null,
+): { amount: number; partidas: number; excerpt: string; currency: "MXN" } | null {
   const data = (payload as {
     data?: Array<{ registros?: EconomicGroup[]; paginacion?: Array<{ total_registros?: number; total_paginas?: number }> }>;
   })?.data?.[0];
   const groups = data?.registros;
-  if (!Array.isArray(groups) || groups.length === 0) return null;
+  if (!Array.isArray(groups) || groups.length === 0 || !detail) return null;
+
+  const currency = normalizeText(String(detail.descripcion_moneda ?? ""));
+  if (!PESO.test(currency)) return null;
+
+  const additive = groups.every((group) => normalizeText(String(group.grupo ?? "")) === "partida sola");
+  if (!additive) return null;
+
   const rows = groups.flatMap((group) => group.data_registros ?? []);
-  const priced = rows.filter((row) => typeof row.monto_maximo === "number" && row.monto_maximo > 0);
-  if (priced.length === 0) return null;
+  if (rows.length === 0) return null;
   const reported = data?.paginacion?.[0];
-  // Si el portal reporta más páginas/registros de los leídos, no se afirma un total parcial.
   if ((reported?.total_paginas ?? 1) > 1 ||
-      (typeof reported?.total_registros === "number" && reported.total_registros > rows.length)) return null;
+      (typeof reported?.total_registros === "number" && reported.total_registros !== rows.length)) return null;
+  if (Array.isArray(detail.req_economicos) && detail.req_economicos.length !== rows.length) return null;
+
+  const priced = rows.filter((row) => typeof row.monto_maximo === "number" && row.monto_maximo > 0 &&
+    (typeof row.monto_minimo !== "number" || row.monto_minimo <= row.monto_maximo));
+  if (priced.length !== rows.length) return null; // alguna partida sin monto máximo válido
+
+  const numbers = rows.map((row) => Number(/partida\s+(\d+)/i.exec(row.descripcion_detallada ?? "")?.[1] ?? NaN));
+  if (numbers.every(Number.isFinite)) {
+    const sorted = [...numbers].sort((a, b) => a - b);
+    if (!sorted.every((n, i) => n === i + 1)) return null; // numeración con huecos o repetida
+  }
+
   const amount = Math.round(priced.reduce((sum, row) => sum + (row.monto_maximo as number), 0) * 100) / 100;
-  const detail = priced.slice(0, 8).map((row) =>
-    `${(row.descripcion_detallada ?? "partida").slice(0, 40)}: $${(row.monto_maximo as number).toLocaleString("es-MX")}`);
-  return { amount, partidas: priced.length,
-    excerpt: `Suma de monto máximo de ${priced.length} partida(s): ${detail.join("; ")}`.slice(0, 600) };
+  const lines = priced.slice(0, 8).map((row) =>
+    `${(row.descripcion_detallada ?? "partida").slice(0, 36)}: $${(row.monto_maximo as number).toLocaleString("es-MX")}`);
+  const open = detail.contrato_abierto === 1 ? ` Contrato abierto por ${String(detail.tipo_contrato_abierto ?? "monto").toLowerCase()}.` : "";
+  return {
+    amount, partidas: priced.length, currency: "MXN",
+    excerpt: (`Moneda: peso mexicano. Suma de monto máximo de ${priced.length} partidas independientes (PARTIDA SOLA): ` +
+      `${lines.join("; ")}.${open} IVA: no consta en el portal.`).slice(0, 700),
+  };
 }
 
-/** Abre el detalle del expediente con el navegador del colector y captura los requerimientos económicos. */
-async function fetchEconomicRequirements(detailUrl: string): Promise<unknown[]> {
+/** Abre el detalle del expediente con el navegador del colector y captura requerimientos económicos y registro del expediente. */
+async function fetchEconomicEvidence(detailUrl: string): Promise<{ economic: unknown[]; detail: DetailRecord | null }> {
   return BrowserManager.withContext(async (page) => {
-    const payloads: unknown[] = [];
+    const economic: unknown[] = [];
+    let detail: DetailRecord | null = null;
     page.on("response", async (response) => {
-      if (/\/reqeconomicos\?/.test(response.url()) && response.status() === 200) {
-        try { payloads.push(await response.json()); } catch { /* respuesta no JSON */ }
-      }
+      if (response.status() !== 200) return;
+      try {
+        if (/\/reqeconomicos\?/.test(response.url())) economic.push(await response.json());
+        else if (/\/expedientes\/[0-9a-f]{32}\?/.test(response.url())) {
+          const body = (await response.json()) as { data?: { registro?: DetailRecord[]; req_economicos?: unknown[] } };
+          const record = body.data?.registro?.[0];
+          if (record) detail = { ...record, req_economicos: body.data?.req_economicos ?? null };
+        }
+      } catch { /* respuesta no JSON */ }
     });
     await page.goto(detailUrl, { waitUntil: "networkidle", timeout: 60_000 }).catch(() => undefined);
     await page.waitForTimeout(5_000);
-    return payloads;
+    return { economic, detail };
   }, { timeoutMs: 120_000 });
 }
 
@@ -93,19 +143,22 @@ async function pagesOf(localPath: string, fileType: string): Promise<string[]> {
 export async function findOfficialBudget(input: ResolveInput): Promise<ResolvedBudget | null> {
   const isSecogem = input.source === "secogem_edomex";
   if (!isSecogem) {
-    // 1) Dato estructurado del portal: requerimientos económicos por partida.
+    // 1) Dato estructurado del portal: requerimientos económicos por partida, con moneda y completitud verificadas.
     try {
-      for (const payload of await fetchEconomicRequirements(input.sourceUrl)) {
-        const summary = summarizeEconomicRequirements(payload);
+      const evidence = await fetchEconomicEvidence(input.sourceUrl);
+      for (const payload of evidence.economic) {
+        const summary = summarizeEconomicRequirements(payload, evidence.detail);
         if (summary) {
           return {
-            amount: summary.amount, page: null,
+            amount: summary.amount, currency: summary.currency, page: null,
             label: `Requerimientos económicos del expediente (${summary.partidas} partidas, monto máximo)`,
             excerpt: summary.excerpt, documentUrl: input.sourceUrl,
             documentName: "Detalle del expediente › Requerimientos económicos", sourceKind: "requerimientos_economicos",
           };
         }
       }
+      log.info({ sourceUrl: input.sourceUrl, hasDetail: Boolean(evidence.detail), payloads: evidence.economic.length },
+        "Requerimientos económicos sin evidencia suficiente (moneda, partidas o integridad); sigue por verificar");
     } catch (err) {
       log.warn({ err, sourceUrl: input.sourceUrl }, "Requerimientos económicos no disponibles; se intenta con documentos");
     }
@@ -128,7 +181,7 @@ export async function findOfficialBudget(input: ResolveInput): Promise<ResolvedB
     try {
       const finding = extractOfficialBudget(await pagesOf(download.localPath, download.fileType));
       if (finding && (!best || finding.amount > best.amount)) {
-        best = { ...finding, documentUrl: documents[i].fileUrl, documentName: documents[i].fileName,
+        best = { ...finding, currency: "MXN", documentUrl: documents[i].fileUrl, documentName: documents[i].fileName,
           sourceKind: isSecogem ? "convocatoria_secogem" : "detalle_bases_anexo" };
       }
     } catch (err) {
@@ -142,12 +195,12 @@ export async function findOfficialBudget(input: ResolveInput): Promise<ResolvedB
 export async function persistOfficialBudget(procurementId: string, budget: ResolvedBudget): Promise<boolean> {
   const db = getSupabaseClient();
   const { error } = await db.from("procurement_official_budget").upsert({
-    procurement_id: procurementId, amount: budget.amount, currency: "MXN",
+    procurement_id: procurementId, amount: budget.amount, currency: budget.currency,
     document_url: budget.documentUrl, document_name: budget.documentName, page_number: budget.page,
     label: budget.label, excerpt: budget.excerpt, source_kind: budget.sourceKind, confirmed_at: nowISO(),
   }, { onConflict: "procurement_id" });
   if (error) throw new Error(`Presupuesto oficial: ${error.message}`);
-  const { error: updateError } = await db.from("procurements").update({ amount: budget.amount, currency: "MXN" })
+  const { error: updateError } = await db.from("procurements").update({ amount: budget.amount, currency: budget.currency })
     .eq("id", procurementId).is("amount", null);
   if (updateError) throw new Error(`Monto del expediente: ${updateError.message}`);
   return true;

@@ -12,12 +12,12 @@ const registro = (numero: string) => ({
 });
 
 describe("cruce directo de BIRMEX", () => {
-  beforeEach(() => { jest.clearAllMocks(); upsert.mockResolvedValue({ isNew: false, procurementId: "p" }); });
+  beforeEach(() => { jest.clearAllMocks(); upsert.mockResolvedValue({ isNew: false, isUpdated: true, procurementId: "p" }); });
 
   it("actualiza por el camino normal y reporta cobertura completa", async () => {
     const search = jest.fn().mockResolvedValue({ registros: [registro("LA-12-NEF-012NEF001-N-3-2027")], total: 1, pagesScanned: 1 });
     const result = await refreshBirmexFromSource({ search });
-    expect(result).toMatchObject({ coverage: "complete", read: 1, updated: 1, created: 0 });
+    expect(result).toMatchObject({ coverage: "complete", read: 1, updated: 1, created: 0, unchanged: 0 });
     expect(upsert.mock.calls[0][0]).toMatchObject({ licitationNumber: "LA-12-NEF-012NEF001-N-3-2027", openingDate: "2026-11-19T10:00:00" });
   });
 
@@ -26,5 +26,13 @@ describe("cruce directo de BIRMEX", () => {
     expect((await refreshBirmexFromSource({ search: more })).coverage).toBe("partial");
     const fail = jest.fn().mockRejectedValue(new Error("401"));
     expect(await refreshBirmexFromSource({ search: fail })).toMatchObject({ coverage: "partial", error: "401" });
+  });
+});
+
+describe("conteo de escrituras efectivas", () => {
+  it("una relectura sin cambios cuenta como unchanged y no como updated", async () => {
+    upsert.mockResolvedValue({ isNew: false, isUpdated: false, procurementId: "p" });
+    const search = jest.fn().mockResolvedValue({ registros: [registro("LA-12-NEF-012NEF001-N-3-2027")], total: 1, pagesScanned: 1 });
+    expect(await refreshBirmexFromSource({ search })).toMatchObject({ created: 0, updated: 0, unchanged: 1, coverage: "complete" });
   });
 });
