@@ -1,7 +1,7 @@
 /** Mensajes de Telegram (HTML) del calendario y de sus cambios. */
 import { formatMexicoDate } from "../../core/time";
 import {
-  MILESTONE_KEYS, MILESTONE_LABELS, type CalendarChange, type CalendarSnapshot, type MilestoneValue,
+  MILESTONE_KEYS, MILESTONE_LABELS, noticeMilestone, type CalendarChange, type CalendarNotice, type CalendarSnapshot, type MilestoneValue,
 } from "./types";
 
 export const esc = (value: string): string =>
@@ -25,6 +25,14 @@ export function formatDetectionCdmx(iso: string | null | undefined): string {
 const ICONS: Record<string, string> = {
   publicacion: "📰", junta_aclaraciones: "🗣", presentacion_apertura: "📂", fallo: "📋",
 };
+
+function noticeDates(notices: CalendarNotice[]): string {
+  return notices.map((notice) => (notice.at ? formatLocalMilestone({ at: notice.at, hasTime: false }) : "s/f")).join(", ");
+}
+
+function noticeLine(notices: CalendarNotice[]): string {
+  return `   ⚠️ Hay avisos oficiales de suspensión o diferimiento (${esc(noticeDates(notices))}). La fecha de arriba es la del cronograma; la vigente consta en el aviso.`;
+}
 
 export interface CalendarViewOptions {
   title?: string | null;
@@ -54,12 +62,9 @@ export function formatCalendarMessage(snapshot: CalendarSnapshot, options: Calen
       if (snapshot.clarificationDeadline?.at) {
         lines.push(`   ✉️ Límite para enviar preguntas: ${esc(formatLocalMilestone(snapshot.clarificationDeadline))}`);
       }
-      if (snapshot.clarificationNotices.length > 0) {
-        const dates = snapshot.clarificationNotices.map((notice) =>
-          notice.at ? formatLocalMilestone({ at: notice.at, hasTime: false }) : "s/f").join(", ");
-        lines.push(`   ⚠️ Hay avisos oficiales de suspensión o diferimiento (${esc(dates)}). La fecha de arriba es la del cronograma; la vigente consta en el aviso.`);
-      }
     }
+    const notices = snapshot.clarificationNotices.filter((notice) => noticeMilestone(notice) === key);
+    if (notices.length > 0) lines.push(noticeLine(notices));
     if (key === "presentacion_apertura" && snapshot.submissionDeadline?.at) {
       lines.push(`   ⏳ Fecha límite de entrega de proposiciones: ${esc(formatLocalMilestone(snapshot.submissionDeadline))}`);
     }
@@ -68,6 +73,8 @@ export function formatCalendarMessage(snapshot: CalendarSnapshot, options: Calen
     }
   }
 
+  const general = snapshot.clarificationNotices.filter((notice) => noticeMilestone(notice) === null);
+  if (general.length > 0) lines.push(`⚠️ Otros avisos oficiales de cambio (${esc(noticeDates(general))}); revisar en el expediente.`);
   lines.push("");
   const publication = snapshot.milestones.publicacion;
   lines.push(`🗓 Publicación oficial: ${esc(snapshot.verified.includes("publicacion") ? formatLocalMilestone(publication) : "No verificable en esta fuente")}`);
@@ -101,7 +108,9 @@ export function formatChangeMessage(
       lines.push(`✏️ <b>${esc(change.label)}</b> cambió: ${esc(formatLocalMilestone(change.previous))} → <b>${esc(formatLocalMilestone(change.next))}</b>`);
     } else if (change.kind === "aviso" && change.notice) {
       const date = change.notice.at ? ` (${esc(formatLocalMilestone({ at: change.notice.at, hasTime: false }))})` : "";
-      lines.push(`⚠️ <b>Aviso oficial de ${change.notice.kind === "suspension" ? "suspensión" : change.notice.kind === "diferimiento" ? "diferimiento" : "cambio"}</b>${date}: ${esc(change.notice.title)}. La nueva fecha de la junta consta en el aviso.`);
+      const milestone = noticeMilestone(change.notice);
+      const target = milestone ? `de ${MILESTONE_LABELS[milestone].toLowerCase()}` : "del hito señalado";
+      lines.push(`⚠️ <b>Aviso oficial de ${change.notice.kind === "suspension" ? "suspensión" : change.notice.kind === "diferimiento" ? "diferimiento" : "cambio"}</b>${date}: ${esc(change.notice.title)}. La nueva fecha ${esc(target)} consta en el aviso.`);
     } else if (change.kind === "acta_fallo" && change.notice) {
       lines.push(`✅ <b>Se publicó el acta de fallo</b>: ${esc(change.notice.title)}`);
     }

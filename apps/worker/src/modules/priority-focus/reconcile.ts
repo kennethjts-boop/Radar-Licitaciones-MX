@@ -74,6 +74,8 @@ export interface ReconcileOptions {
   limit?: number;
   /** Máximo de expedientes abiertos «por verificar» cuyos documentos se leen por corrida. */
   maxBudgetLookups?: number;
+  /** Evita releer el portal del mismo expediente en cada ciclo (inyectable en pruebas). */
+  budgetLookupGuard?: BudgetLookupGuard;
   /** Inyectable en pruebas. */
   resolveBudget?: (input: Parameters<typeof resolveOfficialBudget>[0]) => Promise<ResolvedBudget | null>;
 }
@@ -86,6 +88,43 @@ function toNormalized(row: Row, dbRowToNormalized: (row: DbProcurement) => Norma
   // La primera detección real del radar es la fecha de alta del expediente, no la de esta alerta.
   const withDetection = { ...item, rawJson: { ...item.rawJson, primera_deteccion: row.created_at } };
   return source ? ({ ...withDetection, source } as unknown as NormalizedProcurement) : withDetection;
+}
+
+/** Reintento de lectura del presupuesto de un mismo expediente: como máximo cada 6 h. */
+const LOOKUP_RETRY_MS = 6 * 60 * 60 * 1000;
+
+export interface BudgetLookupGuard {
+  shouldLookup(procurementId: string): Promise<boolean>;
+  record(procurementId: string): Promise<void>;
+}
+
+const defaultLookupGuard: BudgetLookupGuard = {
+  async shouldLookup(procurementId) {
+    try {
+      const { data } = await getSupabaseClient().from("system_state").select("value_json")
+        .eq("key", `priority_budget_lookup:${procurementId}`).maybeSingle();
+      const at = (data?.value_json as { at?: string } | null)?.at;
+      return !at || Date.now() - Date.parse(at) >= LOOKUP_RETRY_MS;
+    } catch {
+      return true; // sin estado legible no se bloquea la consulta
+    }
+  },
+  async record(procurementId) {
+    try {
+      await getSupabaseClient().from("system_state").upsert({
+        key: `priority_budget_lookup:${procurementId}`, value_json: { at: new Date().toISOString() }, updated_at: new Date().toISOString(),
+      }, { onConflict: "key" });
+    } catch { /* el siguiente ciclo vuelve a consultar */ }
+  },
+};
+
+const BIRMEX_ROW = /birmex|biol[oó]gicos y reactivos|012NEF001/i;
+function isBirmexRow(row: Row): boolean {
+  return BIRMEX_ROW.test(`${row.dependency_name ?? ""} ${row.buying_unit ?? ""} ${row.licitation_number ?? ""}`);
+}
+function birmexFirstRows(list: Row[]): Row[] {
+  const unique = [...new Map(list.map((row) => [row.id, row])).values()];
+  return unique.sort((a, b) => Number(isBirmexRow(b)) - Number(isBirmexRow(a)));
 }
 
 export async function reconcilePriorityOpportunities(
@@ -133,16 +172,28 @@ export async function reconcilePriorityOpportunities(
   const resolveBudget = options.resolveBudget ?? resolveOfficialBudget;
   const maxLookups = options.maxBudgetLookups ?? 3;
   const resolved = new Map<string, ResolvedBudget>();
+  // Candidatos: «monto por verificar» abiertos y, para BIRMEX (prioridad máxima), cualquier
+  // expediente abierto sin monto aunque el título no diga «consolidada»: ComprasMX publica el
+  // presupuesto por partida en el detalle y el listado no lo trae.
+  const matchedIds = new Set<string>();
+  const candidates: Row[] = [];
   for (const { row, match } of birmexFirst(evaluate(rows))) {
-    if (match.matchLevel === "high" || row.amount || resolved.has(row.id)) continue;
-    if (!isProcurementOpenForAlert(row.status, row.opening_date)) continue;
+    matchedIds.add(row.id);
+    if (match.matchLevel !== "high" && !row.amount) candidates.push(row);
+  }
+  const birmexUnmatched = rows.filter((row) => !matchedIds.has(row.id) && !row.amount && isBirmexRow(row));
+  const lookups = options.budgetLookupGuard ?? defaultLookupGuard;
+  for (const row of birmexFirstRows([...candidates, ...birmexUnmatched])) {
+    if (resolved.has(row.id) || !isProcurementOpenForAlert(row.status, row.opening_date)) continue;
     if (result.budgetLookups >= maxLookups) break;
+    if (!options.dryRun && !(await lookups.shouldLookup(row.id))) continue;
     result.budgetLookups++;
     try {
       const budget = options.dryRun
         ? null
         : await resolveBudget({ procurementId: row.id, source: toNormalized(row, dbRowToNormalized).source,
             sourceUrl: row.source_url, procedureNumber: row.procedure_number, expedienteId: row.expediente_id });
+      if (!options.dryRun) await lookups.record(row.id);
       if (budget) {
         resolved.set(row.id, budget);
         row.amount = budget.amount;

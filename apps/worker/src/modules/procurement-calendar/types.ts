@@ -27,6 +27,8 @@ export interface CalendarNotice {
   /** Fecha del aviso (hora local CDMX). */
   at: string | null;
   kind: "suspension" | "diferimiento" | "aviso";
+  /** Hito al que se refiere el aviso (junta, apertura, fallo); null si no lo dice. */
+  milestone?: MilestoneKey | null;
 }
 
 export type CalendarSource = "comprasmx" | "secogem_pdf" | "db";
@@ -44,7 +46,7 @@ export interface CalendarSnapshot {
   submissionDeadline: MilestoneValue | null;
   /** Fecha límite para enviar preguntas de aclaración. */
   clarificationDeadline: MilestoneValue | null;
-  /** Avisos oficiales de suspensión/diferimiento de la junta. */
+  /** Avisos oficiales de suspensión/diferimiento (de la junta, la apertura o el fallo; ver `milestone`). */
   clarificationNotices: CalendarNotice[];
   /** Acta de fallo ya publicada como documento. */
   falloActa: { id: string; title: string; publishedAt: string | null } | null;
@@ -63,4 +65,14 @@ export interface CalendarChange {
   previous: MilestoneValue | null;
   next: MilestoneValue | null;
   notice?: CalendarNotice;
+}
+
+/** Hito al que se refiere un aviso; infiere desde el título en calendarios guardados antes del campo. */
+export function noticeMilestone(notice: Pick<CalendarNotice, "title" | "milestone">): MilestoneKey | null {
+  if (notice.milestone !== undefined) return notice.milestone;
+  const text = notice.title.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  if (/fallo/.test(text)) return "fallo";
+  if (/apertura|presentacion|proposicion/.test(text)) return "presentacion_apertura";
+  if (/junta|aclaracion/.test(text)) return "junta_aclaraciones";
+  return null;
 }

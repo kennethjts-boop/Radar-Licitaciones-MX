@@ -132,3 +132,33 @@ describe("diferencias del calendario", () => {
     expect(kinds).toEqual(["acta_fallo", "aviso"]);
   });
 });
+
+describe("avisos atribuidos al hito correcto", () => {
+  const withAnexo = (descripcion: string, uuid: string) => {
+    const data = JSON.parse(JSON.stringify(fixture));
+    data.anexos = [...data.anexos, { numero: 20, descripcion, tipodoc_descripcion: "AVISO", nombre_archivo: "a.pdf", uuid_documento: uuid, fecha_creacion: "2026-11-10T09:00:00" }];
+    return snap({ data });
+  };
+
+  it("un diferimiento del fallo se muestra bajo Fallo y el aviso dice «fallo», no «junta»", () => {
+    const before = snap();
+    const after = withAnexo("AVISO DE DIFERIMIENTO DEL ACTO DE FALLO", "u-fallo-dif");
+    const notice = after.clarificationNotices.find((n) => n.id === "u-fallo-dif");
+    expect(notice?.milestone).toBe("fallo");
+    expect(after.falloActa).toBeNull(); // un aviso de diferimiento no es el acta
+    const view = formatCalendarMessage(after, {});
+    const falloBlock = view.slice(view.indexOf("Fallo:"));
+    expect(falloBlock).toContain("10/11/2026");
+    const changes = diffCalendars(before, after);
+    expect(changes).toMatchObject([{ kind: "aviso", label: "Fallo" }]);
+    const message = formatChangeMessage(after, changes);
+    expect(message).toContain("La nueva fecha de fallo consta en el aviso");
+    expect(message).not.toContain("de la junta");
+  });
+
+  it("los avisos guardados antes del campo `milestone` se atribuyen por su título", () => {
+    const stored = snap();
+    stored.clarificationNotices = stored.clarificationNotices.map(({ milestone: _m, ...rest }) => rest);
+    expect(formatCalendarMessage(stored, {})).toContain("Hay avisos oficiales de suspensión o diferimiento (29/10/2026, 30/10/2026, 04/11/2026)");
+  });
+});

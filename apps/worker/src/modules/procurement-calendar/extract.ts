@@ -1,6 +1,6 @@
 /** Extracción pura del calendario desde las fuentes oficiales. */
 import {
-  MILESTONE_KEYS, MILESTONE_LABELS, type CalendarNotice, type CalendarSnapshot, type MilestoneKey, type MilestoneValue,
+  MILESTONE_KEYS, MILESTONE_LABELS, noticeMilestone, type CalendarNotice, type CalendarSnapshot, type MilestoneKey, type MilestoneValue,
 } from "./types";
 
 const EMPTY: MilestoneValue = { at: null, hasTime: false };
@@ -50,10 +50,12 @@ export function noticesFromAnexos(anexos: unknown): {
   for (const item of list) {
     const text = `${item.tipodoc_descripcion ?? ""} ${item.descripcion ?? ""}`;
     if (NOTICE.test(text)) {
+      const title = (item.descripcion ?? item.tipodoc_descripcion ?? "Aviso").trim();
       notices.push({
-        id: anexoId(item), title: (item.descripcion ?? item.tipodoc_descripcion ?? "Aviso").trim(),
+        id: anexoId(item), title,
         at: toMilestone(item.fecha_creacion).at,
         kind: /suspensi/i.test(text) ? "suspension" : /difer/i.test(text) ? "diferimiento" : "aviso",
+        milestone: noticeMilestone({ title: text }),
       });
     } else if (FALLO_ACTA.test(text) && !NOT_FALLO_ACTA.test(text)) {
       falloActa ??= { id: anexoId(item), title: (item.descripcion ?? "Acta de fallo").trim(), publishedAt: toMilestone(item.fecha_creacion).at };

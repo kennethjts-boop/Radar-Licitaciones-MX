@@ -104,3 +104,42 @@ describe("conciliación de focos de prioridad", () => {
     expect(result.candidates.find((c) => c.outcome === "cap_reached")?.radarKey).toBe("edomex_jcem_20261108");
   });
 });
+
+describe("BIRMEX sin monto en el listado ni palabras de gran alcance", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    alertedKeys = [];
+    ensurePending.mockResolvedValue({ alertId: "a1", created: true, status: "pending" });
+  });
+  const looked: string[] = [];
+  const guard = {
+    shouldLookup: async (id: string) => !looked.includes(id),
+    record: async (id: string) => { looked.push(id); },
+  };
+
+  it("se consulta el presupuesto publicado en el portal y alerta si cumple el umbral", async () => {
+    looked.length = 0;
+    procurements = [row({ id: "b2", title: "SERVICIO DE FUMIGACIÓN Y CONTROL DE FAUNA", licitation_number: "LA-12-NEF-012NEF001-N-9-2027" })];
+    const resolveBudget = jest.fn(async () => budget(150_000_000));
+    const result = await reconcilePriorityOpportunities({ resolveBudget, budgetLookupGuard: guard });
+    expect(resolveBudget).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ budgetsResolved: 1, queued: 1 });
+  });
+
+  it("no relee el portal del mismo expediente en cada ciclo", async () => {
+    looked.length = 0;
+    procurements = [row({ id: "b3", title: "SERVICIO DE LIMPIEZA", licitation_number: "LA-12-NEF-012NEF001-N-10-2027" })];
+    const resolveBudget = jest.fn(async () => null);
+    await reconcilePriorityOpportunities({ resolveBudget, budgetLookupGuard: guard });
+    await reconcilePriorityOpportunities({ resolveBudget, budgetLookupGuard: guard });
+    expect(resolveBudget).toHaveBeenCalledTimes(1);
+  });
+
+  it("un BIRMEX cerrado no se consulta", async () => {
+    looked.length = 0;
+    procurements = [row({ id: "b4", title: "SERVICIO DE LIMPIEZA", status: "cancelada" })];
+    const resolveBudget = jest.fn(async () => budget(150_000_000));
+    await reconcilePriorityOpportunities({ resolveBudget, budgetLookupGuard: guard });
+    expect(resolveBudget).not.toHaveBeenCalled();
+  });
+});
