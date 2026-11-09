@@ -52,7 +52,8 @@ export interface EdomexRunSummary {
   delivered: number;
   watch: { checked: number; changed: number; errors: number } | null;
   priorityError?: string;
-  priority?: { scanned: number; matched: number; toVerify: number; queued: number; alreadyAlerted: number; closedOrExpired: number };
+  birmexRefresh?: { coverage: "complete" | "partial"; total: number | null; read: number; created: number; updated: number; error?: string };
+  priority?: { scanned: number; matched: number; toVerify: number; queued: number; alreadyAlerted: number; closedOrExpired: number; budgetsResolved: number; budgetLookups: number };
   errors: string[];
 }
 
@@ -282,10 +283,13 @@ export async function runEdomexJob(options: { discover?: boolean; watch?: boolea
         }
         // Focos de prioridad: expedientes (ComprasMX o SECOGEM) con presupuesto confirmado >= umbral.
         try {
+          const { refreshBirmexFromSource } = await import("../priority-focus/source-refresh");
+          summary.birmexRefresh = await refreshBirmexFromSource();
           const { reconcilePriorityOpportunities } = await import("../priority-focus/reconcile");
           const reconcile = await reconcilePriorityOpportunities();
           summary.priority = { scanned: reconcile.scanned, matched: reconcile.matched, toVerify: reconcile.toVerify,
-            queued: reconcile.queued, alreadyAlerted: reconcile.alreadyAlerted, closedOrExpired: reconcile.closedOrExpired };
+            queued: reconcile.queued, alreadyAlerted: reconcile.alreadyAlerted, closedOrExpired: reconcile.closedOrExpired,
+            budgetsResolved: reconcile.budgetsResolved, budgetLookups: reconcile.budgetLookups };
         } catch (err) {
           summary.priorityError = err instanceof Error ? err.message : String(err);
           log.warn({ err }, "Conciliación de prioridad no completada");

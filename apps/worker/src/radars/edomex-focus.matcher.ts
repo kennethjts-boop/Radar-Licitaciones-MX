@@ -11,7 +11,7 @@
  */
 import { fromZonedTime } from "date-fns-tz";
 import { normalizeText } from "../core/text";
-import { MX_TIMEZONE } from "../core/time";
+import { isDateExpired, MX_TIMEZONE } from "../core/time";
 import type { NormalizedProcurement } from "../types/procurement";
 
 export const EDOMEX_FOCUS_KEYS = {
@@ -174,6 +174,12 @@ const PRIORITY_THRESHOLD_ENV: Record<string, string> = {
   [EDOMEX_FOCUS_KEYS.jcem]: "JCEM_MIN_AMOUNT_MXN",
   [EDOMEX_FOCUS_KEYS.salud]: "SALUD_EDOMEX_MIN_AMOUNT_MXN",
 };
+
+const OPEN_PROCUREMENT_STATUSES = new Set(["publicada", "activa", "en_proceso"]);
+/** Abierto: estatus vigente (no cancelada, desierta, adjudicada ni cerrada) y apertura no vencida. */
+export function isProcurementOpenForAlert(status: string | null | undefined, openingDate: string | null | undefined): boolean {
+  return OPEN_PROCUREMENT_STATUSES.has(String(status ?? "")) && !isDateExpired(openingDate);
+}
 
 export function isPriorityFocusKey(radarKey: string): boolean {
   return PRIORITY_FOCUS_KEYS.includes(radarKey);

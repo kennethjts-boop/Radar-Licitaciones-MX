@@ -27,3 +27,10 @@ Los cuatro focos solo alertan con **presupuesto oficial confirmado del procedimi
 - Al confirmarse el monto (`procurements.amount`) y seguir abierto, `reconcilePriorityOpportunities` (cada ciclo Edomex, DB) encola una sola alerta (dedupe por expediente, BIRMEX primero, tope 5 por corrida y 10 por ciclo de Telegram).
 - Compuerta en `ensurePendingNewTenderAlert` y filtro en `getPendingNewTenderAlerts` para pendientes (no se marcan `failed`; quedan por si se confirma el monto).
 - Capital contable, costo de bases y presupuesto general de un programa no cuentan; una convocatoria agrupada no hereda monto.
+
+## Confirmación del presupuesto y cruce directo de BIRMEX (2026-11-09)
+
+- **Cruce directo:** `refreshBirmexFromSource` consulta ComprasMX con la firma del colector (`numero_procedimiento = 012NEF001`) cada ciclo Edomex y actualiza por `upsertProcurement` (el listado general no traía cambios de fecha/estatus de filas conocidas). Cobertura `complete` solo si se leyó todo lo que el portal reporta; si no, `partial`. Script manual: `scripts/birmex-crosscheck.ts`.
+- **Ruta del monto:** para «monto por verificar» abiertos (máx. 3 por corrida, BIRMEX primero) `resolveOfficialBudget` lee (1) los *requerimientos económicos* por partida del detalle de ComprasMX (suma de `monto_maximo`) con el navegador del colector; (2) si no hay, convocatoria/bases/anexos (PDF/DOCX/XLSX) con `extractOfficialBudget`, que solo acepta cifras rotuladas como presupuesto/monto/techo del procedimiento y descarta capital contable, costo de bases, garantías, experiencia y presupuesto general.
+- **Evidencia:** tabla `procurement_official_budget` (enlace, nombre del documento, página cuando el formato pagina, etiqueta, extracto, tipo de fuente). `procurements.amount` solo se completa si estaba vacío y `upsertProcurement` ya no lo borra.
+- **Antes de enviar:** compuerta al encolar y en la cola de pendientes: estatus vigente (`publicada/activa/en_proceso`), apertura no vencida y presupuesto confirmado ≥ umbral. Cancelada con fecha futura no sale.

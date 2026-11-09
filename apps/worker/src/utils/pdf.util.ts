@@ -57,6 +57,37 @@ export async function extractTextFromPdf(
   }
 }
 
+/** Texto de un PDF página por página (índice 0 = página 1). Sin OCR. */
+export async function extractPdfPages(
+  tempFilePath: string,
+  options: { maxPages?: number } = {},
+): Promise<string[]> {
+  const pages: string[] = [];
+  const fileBuffer = readFileSync(tempFilePath);
+  await Promise.race([
+    pdf(fileBuffer, {
+      max: options.maxPages ?? 80,
+      pagerender: async (pageData: {
+        getTextContent: () => Promise<{ items: Array<{ str: string; transform: number[] }> }>;
+      }) => {
+        const content = await pageData.getTextContent();
+        let lastY: number | undefined;
+        let text = "";
+        for (const item of content.items) {
+          text += lastY === undefined || lastY === item.transform[5] ? item.str : `\n${item.str}`;
+          lastY = item.transform[5];
+        }
+        pages.push(text);
+        return text;
+      },
+    }),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`PDF parse timeout after ${PDF_PARSE_TIMEOUT_MS}ms`)), PDF_PARSE_TIMEOUT_MS),
+    ),
+  ]);
+  return pages;
+}
+
 function estimateTokenCount(text: string): number {
   const clean = text.trim();
   if (!clean) {

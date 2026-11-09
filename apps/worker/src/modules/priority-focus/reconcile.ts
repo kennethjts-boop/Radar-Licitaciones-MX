@@ -13,11 +13,11 @@
  */
 import { getSupabaseClient } from "../../storage/client";
 import { createModuleLogger } from "../../core/logger";
-import { isDateExpired } from "../../core/time";
 import { evaluateAllRadars } from "../../matchers/matcher";
 import { enrichMatch } from "../../enrichers/match.enricher";
 import { getActiveRadars } from "../../radars/index";
-import { EDOMEX_FOCUS_KEYS, isPriorityFocusKey } from "../../radars/edomex-focus.matcher";
+import { EDOMEX_FOCUS_KEYS, isPriorityFocusKey, isProcurementOpenForAlert } from "../../radars/edomex-focus.matcher";
+import { resolveOfficialBudget, type ResolvedBudget } from "./budget-resolver";
 import { ensurePendingNewTenderAlert, upsertMatch } from "../../storage/match-alert.repo";
 import type { DbProcurement } from "../../types/database";
 import type { NormalizedProcurement } from "../../types/procurement";
@@ -39,8 +39,6 @@ const ORGANISM_FILTER = [
   "dependency_name.ilike.%Secretaria de Salud del Estado%",
 ].join(",");
 
-const OPEN_STATUSES = new Set(["publicada", "activa", "en_proceso"]);
-
 export interface ReconcileCandidate {
   licitationNumber: string | null;
   radarKey: string;
@@ -49,6 +47,7 @@ export interface ReconcileCandidate {
   openingDate: string | null;
   outcome:
     | "amount_to_verify"
+    | "amount_confirmed_from_document"
     | "queued"
     | "would_queue"
     | "already_alerted"
@@ -64,7 +63,19 @@ export interface ReconcileResult {
   queued: number;
   alreadyAlerted: number;
   closedOrExpired: number;
+  budgetsResolved: number;
+  budgetLookups: number;
   candidates: ReconcileCandidate[];
+}
+
+export interface ReconcileOptions {
+  dryRun?: boolean;
+  maxQueue?: number;
+  limit?: number;
+  /** Máximo de expedientes abiertos «por verificar» cuyos documentos se leen por corrida. */
+  maxBudgetLookups?: number;
+  /** Inyectable en pruebas. */
+  resolveBudget?: (input: Parameters<typeof resolveOfficialBudget>[0]) => Promise<ResolvedBudget | null>;
 }
 
 type Row = DbProcurement & { sources?: { key?: string } | Array<{ key?: string }> | null };
@@ -76,7 +87,7 @@ function toNormalized(row: Row, dbRowToNormalized: (row: DbProcurement) => Norma
 }
 
 export async function reconcilePriorityOpportunities(
-  options: { dryRun?: boolean; maxQueue?: number; limit?: number } = {},
+  options: ReconcileOptions = {},
 ): Promise<ReconcileResult> {
   const dryRun = options.dryRun === true;
   const maxQueue = options.maxQueue ?? 5;
@@ -84,7 +95,7 @@ export async function reconcilePriorityOpportunities(
   const { dbRowToNormalized } = await import("../../jobs/collect.job");
   const radars = getActiveRadars().filter((radar) => isPriorityFocusKey(radar.key));
   const result: ReconcileResult = {
-    dryRun, scanned: 0, matched: 0, toVerify: 0, queued: 0, alreadyAlerted: 0, closedOrExpired: 0, candidates: [],
+    dryRun, scanned: 0, matched: 0, toVerify: 0, queued: 0, alreadyAlerted: 0, closedOrExpired: 0, budgetsResolved: 0, budgetLookups: 0, candidates: [],
   };
   if (radars.length === 0) return result;
 
@@ -109,13 +120,37 @@ export async function reconcilePriorityOpportunities(
     for (const alert of alerts ?? []) alerted.add(String(alert.dedupe_key));
   }
 
-  const evaluated = rows.flatMap((row) => {
+  const evaluate = (list: Row[]) => list.flatMap((row) => {
     const item = toNormalized(row, dbRowToNormalized);
     return evaluateAllRadars(item, radars, false, null).map((match) => ({ row, item, match }));
   });
-  // BIRMEX primero.
-  evaluated.sort((a, b) =>
-    Number(b.match.radarKey === EDOMEX_FOCUS_KEYS.birmex) - Number(a.match.radarKey === EDOMEX_FOCUS_KEYS.birmex));
+  const birmexFirst = <T extends { match: { radarKey: string } }>(list: T[]) =>
+    list.sort((a, b) => Number(b.match.radarKey === EDOMEX_FOCUS_KEYS.birmex) - Number(a.match.radarKey === EDOMEX_FOCUS_KEYS.birmex));
+
+  // Ruta de confirmación: «monto por verificar» abiertos → leer detalle/bases/anexos oficiales.
+  const resolveBudget = options.resolveBudget ?? resolveOfficialBudget;
+  const maxLookups = options.maxBudgetLookups ?? 3;
+  const resolved = new Map<string, ResolvedBudget>();
+  for (const { row, match } of birmexFirst(evaluate(rows))) {
+    if (match.matchLevel === "high" || row.amount || resolved.has(row.id)) continue;
+    if (!isProcurementOpenForAlert(row.status, row.opening_date)) continue;
+    if (result.budgetLookups >= maxLookups) break;
+    result.budgetLookups++;
+    try {
+      const budget = options.dryRun
+        ? null
+        : await resolveBudget({ procurementId: row.id, source: toNormalized(row, dbRowToNormalized).source,
+            sourceUrl: row.source_url, procedureNumber: row.procedure_number, expedienteId: row.expediente_id });
+      if (budget) {
+        resolved.set(row.id, budget);
+        row.amount = budget.amount;
+        result.budgetsResolved++;
+      }
+    } catch (err) {
+      log.warn({ err, procurementId: row.id }, "No se pudo confirmar el presupuesto desde documentos oficiales");
+    }
+  }
+  const evaluated = birmexFirst(evaluate(rows));
 
   for (const { row, item, match } of evaluated) {
     result.matched++;
@@ -130,12 +165,13 @@ export async function reconcilePriorityOpportunities(
       result.candidates.push({ ...base, outcome: "amount_to_verify" });
       continue;
     }
+    if (resolved.has(row.id)) result.candidates.push({ ...base, outcome: "amount_confirmed_from_document" });
     if (alerted.has(`new_match:${row.id}`)) {
       result.alreadyAlerted++;
       result.candidates.push({ ...base, outcome: "already_alerted" });
       continue;
     }
-    if (!OPEN_STATUSES.has(row.status) || isDateExpired(row.opening_date)) {
+    if (!isProcurementOpenForAlert(row.status, row.opening_date)) {
       result.closedOrExpired++;
       result.candidates.push({ ...base, outcome: "closed_or_expired" });
       continue;
