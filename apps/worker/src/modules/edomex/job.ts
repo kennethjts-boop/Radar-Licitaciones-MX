@@ -52,7 +52,7 @@ export interface EdomexRunSummary {
   delivered: number;
   watch: { checked: number; changed: number; errors: number } | null;
   priorityError?: string;
-  birmexRefresh?: { coverage: "complete" | "partial"; total: number | null; read: number; created: number; updated: number; error?: string };
+  birmexRefresh?: { coverage: "complete" | "partial"; total: number | null; read: number; created: number; updated: number; unchanged: number; error?: string };
   priority?: { scanned: number; matched: number; toVerify: number; queued: number; alreadyAlerted: number; closedOrExpired: number; budgetsResolved: number; budgetLookups: number };
   errors: string[];
 }

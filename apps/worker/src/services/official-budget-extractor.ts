@@ -28,7 +28,7 @@ const EXCLUDE = new RegExp(
   "capital (?:contable|social)|costo de (?:las )?bases|bases de (?:la )?licitacion|garantia|fianza|cheque|anticipo|" +
     "pena(?:s)? convencional|deductiva|presupuesto de egresos|presupuesto general|ingresos|ventas|facturacion|" +
     "contratos? (?:similar|acreditad)\\w*|experiencia|programa (?:presupuestario|de inversion)|inversion total del programa|" +
-    "hasta por un monto de la garantia",
+    "hasta por un monto de la garantia|dolar(?:es)?|\\busd\\b|euros?",
 );
 const AMOUNT = /\$\s*([\d]{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)|(\d+(?:\.\d+)?)\s+millon(?:es)?(?:\s+de\s+pesos)?/g;
 const WINDOW = 160;

@@ -44,7 +44,7 @@ const row = (over: Row): Row => ({
   amount: null, procedure_number: null, expediente_id: null, sources: { key: "comprasmx" }, ...over,
 });
 const budget = (amount: number): ResolvedBudget => ({
-  amount, page: 7, label: "presupuesto máximo autorizado", excerpt: "…", documentUrl: "https://x/bases.pdf", documentName: "bases.pdf",
+  amount, currency: "MXN", page: 7, label: "presupuesto máximo autorizado", excerpt: "…", documentUrl: "https://x/bases.pdf", documentName: "bases.pdf",
   sourceKind: "detalle_bases_anexo",
 });
 
