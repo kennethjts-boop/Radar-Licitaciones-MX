@@ -77,3 +77,30 @@ describe("cola de nuevas convocatorias de octubre", () => {
     expect(await getPendingNewTenderAlerts()).toEqual([]);
   });
 });
+
+describe("pendientes de focos de prioridad", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    query.select.mockReturnValue(query);
+    query.eq.mockReturnValue(query);
+    query.not.mockReturnValue(query);
+    query.order.mockReturnValue(query);
+  });
+  const row = (id: string, key: string, amount: number | null, opening: string | null = null) => ({
+    id, telegram_message: id, procurements: { publication_date: null, amount, opening_date: opening },
+    radars: { is_active: true, key },
+  });
+
+  it("retiene pendientes de BIRMEX sin monto o bajo el umbral, deja pasar los confirmados y los radares anteriores", async () => {
+    mockRows([
+      row("sin-monto", "birmex_prioridad_20261108", null),
+      row("bajo", "edomex_salud_20261108", 99_999_999),
+      row("exacto", "edomex_jcem_20261108", 100_000_000),
+      row("vencido", "birmex_prioridad_20261108", 300_000_000, "2020-01-01"),
+      row("anterior", "edomex_issemym_20261025", null),
+      row("birmex-ok", "birmex_prioridad_20261108", 250_000_000),
+    ]);
+    const result = await getPendingNewTenderAlerts();
+    expect(result.map((r) => r.id)).toEqual(["birmex-ok", "exacto", "anterior"]);
+  });
+});

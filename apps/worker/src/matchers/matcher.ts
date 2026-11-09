@@ -447,7 +447,7 @@ function evaluateEdomexFocusRadar(
   const amountNote = detection.amountStatus === "pending"
     ? "Monto contractual pendiente de confirmar: candidata para revisión, no se afirma que supere el umbral."
     : detection.amountStatus === "confirmed"
-      ? "Monto contractual explícito supera el umbral del foco."
+      ? "Monto contractual explícito cumple el umbral del foco."
       : "Foco sin umbral de monto.";
   return {
     radarKey: radar.key,

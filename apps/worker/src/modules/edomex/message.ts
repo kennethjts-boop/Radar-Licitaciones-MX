@@ -6,6 +6,8 @@
 import {
   EDOMEX_FOCUS_KEYS,
   SECOGEM_SOURCE_KEY,
+  isPriorityFocusKey,
+  priorityMinAmount,
   type EdomexFocusKey,
 } from "../../radars/edomex-focus.matcher";
 import type { EnrichedAlert } from "../../types/procurement";
@@ -39,11 +41,13 @@ function amountLine(alert: EnrichedAlert): string {
   const p = alert.procurement;
   const raw = p.rawJson as Record<string, unknown>;
   if (typeof p.amount === "number" && p.amount > 0) {
-    const big = alert.radarKey === EDOMEX_FOCUS_KEYS.jcem && p.amount > 100_000_000 ? " 🔥 > $100 MDP" : "";
-    return `💰 Monto explícito del contrato: $${p.amount.toLocaleString("es-MX")} MXN${big}`;
+    const min = priorityMinAmount(alert.radarKey);
+    return min !== null
+      ? `💰 Presupuesto oficial confirmado: $${p.amount.toLocaleString("es-MX")} MXN (umbral del radar: $${min.toLocaleString("es-MX")})`
+      : `💰 Monto explícito del contrato: $${p.amount.toLocaleString("es-MX")} MXN`;
   }
-  if ((alert.scoreReasons ?? []).includes("any_amount")) {
-    return "💰 Monto no publicado (por verificar); este foco aplica a cualquier monto.";
+  if (isPriorityFocusKey(alert.radarKey)) {
+    return "💰 Monto por verificar: no se envía como oportunidad hasta confirmar el presupuesto oficial.";
   }
   if (alert.radarKey === EDOMEX_FOCUS_KEYS.issemym) return "💰 Monto no publicado (ISSEMyM: aplica cualquier monto).";
   if (raw.monto_estado === "convocatoria_agrupada") {

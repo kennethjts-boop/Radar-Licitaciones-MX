@@ -4,13 +4,13 @@
 import { v4 as uuidv4 } from "uuid";
 import { getSupabaseClient } from "./client";
 import { StorageError } from "../core/errors";
-import { nowISO } from "../core/time";
+import { isDateExpired, nowISO } from "../core/time";
 import { createModuleLogger } from "../core/logger";
 import type { DbMatch, DbAlert } from "../types/database";
 import type { MatchResult, EnrichedAlert } from "../types/procurement";
 import { OPERATIONAL_FOCUS_KEYS } from "../radars/operational-focus.matcher";
 import { OPERATIONAL_RADAR_VERSION_KEY } from "../radars/operational-version";
-import { EDOMEX_FOCUS_KEYS, expectedFocusVersionKey, isEdomexFocusKey } from "../radars/edomex-focus.matcher";
+import { EDOMEX_FOCUS_KEYS, expectedFocusVersionKey, isEdomexFocusKey, isPriorityFocusKey, meetsPriorityThreshold } from "../radars/edomex-focus.matcher";
 import { OPERATIONAL_PUBLICATION_CUTOFF_DATE } from "../modules/operational-alerts/eligibility";
 
 const log = createModuleLogger("match-alert-repo");
@@ -211,7 +211,12 @@ export async function ensurePendingNewTenderAlert(
   enrichedAlert: EnrichedAlert,
   dbProcurementId: string,
   radarDbId?: string,
-): Promise<{ alertId: string; created: boolean; status: "pending" | "sent" | "failed" }> {
+): Promise<{ alertId: string; created: boolean; status: "pending" | "sent" | "failed"; suppressed?: "amount_below_threshold_or_unconfirmed" }> {
+  // Focos de prioridad: sólo se encola con presupuesto oficial confirmado >= umbral del radar.
+  if (isPriorityFocusKey(enrichedAlert.radarKey) &&
+      !meetsPriorityThreshold(enrichedAlert.radarKey, enrichedAlert.procurement.amount)) {
+    return { alertId: "", created: false, status: "pending", suppressed: "amount_below_threshold_or_unconfirmed" };
+  }
   const db = getSupabaseClient();
   const dedupeKey = `new_match:${dbProcurementId}`;
   const { data: existing, error: findError } = await db
@@ -284,7 +289,7 @@ export interface PendingNewTenderAlertRow {
 export async function getPendingNewTenderAlerts(limit = 500): Promise<PendingNewTenderAlertRow[]> {
   const { data, error } = await getSupabaseClient()
     .from("alerts")
-    .select("id, telegram_message, procurements!inner(publication_date), radars!inner(is_active, key)")
+    .select("id, telegram_message, procurements!inner(publication_date, amount, opening_date), radars!inner(is_active, key)")
     .eq("alert_type", "new_match")
     .eq("telegram_status", "pending")
     .not("dedupe_key", "is", null)
@@ -298,8 +303,21 @@ export async function getPendingNewTenderAlerts(limit = 500): Promise<PendingNew
   };
   // BIRMEX es prioridad máxima: sale primero dentro del cupo del ciclo (orden estable, FIFO en el resto).
   const rank = (row: { radars?: unknown }): number => (radarKeyOf(row) === EDOMEX_FOCUS_KEYS.birmex ? 0 : 1);
+  const procurementOf = (row: { procurements?: unknown }) =>
+    (Array.isArray(row.procurements) ? row.procurements[0] : row.procurements) as
+      { amount?: number | null; opening_date?: string | null } | null | undefined;
+  // Pendientes de los focos de prioridad: sólo salen con presupuesto confirmado >= umbral y expediente abierto.
+  // Quedan pendientes (no 'failed') por si el monto se confirma después.
+  const passesPriorityFilter = (row: { radars?: unknown; procurements?: unknown }): boolean => {
+    const key = radarKeyOf(row);
+    if (!key || !isPriorityFocusKey(key)) return true;
+    const procurement = procurementOf(row);
+    if (!meetsPriorityThreshold(key, procurement?.amount)) return false;
+    return !(procurement?.opening_date && isDateExpired(procurement.opening_date));
+  };
   return (data ?? [])
-    .filter((row) => isPublicationDateWithinOperationalCutoff(row.procurements))
+    .filter((row) => passesPriorityFilter(row))
+    .filter((row) => isPriorityFocusKey(radarKeyOf(row) ?? "") || isPublicationDateWithinOperationalCutoff(row.procurements))
     .map((row, index) => ({ row, index }))
     .sort((a, b) => rank(a.row) - rank(b.row) || a.index - b.index)
     .map(({ row }) => ({

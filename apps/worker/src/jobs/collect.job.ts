@@ -900,12 +900,12 @@ export async function runCollectJob(): Promise<CollectJobResult> {
                 modalidadProbable,
                 publicDocuments,
               );
-              await ensurePendingNewTenderAlert(
+              const queuedAlert = await ensurePendingNewTenderAlert(
                 enriched,
                 upsertResult.procurementId,
                 radarDbId,
               );
-              queuedProcurementIds.add(upsertResult.procurementId);
+              if (!queuedAlert.suppressed) queuedProcurementIds.add(upsertResult.procurementId);
 
               // Lanzar enrichment de forma no bloqueante (Fase D)
               const scopeResult = filterProcurementScope({
@@ -1137,7 +1137,7 @@ export async function runCollectJob(): Promise<CollectJobResult> {
 }
 
 // ── Helper: DbProcurement → NormalizedProcurement (Modo 2 DB-only recheck) ──
-function dbRowToNormalized(row: DbProcurement): NormalizedProcurement {
+export function dbRowToNormalized(row: DbProcurement): NormalizedProcurement {
   return {
     source: "comprasmx",
     sourceUrl: row.source_url,

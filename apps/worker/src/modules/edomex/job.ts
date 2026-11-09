@@ -51,6 +51,8 @@ export interface EdomexRunSummary {
   pages: Record<string, PageStats>;
   delivered: number;
   watch: { checked: number; changed: number; errors: number } | null;
+  priorityError?: string;
+  priority?: { scanned: number; matched: number; toVerify: number; queued: number; alreadyAlerted: number; closedOrExpired: number };
   errors: string[];
 }
 
@@ -277,6 +279,16 @@ export async function runEdomexJob(options: { discover?: boolean; watch?: boolea
             summary.pages[pageSlug(page)] = { rows: 0, newRows: 0, backfilled: 0, created: 0, matches: 0, alertsQueued: 0, error: message };
             log.warn({ err, page }, "Índice Edomex no procesado; se conserva la línea base");
           }
+        }
+        // Focos de prioridad: expedientes (ComprasMX o SECOGEM) con presupuesto confirmado >= umbral.
+        try {
+          const { reconcilePriorityOpportunities } = await import("../priority-focus/reconcile");
+          const reconcile = await reconcilePriorityOpportunities();
+          summary.priority = { scanned: reconcile.scanned, matched: reconcile.matched, toVerify: reconcile.toVerify,
+            queued: reconcile.queued, alreadyAlerted: reconcile.alreadyAlerted, closedOrExpired: reconcile.closedOrExpired };
+        } catch (err) {
+          summary.priorityError = err instanceof Error ? err.message : String(err);
+          log.warn({ err }, "Conciliación de prioridad no completada");
         }
         // Cola común con ComprasMX: mismo límite por ciclo y misma deduplicación.
         const { deliverQueuedNewTenderAlerts } = await import("../../jobs/collect.job");
