@@ -23,9 +23,9 @@ function comprasmx(raw: Record<string, unknown>, title: string): NormalizedProcu
 }
 
 describe("focos Edomex", () => {
-  it("activa 15 radares: once focos de octubre y cuatro Edomex", () => {
-    expect(getActiveRadars()).toHaveLength(15);
-    expect(getActiveRadars().filter((r) => r.key.startsWith("edomex_"))).toHaveLength(4);
+  it("activa 19 radares: once de octubre, cuatro Edomex y cuatro de prioridad", () => {
+    expect(getActiveRadars()).toHaveLength(19);
+    expect(getActiveRadars().filter((r) => r.key.startsWith("edomex_"))).toHaveLength(7);
   });
 
   it("ISSEMyM acepta cualquier giro y monto", () => {
@@ -34,10 +34,10 @@ describe("focos Edomex", () => {
   });
 
   it("carreteras exige superar 100 MDP; sin monto queda pendiente sólo con alcance regional", () => {
-    expect(classifyEdomexProcurement(secogem("JCEM-1", "Rehabilitación de carretera, monto estimado: $100,000,000"))).toBeNull();
-    const above = classifyEdomexProcurement(secogem("JCEM-2", "Rehabilitación de carretera, monto estimado: 101 mdp"));
+    expect(classifyEdomexProcurement(secogem("OBRA-1", "Rehabilitación de carretera, monto estimado: $100,000,000"))).toBeNull();
+    const above = classifyEdomexProcurement(secogem("OBRA-2", "Rehabilitación de carretera, monto estimado: 101 mdp"));
     expect(above).toMatchObject({ key: EDOMEX_FOCUS_KEYS.carreteras, amountStatus: "confirmed" });
-    const pending = classifyEdomexProcurement(secogem("JCEM-10", "Rescate de vialidades de la residencia regional mediante bacheo asfáltico"));
+    const pending = classifyEdomexProcurement(secogem("OBRA-10", "Rescate de vialidades de la residencia regional mediante bacheo asfáltico"));
     expect(pending).toMatchObject({ key: EDOMEX_FOCUS_KEYS.carreteras, amountStatus: "pending" });
     expect(classifyEdomexProcurement(secogem("MUN-10", "Pavimentación de calle Palma de 139 metros"))).toBeNull();
   });
@@ -115,7 +115,7 @@ describe("índice SECOGEM", () => {
   });
 
   it("la tarjeta distingue publicación oficial y primera detección, y no afirma el umbral sin monto", () => {
-    const item = secogem("JCEM-10", "Bacheo de la residencia regional");
+    const item = secogem("OBRA-10", "Bacheo de la residencia regional");
     const text = formatEdomexTelegramAlert({
       alertType: "new_match", radarKey: EDOMEX_FOCUS_KEYS.carreteras, radarName: "x", matchLevel: "medium",
       matchScore: 1, opportunityScore: 0, documentScore: 0, procurement: item, matchedTerms: [], explanation: "",

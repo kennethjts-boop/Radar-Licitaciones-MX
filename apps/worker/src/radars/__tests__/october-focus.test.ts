@@ -24,10 +24,10 @@ function keys(title: string, buyer: string, unit?: string, extra?: Record<string
 
 describe("once focos de octubre", () => {
   it("mantiene exactamente once claves activas de octubre (más cuatro focos Edomex)", () => {
-    const october = getActiveRadars().filter((radar) => !radar.key.startsWith("edomex_"));
+    const october = getActiveRadars().filter((radar) => !radar.key.startsWith("edomex_") && !radar.key.startsWith("birmex_"));
     expect(october).toHaveLength(11);
     expect(new Set(october.map((radar) => radar.key)).size).toBe(11);
-    expect(getActiveRadars()).toHaveLength(15);
+    expect(getActiveRadars()).toHaveLength(19);
   });
 
   it.each([

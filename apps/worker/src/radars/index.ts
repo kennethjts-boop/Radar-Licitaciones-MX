@@ -43,6 +43,10 @@ const EDOMEX_FOCUSES: Array<[string, string, string]> = [
   [EDOMEX_FOCUS_KEYS.carreteras, "EDOMEX — Carreteras > $100 MDP", "Rehabilitación, conservación, pavimentación y bacheo carretero superiores a 100 MDP"],
   [EDOMEX_FOCUS_KEYS.sitramytem, "EDOMEX — SITRAMyTEM vial y mantenimiento", "Trabajos viales y mantenimiento acotado; sin proyectos integrales ni concesiones"],
   [EDOMEX_FOCUS_KEYS.oportunidades, "EDOMEX — Dependencias y municipios alto monto", "Obras, tecnología, equipamiento, vehículos, limpieza, seguridad y suministros desde 20 MDP"],
+  [EDOMEX_FOCUS_KEYS.birmex, "BIRMEX — Prioridad máxima nacional", "Toda licitación de Laboratorios de Biológicos y Reactivos de México (UC 012NEF001): compras consolidadas, servicios, software y logística"],
+  [EDOMEX_FOCUS_KEYS.difem, "EDOMEX — DIFEM estatal", "Procedimientos del DIF del Estado de México (no DIF municipal ni DIF Nacional), cualquier monto"],
+  [EDOMEX_FOCUS_KEYS.jcem, "EDOMEX — Junta de Caminos (JCEM)", "Toda convocatoria de la Junta de Caminos del Estado de México aunque no publique monto; destaca > $100 MDP"],
+  [EDOMEX_FOCUS_KEYS.salud, "EDOMEX — Salud estatal (SSEM/ISEM)", "Procedimientos de la Secretaría de Salud estatal y del ISEM, cualquier monto"],
 ];
 
 const OCTOBER_RADARS: RadarConfig[] = [...OCTOBER_FOCUSES, ...EDOMEX_FOCUSES].map(([key, name, description]) => ({

@@ -274,7 +274,7 @@ describe("evaluateAllRadars", () => {
 });
 
 describe("business line radars", () => {
-  it("mantiene los once focos de octubre activos más los cuatro focos Edomex", () => {
+  it("mantiene los once focos de octubre, los cuatro Edomex y los cuatro de prioridad", () => {
     const keys = getActiveRadars().map((radar) => radar.key);
     expect(keys).toEqual([
       "capufe_seguridad_20261014",
@@ -291,6 +291,10 @@ describe("business line radars", () => {
       "edomex_carreteras_20261025",
       "edomex_sitramytem_20261025",
       "edomex_oportunidades_20261025",
+      "birmex_prioridad_20261108",
+      "edomex_difem_20261108",
+      "edomex_jcem_20261108",
+      "edomex_salud_20261108",
       "imss_bienestar_morelos",
     ]);
   });

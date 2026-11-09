@@ -8,7 +8,7 @@ import { getSupabaseClient } from "../../storage/client";
 import { createModuleLogger } from "../../core/logger";
 import { OPERATIONAL_FOCUS_KEYS } from "../../radars/operational-focus.matcher";
 import { OPERATIONAL_RADAR_VERSION_KEY } from "../../radars/operational-version";
-import { EDOMEX_FOCUS_KEYS, EDOMEX_RADAR_VERSION_KEY } from "../../radars/edomex-focus.matcher";
+import { EDOMEX_FOCUS_KEYS, EDOMEX_RADAR_VERSION_KEY, PRIORITY_RADAR_VERSION_KEY } from "../../radars/edomex-focus.matcher";
 import { isSecogemProcurementUrl, requestEdomexPdfConsent } from "../edomex/consent";
 import {
   evaluateNewTenderPublication,
@@ -24,7 +24,7 @@ const ALLOWED_RADARS = new Set<string>([
   ...Object.values(OPERATIONAL_FOCUS_KEYS),
   ...Object.values(EDOMEX_FOCUS_KEYS),
 ]);
-const CURRENT_VERSION_KEYS = [OPERATIONAL_RADAR_VERSION_KEY, EDOMEX_RADAR_VERSION_KEY];
+const CURRENT_VERSION_KEYS = [OPERATIONAL_RADAR_VERSION_KEY, EDOMEX_RADAR_VERSION_KEY, PRIORITY_RADAR_VERSION_KEY];
 
 interface AlertProcurement {
   publication_date: string | null;

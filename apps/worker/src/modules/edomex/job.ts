@@ -20,6 +20,7 @@ import { evaluateAllRadars } from "../../matchers/matcher";
 import { enrichMatch } from "../../enrichers/match.enricher";
 import { getActiveRadars } from "../../radars/index";
 import {
+  EDOMEX_FOCUS_KEYS,
   isEdomexFocusKey,
   isPublishedOnOrAfterEdomexCutoff,
   SECOGEM_SOURCE_KEY,
@@ -140,7 +141,7 @@ async function processNewRow(row: EdomexConvocatoria, ctx: Context, stats: PageS
   }
   if (!lead) return;
   const publishedAt = parseOfficialPublicationDate(lead.item.publicationDate);
-  if (isDateExpired(lead.item.openingDate) || !isPublishedOnOrAfterEdomexCutoff(publishedAt)) {
+  if (isDateExpired(lead.item.openingDate) || !isPublishedOnOrAfterEdomexCutoff(publishedAt, lead.match.radarKey)) {
     log.info({ procurementId: lead.procurementId, publicationDate: lead.item.publicationDate },
       "Match Edomex persistido sin alerta: vencido o publicado antes de la activación");
     return;
@@ -148,6 +149,56 @@ async function processNewRow(row: EdomexConvocatoria, ctx: Context, stats: PageS
   const enriched = await enrichMatch(lead.item, lead.match, undefined, []);
   const queued = await ensurePendingNewTenderAlert(enriched, lead.procurementId, lead.radarDbId);
   if (queued.created) stats.alertsQueued++;
+}
+
+const PRIORITY_RADAR_KEYS = [
+  EDOMEX_FOCUS_KEYS.birmex, EDOMEX_FOCUS_KEYS.difem, EDOMEX_FOCUS_KEYS.jcem, EDOMEX_FOCUS_KEYS.salud,
+] as string[];
+/** Primer día posterior al archivo histórico (línea base del 2026-10-25). */
+const POST_BASELINE_ISO = "2026-10-26T00:00:00.000Z";
+
+/**
+ * Conciliación única al activar los focos de prioridad: filas que ya estaban
+ * en la línea base (sin radar que las evaluara) y se detectaron después del
+ * archivo histórico se evalúan contra los focos nuevos. Idempotente: el match
+ * y la cola (dedupe_key) no duplican, y el sello evita repetirla. Respeta
+ * vencimiento y corte de 30 días; el envío sigue topado por ciclo.
+ */
+async function reconcilePriorityRows(slug: string, rows: EdomexConvocatoria[], ctx: Context, stats: PageStats): Promise<void> {
+  const markKey = `edomex_priority_backfill_v1:${slug}`;
+  if (await read(markKey)) return;
+  const radars = ctx.radars.filter((radar) => PRIORITY_RADAR_KEYS.includes(radar.key));
+  if (radars.length === 0) return; // focos aún no registrados en BD: se reintenta el siguiente ciclo.
+  let reconciled = 0;
+  for (const row of rows) {
+    const externalIds = normalizeConvocatoria(row, { firstDetectedAt: "", historical: false }).map((item) => item.externalId);
+    const { data, error } = await getSupabaseClient().from("procurements").select("external_id,created_at")
+      .eq("source_id", ctx.sourceId).in("external_id", externalIds);
+    if (error) throw new Error(`Edomex conciliación: ${error.message}`);
+    const created = (data ?? []).map((item) => item.created_at as string).sort();
+    if (created.length === 0 || created[0] < POST_BASELINE_ISO) continue; // inexistente o archivo histórico.
+    let lead: { procurementId: string; item: ReturnType<typeof normalizeConvocatoria>[number];
+      match: ReturnType<typeof evaluateAllRadars>[number]; radarDbId: string } | null = null;
+    for (const item of normalizeConvocatoria(row, { firstDetectedAt: created[0], historical: false })) {
+      const upsert = await upsertProcurement(item, ctx.sourceId);
+      for (const match of evaluateAllRadars(item, radars, true, null)) {
+        const radarDbId = ctx.radarDbIds.get(match.radarKey);
+        if (!radarDbId) continue;
+        const persisted = { ...match, procurementId: upsert.procurementId };
+        await upsertMatch(persisted, radarDbId);
+        stats.matches++;
+        lead ??= { procurementId: upsert.procurementId, item, match: persisted, radarDbId };
+      }
+    }
+    if (!lead) continue;
+    reconciled++;
+    const publishedAt = parseOfficialPublicationDate(lead.item.publicationDate);
+    if (isDateExpired(lead.item.openingDate) || !isPublishedOnOrAfterEdomexCutoff(publishedAt, lead.match.radarKey)) continue;
+    const enriched = await enrichMatch(lead.item, lead.match, undefined, []);
+    const queued = await ensurePendingNewTenderAlert(enriched, lead.procurementId, lead.radarDbId);
+    if (queued.created) stats.alertsQueued++;
+  }
+  await write(markKey, { at: new Date().toISOString(), reconciled });
 }
 
 async function processPage(page: string, ctx: Context): Promise<PageStats> {
@@ -177,6 +228,8 @@ async function processPage(page: string, ctx: Context): Promise<PageStats> {
     await write(baselineKey, { ids: rows.map((row) => row.rowId), checkedAt: new Date().toISOString() });
     return stats;
   }
+  await reconcilePriorityRows(slug, rows.filter((candidate) => known.has(candidate.rowId)), ctx, stats)
+    .catch((err) => log.warn({ err, slug }, "Conciliación de focos de prioridad pendiente de reintento"));
   const processed: string[] = [];
   for (const row of rows.filter((candidate) => !known.has(candidate.rowId))) {
     stats.newRows++;
