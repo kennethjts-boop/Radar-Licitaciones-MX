@@ -233,10 +233,25 @@ async function deliverQueuedNewTenderAlertsUnlocked(maxPerCycle: number): Promis
   const result = await deliverPendingWithinLimit(
     pending,
     maxPerCycle,
-    (alert) => sendTelegramMessage(alert.telegramMessage, "HTML"),
+    async (alert) => {
+      const { CALENDAR_BUTTON_RADAR_KEYS } = await import("../modules/procurement-calendar/service");
+      const withButtons = Boolean(alert.procurementId && alert.radarKey && CALENDAR_BUTTON_RADAR_KEYS.includes(alert.radarKey));
+      if (!withButtons) return sendTelegramMessage(alert.telegramMessage, "HTML");
+      const { calendarKeyboard } = await import("../modules/procurement-calendar/keyboard");
+      return sendTelegramMessage(alert.telegramMessage, "HTML", undefined, {
+        replyMarkup: calendarKeyboard(alert.procurementId!, false),
+      });
+    },
     {
       markSent: async (alert, messageId) => {
         await markAlertSent(alert.id, messageId);
+        if (alert.procurementId && alert.radarKey) {
+          const { CALENDAR_BUTTON_RADAR_KEYS } = await import("../modules/procurement-calendar/service");
+          if (CALENDAR_BUTTON_RADAR_KEYS.includes(alert.radarKey)) {
+            const { saveButtons } = await import("../modules/procurement-calendar/store");
+            await saveButtons(alert.procurementId, { messageId, attachedAt: nowISO(), ok: true }).catch(() => undefined);
+          }
+        }
         // La entrega ya está confirmada. Si falla la solicitud de autorización, el scheduler la
         // recuperará sin reenviar el mensaje ni bloquear las demás alertas.
         await activateWatchdogForSentAlert(alert.id).catch((err) =>

@@ -35,7 +35,7 @@ describe("cola de nuevas convocatorias de octubre", () => {
 
   it("sólo entrega alertas pendientes de radares activos", async () => {
     expect(await getPendingNewTenderAlerts()).toEqual([
-      { id: "alert-1", telegramMessage: "Convocatoria nueva" },
+      { id: "alert-1", telegramMessage: "Convocatoria nueva", procurementId: null, radarKey: null },
     ]);
     expect(query.select).toHaveBeenCalledWith(expect.stringContaining("radars!inner(is_active, key)"));
     expect(query.eq).toHaveBeenCalledWith("radars.is_active", true);
@@ -62,7 +62,7 @@ describe("cola de nuevas convocatorias de octubre", () => {
       },
     ]);
     expect(await getPendingNewTenderAlerts()).toEqual([
-      { id: "alert-2", telegramMessage: "Convocatoria sin fecha verificable" },
+      { id: "alert-2", telegramMessage: "Convocatoria sin fecha verificable", procurementId: null, radarKey: null },
     ]);
   });
 

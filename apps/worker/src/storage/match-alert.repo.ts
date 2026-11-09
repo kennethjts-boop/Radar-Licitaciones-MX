@@ -275,6 +275,8 @@ export async function ensurePendingNewTenderAlert(
 export interface PendingNewTenderAlertRow {
   id: string;
   telegramMessage: string;
+  procurementId: string | null;
+  radarKey: string | null;
 }
 
 /**
@@ -290,7 +292,7 @@ export interface PendingNewTenderAlertRow {
 export async function getPendingNewTenderAlerts(limit = 500): Promise<PendingNewTenderAlertRow[]> {
   const { data, error } = await getSupabaseClient()
     .from("alerts")
-    .select("id, telegram_message, procurements!inner(publication_date, amount, opening_date, status), radars!inner(is_active, key)")
+    .select("id, telegram_message, procurement_id, procurements!inner(publication_date, amount, opening_date, status), radars!inner(is_active, key)")
     .eq("alert_type", "new_match")
     .eq("telegram_status", "pending")
     .not("dedupe_key", "is", null)
@@ -324,6 +326,8 @@ export async function getPendingNewTenderAlerts(limit = 500): Promise<PendingNew
     .map(({ row }) => ({
       id: row.id,
       telegramMessage: row.telegram_message,
+      procurementId: (row as { procurement_id?: string | null }).procurement_id ?? null,
+      radarKey: radarKeyOf(row) ?? null,
     }));
 }
 

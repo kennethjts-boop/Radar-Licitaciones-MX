@@ -923,6 +923,9 @@ async function pausedConfirmationPrompt(
 
 function registerCommands(bot: TelegramBot, chatId: string): void {
   bot.on("callback_query", (query) => {
+    void import("../modules/procurement-calendar/telegram")
+      .then(({ handleCalendarCallback }) => handleCalendarCallback(bot, query))
+      .catch((err) => log.warn({ err }, "Error contenido en botones de calendario"));
     void import("../modules/edomex/job")
       .then(({ handleEdomexCallback }) => handleEdomexCallback(bot, query))
       .catch((err) => log.warn({ err }, "Error contenido en autorización Edomex"));
@@ -937,6 +940,11 @@ function registerCommands(bot: TelegramBot, chatId: string): void {
     void import("../modules/licitacion-watchdog/consent")
       .then(({ handleWatchdogConsentReply }) => handleWatchdogConsentReply(bot, msg))
       .catch((err) => log.warn({ err }, "Error contenido en respuesta watchdog"));
+  });
+  bot.onText(/^\/calendario(?:@\w+)?(?:\s+(.+))?$/i, (msg, match) => {
+    void import("../modules/procurement-calendar/telegram")
+      .then(({ handleCalendarCommand }) => handleCalendarCommand(bot, msg, match?.[1]))
+      .catch((err) => log.warn({ err }, "Error contenido en /calendario"));
   });
   // ── /prueba | /estado ────────────────────────────────────────────────────
   bot.onText(/\/(prueba|estado)/, async (msg) => {

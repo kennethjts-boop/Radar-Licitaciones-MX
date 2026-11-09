@@ -33,6 +33,9 @@ const log = createModuleLogger("operational-alerts:delivery");
 export interface PendingNewTenderAlert {
   id: string;
   telegramMessage: string;
+  /** Expediente y radar de la alerta (para adjuntar botones de calendario). */
+  procurementId?: string | null;
+  radarKey?: string | null;
 }
 
 export interface DeliveryOutcome {

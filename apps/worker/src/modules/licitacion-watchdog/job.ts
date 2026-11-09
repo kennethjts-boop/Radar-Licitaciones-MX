@@ -23,6 +23,7 @@ import {
   getPendingSnapshots,
   insertSnapshot,
   markNotificationSent,
+  markNotificationSuperseded,
   resolveExpediente,
 } from "./repository";
 import { diffSnapshots, hasEmptyResultsPlaceholder, hashSnapshot } from "./snapshot";
@@ -131,6 +132,12 @@ export async function extractWatchdogSnapshotWithRetries(
 }
 
 async function notifyPending(row: WatchdogSnapshotRow, targetAlias?: string): Promise<void> {
+  // Si el calendario ya avisa las fechas de este expediente, no se duplica el aviso.
+  const { calendarCoversWatchdogChange } = await import("../procurement-calendar/supersede");
+  if (await calendarCoversWatchdogChange(row).catch(() => false)) {
+    await markNotificationSuperseded(row, "calendar");
+    return;
+  }
   const receipt = targetAlias
     ? await sendPendingNotification(row, targetAlias)
     : await sendPendingNotification(row);

@@ -170,6 +170,19 @@ export async function markNotificationSent(
   if (error) throw new Error(`No se pudo confirmar notificación watchdog: ${error.message}`);
 }
 
+/** Cierra una notificación de fechas que ya avisó el calendario (sin enviar un segundo mensaje). */
+export async function markNotificationSuperseded(row: WatchdogSnapshotRow, by: "calendar"): Promise<void> {
+  const detectedChanges: StoredDetectedChanges = {
+    ...row.detected_changes,
+    notification: { ...row.detected_changes.notification, status: "sent", messageId: null, supersededBy: by, sentAt: nowISO() },
+  };
+  const { error } = await getSupabaseClient()
+    .from("watchdog_snapshots")
+    .update({ detected_changes: detectedChanges })
+    .eq("id", row.id);
+  if (error) throw new Error(`No se pudo cerrar notificación watchdog cubierta por el calendario: ${error.message}`);
+}
+
 export async function getRecentWatchdogHealthAlerts(
   limit = 50,
 ): Promise<WatchdogHealthAlertRow[]> {

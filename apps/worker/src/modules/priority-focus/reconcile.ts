@@ -83,7 +83,9 @@ type Row = DbProcurement & { sources?: { key?: string } | Array<{ key?: string }
 function toNormalized(row: Row, dbRowToNormalized: (row: DbProcurement) => NormalizedProcurement): NormalizedProcurement {
   const item = dbRowToNormalized(row);
   const source = Array.isArray(row.sources) ? row.sources[0]?.key : row.sources?.key;
-  return source ? ({ ...item, source } as unknown as NormalizedProcurement) : item;
+  // La primera detección real del radar es la fecha de alta del expediente, no la de esta alerta.
+  const withDetection = { ...item, rawJson: { ...item.rawJson, primera_deteccion: row.created_at } };
+  return source ? ({ ...withDetection, source } as unknown as NormalizedProcurement) : withDetection;
 }
 
 export async function reconcilePriorityOpportunities(
