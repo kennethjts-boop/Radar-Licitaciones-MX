@@ -29,6 +29,7 @@ import {
 import { diffSnapshots, hasEmptyResultsPlaceholder, hashSnapshot } from "./snapshot";
 import { structuralChangeGuard } from "./structural-guard";
 import { sendPendingNotification } from "./telegram";
+import { recordPartidasCoverage } from "./partidas-coverage";
 import {
   detectProcedureCompletion,
   formatCompletionMessage,
@@ -227,6 +228,7 @@ async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
 
   if (latest.snapshot_hash === hash) {
     structuralChangeGuard.evaluate(numeroProcedimiento, latest.snapshot_json, snapshot);
+    if (!hasEmptyResultsPlaceholder(snapshot)) await recordPartidasCoverage(numeroProcedimiento, null);
     if (latest.detected_changes?.notification?.status === "pending") {
       await notifyPending(latest, alias);
     }
@@ -245,6 +247,9 @@ async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
     snapshot,
   );
   if (structuralDecision.action === "reject_incomplete") {
+    // Se conserva la última captura confirmada (no se inserta este snapshot) y, si persiste,
+    // se registra que la cobertura de partidas de este folio está degradada.
+    await recordPartidasCoverage(numeroProcedimiento, structuralDecision.analysis.reasons);
     log.warn(
       {
         numeroProcedimiento,
@@ -280,6 +285,9 @@ async function processExpediente(target: ResolvedTarget): Promise<JsonObject> {
       deploymentSha: snapshot.deploymentSha,
     };
   }
+
+  // Una captura completa restablece la cobertura de partidas del folio.
+  await recordPartidasCoverage(numeroProcedimiento, null);
 
   // Si lo guardado era una captura con la fila de relleno y ahora vuelve el
   // contenido idéntico a la última captura hidratada, no hay novedad real.

@@ -11,6 +11,7 @@ import { formatChangeMessage, formatCalendarMessage } from "./format";
 import { fetchComprasMxDetailData } from "./fetch";
 import * as store from "./store";
 import type { CalendarSnapshot } from "./types";
+import { isWatchedProcedure } from "../priority-watch/types";
 
 const log = createModuleLogger("procurement-calendar");
 
@@ -113,8 +114,18 @@ export async function captureCalendar(info: ProcurementInfo, deps: CalendarDeps)
   });
 }
 
+/**
+ * Origen de un registro de seguimiento. Un `enabled` sin usuario ni chat lo creó un ciclo del
+ * propio radar (estado heredado): NO es evidencia de que alguien pulsara un botón.
+ */
+export function trackingOrigin(state: store.TrackingState | null): "none" | "user" | "legacy" {
+  if (!state) return "none";
+  return state.by !== undefined || state.chatId !== undefined ? "user" : "legacy";
+}
+
 export async function isTracking(procurementId: string, deps: CalendarDeps): Promise<boolean> {
   const explicit = await store.getTracking(procurementId);
+  // Un registro heredado habilitado solo confirma el seguimiento ya existente; uno `disabled` lo apaga.
   if (explicit) return explicit.enabled;
   return (await deps.implicitTrackedIds().catch((): string[] => [])).includes(procurementId);
 }
@@ -135,7 +146,7 @@ export interface CalendarView {
 export async function getCalendarView(idOrNumber: string, deps: CalendarDeps = defaultDeps): Promise<CalendarView | null> {
   const info = await deps.loadProcurement(idOrNumber);
   if (!info) return null;
-  const tracking = await isTracking(info.id, deps);
+  const tracking = isWatchedProcedure(info.expediente) || await isTracking(info.id, deps);
   let snapshot: CalendarSnapshot;
   let stale = false;
   try {
@@ -216,6 +227,8 @@ export async function runCalendarTracking(
     try {
       const info = await deps.loadProcurement(id);
       if (!info) continue;
+      // La vigilancia prioritaria es la única que avisa estos folios (misma identidad de evento).
+      if (isWatchedProcedure(info.expediente)) { result.tracked--; continue; }
       const baseline = await store.getSnapshot(id);
       let next: CalendarSnapshot;
       try {

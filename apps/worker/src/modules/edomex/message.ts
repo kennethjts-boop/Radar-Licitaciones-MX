@@ -41,6 +41,9 @@ function dmy(value: string | null): string | null {
 function amountLine(alert: EnrichedAlert): string {
   const p = alert.procurement;
   const raw = p.rawJson as Record<string, unknown>;
+  if (typeof p.amount === "number" && p.amount > 0 && p.currency !== "MXN" && isPriorityFocusKey(alert.radarKey)) {
+    return `💰 Monto por verificar: el listado publica $${p.amount.toLocaleString("es-MX")} sin moneda confirmada; se contrasta con el documento oficial.`;
+  }
   if (typeof p.amount === "number" && p.amount > 0) {
     const min = priorityMinAmount(alert.radarKey);
     return min !== null

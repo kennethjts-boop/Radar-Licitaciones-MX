@@ -11,6 +11,7 @@ import {
   type CalendarDeps,
 } from "./service";
 import * as store from "./store";
+import { isWatchedProcedure } from "../priority-watch/types";
 
 const log = createModuleLogger("procurement-calendar:telegram");
 const ID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
@@ -56,6 +57,12 @@ export async function handleCalendarCallback(
         (enabled.baselineFrom === "guardado" ? "\nℹ️ El portal no respondió; tomé como base el último calendario guardado." : "") +
         "\nPuedes desactivarlo con «Dejar de avisar».", sendOptions());
     } else {
+      const target = await deps.loadProcurement(id);
+      if (target && isWatchedProcedure(target.expediente)) {
+        // Vigilancia prioritaria: política del radar, no se silencia desde el botón.
+        await bot.answerCallbackQuery(query.id, { text: "Este expediente tiene vigilancia prioritaria; se mantiene activa." });
+        return true;
+      }
       const disabled = await disableTracking(id, deps);
       await bot.answerCallbackQuery(query.id, { text: disabled ? "🔕 Seguimiento desactivado" : "Expediente no encontrado" });
       if (disabled) {

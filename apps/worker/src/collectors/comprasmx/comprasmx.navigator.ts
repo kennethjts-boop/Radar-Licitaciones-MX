@@ -156,6 +156,15 @@ function buildComprasMxDetailUrl(item: ApiRegistro): string {
  * Convierte un ApiRegistro (datos crudos de la API) a RawProcurementInput.
  * Construye la URL de detalle directamente desde uuid_procedimiento.
  */
+/** Moneda solo si el propio registro del listado la trae; nunca se asume pesos. */
+function listingCurrency(item: ApiRegistro): "MXN" | "USD" | null {
+  const record = item as unknown as Record<string, unknown>;
+  const raw = String(record.descripcion_moneda ?? record.nombre_moneda ?? "").toUpperCase();
+  if (/PESO|MXN/.test(raw)) return "MXN";
+  if (/DOLAR|DÓLAR|USD/.test(raw)) return "USD";
+  return null;
+}
+
 export function apiRegistroToRawInput(item: ApiRegistro): RawProcurementInput {
   const sourceUrl = buildComprasMxDetailUrl(item);
 
@@ -188,7 +197,9 @@ export function apiRegistroToRawInput(item: ApiRegistro): RawProcurementInput {
     state: (item["entidad_federativa_contratacion"] as string | null) ?? null,
     municipality: null,
     amount: item.monto ?? null,
-    currency: 'MXN',
+    // El listado no publica la moneda: queda pendiente (null) hasta contrastarla con el detalle
+    // o el documento oficial (descripcion_moneda / requerimientos económicos).
+    currency: item.monto != null ? listingCurrency(item) : null,
     attachments: [],
     rawJson: item as Record<string, unknown>,
   };

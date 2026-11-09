@@ -220,7 +220,14 @@ export function classifyPriorityProcurement(p: NormalizedProcurement): EdomexFoc
   const header = `${buyerText(p)} ${normalizeText(p.procedureNumber ?? "")} ${normalizeText(p.licitationNumber ?? "")}`;
   const grouped = raw(p, "monto_estado") === "convocatoria_agrupada";
   const amount = !grouped && typeof p.amount === "number" && Number.isFinite(p.amount) && p.amount > 0 ? p.amount : null;
+  // Un monto sin moneda confirmada en pesos no cuenta contra el umbral: queda «por verificar»
+  // hasta contrastarlo con el documento oficial (el resolvedor lee la moneda del portal).
+  const currencyPending = amount !== null && p.currency !== "MXN";
   const make = (key: EdomexFocusKey, terms: string[], reasons: string[], area: string): EdomexFocusDetection | null => {
+    if (currencyPending) {
+      return { key, amountStatus: "pending", matchedTerms: [...terms, "moneda por confirmar"],
+        scoreReasons: [...reasons, "currency_pending"], territoryMatched: area };
+    }
     if (amount !== null) {
       if (!meetsPriorityThreshold(key, amount)) return null; // bajo el umbral: reglas anteriores.
       return { key, amountStatus: "confirmed", matchedTerms: terms,

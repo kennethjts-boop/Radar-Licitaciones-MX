@@ -92,6 +92,7 @@ jest.mock("../repository", () => ({
   resolveExpediente: jest.fn(),
 }));
 jest.mock("../telegram", () => ({ sendPendingNotification: jest.fn() }));
+jest.mock("../partidas-coverage", () => ({ recordPartidasCoverage: jest.fn(async () => null) }));
 jest.mock("../../../alerts/telegram.alerts", () => ({
   sendTelegramMessage: jest.fn().mockResolvedValue(1),
 }));
