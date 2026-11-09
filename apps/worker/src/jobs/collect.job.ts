@@ -803,7 +803,7 @@ export async function runCollectJob(): Promise<CollectJobResult> {
               // Los focos Edomex tienen su propio corte (fecha de activación).
               const matchPublicationEligible = publicationDecision.eligible &&
                 (!isEdomexFocusKey(match.radarKey) ||
-                  isPublishedOnOrAfterEdomexCutoff(publicationDecision.publishedAt));
+                  isPublishedOnOrAfterEdomexCutoff(publicationDecision.publishedAt, match.radarKey));
               const matchPublicationReason = publicationDecision.eligible
                 ? "published_before_edomex_activation"
                 : publicationDecision.reason;

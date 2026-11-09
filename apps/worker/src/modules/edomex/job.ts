@@ -140,7 +140,7 @@ async function processNewRow(row: EdomexConvocatoria, ctx: Context, stats: PageS
   }
   if (!lead) return;
   const publishedAt = parseOfficialPublicationDate(lead.item.publicationDate);
-  if (isDateExpired(lead.item.openingDate) || !isPublishedOnOrAfterEdomexCutoff(publishedAt)) {
+  if (isDateExpired(lead.item.openingDate) || !isPublishedOnOrAfterEdomexCutoff(publishedAt, lead.match.radarKey)) {
     log.info({ procurementId: lead.procurementId, publicationDate: lead.item.publicationDate },
       "Match Edomex persistido sin alerta: vencido o publicado antes de la activación");
     return;

@@ -459,7 +459,7 @@ function evaluateEdomexFocusRadar(
     matchedTerms: detection.matchedTerms,
     excludedTerms: [],
     explanation: [
-      `FOCO EDOMEX ${radar.name}.`,
+      `FOCO ${radar.name}.`,
       `Motivo: ${detection.scoreReasons.join(" + ")}.`,
       amountNote,
       isNew ? "Expediente nuevo — primera vez detectado." : "",

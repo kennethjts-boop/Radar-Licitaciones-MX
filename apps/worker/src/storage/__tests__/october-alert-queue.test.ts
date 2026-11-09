@@ -37,7 +37,7 @@ describe("cola de nuevas convocatorias de octubre", () => {
     expect(await getPendingNewTenderAlerts()).toEqual([
       { id: "alert-1", telegramMessage: "Convocatoria nueva" },
     ]);
-    expect(query.select).toHaveBeenCalledWith(expect.stringContaining("radars!inner(is_active)"));
+    expect(query.select).toHaveBeenCalledWith(expect.stringContaining("radars!inner(is_active, key)"));
     expect(query.eq).toHaveBeenCalledWith("radars.is_active", true);
     expect(query.eq).toHaveBeenCalledWith("telegram_status", "pending");
   });

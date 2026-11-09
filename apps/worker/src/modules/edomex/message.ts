@@ -15,6 +15,10 @@ const LABELS: Record<EdomexFocusKey, string> = {
   [EDOMEX_FOCUS_KEYS.carreteras]: "🛣 EDOMEX · Carreteras > $100 MDP",
   [EDOMEX_FOCUS_KEYS.sitramytem]: "🚦 EDOMEX · SITRAMyTEM vial/mantenimiento",
   [EDOMEX_FOCUS_KEYS.oportunidades]: "🏛 EDOMEX · Alto monto estatal/municipal",
+  [EDOMEX_FOCUS_KEYS.birmex]: "🔴 PRIORIDAD MÁXIMA · BIRMEX",
+  [EDOMEX_FOCUS_KEYS.difem]: "👨‍👩‍👧 EDOMEX · DIFEM (estatal)",
+  [EDOMEX_FOCUS_KEYS.jcem]: "🛣 EDOMEX · Junta de Caminos (JCEM)",
+  [EDOMEX_FOCUS_KEYS.salud]: "🏥 EDOMEX · Salud estatal",
 };
 
 const esc = (value: string): string =>
@@ -35,7 +39,11 @@ function amountLine(alert: EnrichedAlert): string {
   const p = alert.procurement;
   const raw = p.rawJson as Record<string, unknown>;
   if (typeof p.amount === "number" && p.amount > 0) {
-    return `💰 Monto explícito del contrato: $${p.amount.toLocaleString("es-MX")} MXN`;
+    const big = alert.radarKey === EDOMEX_FOCUS_KEYS.jcem && p.amount > 100_000_000 ? " 🔥 > $100 MDP" : "";
+    return `💰 Monto explícito del contrato: $${p.amount.toLocaleString("es-MX")} MXN${big}`;
+  }
+  if ((alert.scoreReasons ?? []).includes("any_amount")) {
+    return "💰 Monto no publicado (por verificar); este foco aplica a cualquier monto.";
   }
   if (alert.radarKey === EDOMEX_FOCUS_KEYS.issemym) return "💰 Monto no publicado (ISSEMyM: aplica cualquier monto).";
   if (raw.monto_estado === "convocatoria_agrupada") {

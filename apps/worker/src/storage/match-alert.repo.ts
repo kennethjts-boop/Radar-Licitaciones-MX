@@ -10,7 +10,7 @@ import type { DbMatch, DbAlert } from "../types/database";
 import type { MatchResult, EnrichedAlert } from "../types/procurement";
 import { OPERATIONAL_FOCUS_KEYS } from "../radars/operational-focus.matcher";
 import { OPERATIONAL_RADAR_VERSION_KEY } from "../radars/operational-version";
-import { EDOMEX_RADAR_VERSION_KEY, isEdomexFocusKey } from "../radars/edomex-focus.matcher";
+import { EDOMEX_FOCUS_KEYS, expectedFocusVersionKey, isEdomexFocusKey } from "../radars/edomex-focus.matcher";
 import { OPERATIONAL_PUBLICATION_CUTOFF_DATE } from "../modules/operational-alerts/eligibility";
 
 const log = createModuleLogger("match-alert-repo");
@@ -51,10 +51,10 @@ export async function upsertMatch(
     );
   }
 
-  if (isEdomexFocusKey(match.radarKey) && configVersion.version_key !== EDOMEX_RADAR_VERSION_KEY) {
+  if (isEdomexFocusKey(match.radarKey) && configVersion.version_key !== expectedFocusVersionKey(match.radarKey)) {
     throw new StorageError(
       `La migración Edomex no está activa para ${match.radarKey} ` +
-      `(versión vigente: ${configVersion.version_key ?? "desconocida"}, esperada: ${EDOMEX_RADAR_VERSION_KEY})`,
+      `(versión vigente: ${configVersion.version_key ?? "desconocida"}, esperada: ${expectedFocusVersionKey(match.radarKey)})`,
       "find_radar_config_version",
     );
   }
@@ -284,7 +284,7 @@ export interface PendingNewTenderAlertRow {
 export async function getPendingNewTenderAlerts(limit = 500): Promise<PendingNewTenderAlertRow[]> {
   const { data, error } = await getSupabaseClient()
     .from("alerts")
-    .select("id, telegram_message, procurements!inner(publication_date), radars!inner(is_active)")
+    .select("id, telegram_message, procurements!inner(publication_date), radars!inner(is_active, key)")
     .eq("alert_type", "new_match")
     .eq("telegram_status", "pending")
     .not("dedupe_key", "is", null)
@@ -292,9 +292,17 @@ export async function getPendingNewTenderAlerts(limit = 500): Promise<PendingNew
     .order("created_at", { ascending: true })
     .limit(limit);
   if (error) throw new StorageError(error.message, "get_pending_new_alerts");
+  const radarKeyOf = (row: { radars?: unknown }): string | undefined => {
+    const radar = Array.isArray(row.radars) ? row.radars[0] : row.radars;
+    return (radar as { key?: string } | null | undefined)?.key;
+  };
+  // BIRMEX es prioridad máxima: sale primero dentro del cupo del ciclo (orden estable, FIFO en el resto).
+  const rank = (row: { radars?: unknown }): number => (radarKeyOf(row) === EDOMEX_FOCUS_KEYS.birmex ? 0 : 1);
   return (data ?? [])
     .filter((row) => isPublicationDateWithinOperationalCutoff(row.procurements))
-    .map((row) => ({
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => rank(a.row) - rank(b.row) || a.index - b.index)
+    .map(({ row }) => ({
       id: row.id,
       telegramMessage: row.telegram_message,
     }));
